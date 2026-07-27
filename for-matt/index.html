@@ -85,6 +85,24 @@
   .cmp td.no{color:#d98b6a;font-weight:700}
   .cmp-note{margin-top:18px;color:#8d968f;font-size:.9rem;line-height:1.6;min-width:0}
 
+  /* downloads */
+  .dls{display:flex;flex-direction:column;gap:10px;margin-top:30px}
+  .dl-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 16px;align-items:center;
+    text-decoration:none;background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:18px 20px;transition:border-color .16s,transform .16s}
+  .dl-row:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .dl-row.primary{background:var(--cream);border-color:var(--cream)}
+  .dl-row.primary .dl-t,.dl-row.primary .dl-s{color:var(--green-d)}
+  .dl-row.primary .dl-d{color:#4a5a50}
+  .dl-t{font-weight:800;font-size:1.05rem;color:var(--cream)}
+  .dl-d{grid-column:1;font-size:.88rem;color:#9aa39d}
+  .dl-s{grid-column:2;grid-row:1 / span 2;font-size:.82rem;font-weight:700;color:var(--accent);
+    white-space:nowrap;font-variant-numeric:tabular-nums}
+  @media(max-width:520px){
+    .dl-row{grid-template-columns:minmax(0,1fr)}
+    .dl-s{grid-column:1;grid-row:auto;margin-top:6px}
+  }
+
   footer{padding:44px 0 60px;border-top:1px solid var(--line);color:#8d968f;font-size:.9rem}
   @media(max-width:640px){.shot{flex:0 0 78vw}}
   @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
@@ -125,17 +143,45 @@
     </blockquote>
     <div class="row">
       <a class="btn btn-p" href="https://nikita-ctrl557.github.io/relay-work/whichard/" target="_blank" rel="noopener">Open your site</a>
-      <a class="btn btn-s" href="whichard-package.zip" download>Download everything (66 MB)</a>
     </div>
-    <p class="hint">
-      The zip has the whole site, all the ad images, the video ads and the voiceover file.
-      It's yours — host it anywhere, hand it to another developer, or ignore it. No licence,
-      no attribution, nothing owed.
-    </p>
     <p class="hint">
       Six photo slots on the site are marked and waiting. Send me your build photos — the
       fountain especially — and I'll drop them in. No charge for that either.
     </p>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <span class="kick">Take it with you</span>
+    <h2>Download the lot.</h2>
+    <p class="sub">
+      Grab whatever's useful. It's yours — host it anywhere, hand it to another developer,
+      or ignore it. No licence, no attribution, nothing owed.
+    </p>
+
+    <div class="dls">
+      <a href="whichard-everything.zip" download class="dl-row primary">
+        <span class="dl-t">Everything</span>
+        <span class="dl-d">Website, ad images, videos and the voiceover</span>
+        <span class="dl-s">67 MB</span>
+      </a>
+      <a href="whichard-website.zip" download class="dl-row">
+        <span class="dl-t">Website only</span>
+        <span class="dl-d">One HTML file, ready to host anywhere</span>
+        <span class="dl-s">18 KB</span>
+      </a>
+      <a href="whichard-ad-images.zip" download class="dl-row">
+        <span class="dl-t">Ad images</span>
+        <span class="dl-d">16 creatives, sized for feed and Reels</span>
+        <span class="dl-s">34 MB</span>
+      </a>
+      <a href="whichard-videos.zip" download class="dl-row">
+        <span class="dl-t">Video ads</span>
+        <span class="dl-d">Four vertical clips plus the voiceover track</span>
+        <span class="dl-s">33 MB</span>
+      </a>
+    </div>
   </div>
 </section>
 

@@ -47,12 +47,10 @@
   /* ============ hero — image led ============ */
   .hero{position:relative;min-height:clamp(480px,78vh,760px);display:flex;align-items:flex-end;
     border-bottom:1px solid var(--rule);overflow:hidden;background:var(--stone)}
-  .hero-img{position:absolute;inset:0;
-    background:linear-gradient(115deg,#3c4a3f 0%,#5d6b53 42%,#8a8467 78%,#a89676 100%);}
-  .hero-img .ph{position:absolute;top:22px;right:22px;max-width:27ch;text-align:right;
-    color:rgba(255,255,255,.5);font-size:11px;line-height:1.5;letter-spacing:.03em;z-index:3}
-  .hero-img .ph strong{display:block;color:rgba(255,255,255,.72);letter-spacing:.18em;font-size:9.5px;text-transform:uppercase;margin-bottom:6px}
-  @media(max-width:760px){.hero-img .ph{display:none}}
+  .hero-img{position:absolute;inset:0;background:#3c4a3f}
+  .hero-img img{width:100%;height:100%;object-fit:cover;display:block}
+  .hero-img .ph{position:absolute;top:18px;right:18px;z-index:3;margin:0;
+    color:rgba(255,255,255,.62);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;font-weight:700}
   .hero::after{content:"";position:absolute;inset:0;background:linear-gradient(to top,rgba(12,16,13,.9) 0%,rgba(12,16,13,.5) 42%,rgba(12,16,13,.12) 100%)}
   .hero .wrap{position:relative;z-index:2;padding-block:clamp(40px,7vw,72px);width:100%}
   .hero h1{color:#fff;font-size:clamp(2.3rem,6.6vw,4.6rem);max-width:16ch}
@@ -85,6 +83,8 @@
   .work{display:grid;gap:clamp(18px,2.6vw,30px);margin-top:clamp(36px,5vw,60px);
         grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
   .work figure{margin:0}
+  .work img{width:100%;aspect-ratio:4/5;object-fit:cover;display:block;background:var(--stone);border:1px solid var(--rule)}
+  .work figure.tall img{aspect-ratio:4/6}
   .work .slot{position:relative;aspect-ratio:4/5;background:var(--stone);border:1px solid var(--rule);
     display:grid;place-items:center;text-align:center;padding:22px;overflow:hidden}
   .work .slot::before{content:"";position:absolute;inset:0;
@@ -178,7 +178,8 @@
 
 <header class="hero" id="top">
   <div class="hero-img">
-    <p class="ph"><strong>Hero photograph</strong>The Spanish-style tiled fountain and fire pit, shot wide with the full patio. This is the strongest image in the business and it belongs here, full bleed.</p>
+    <img src="his-work/vis-01-fountain-finished.png" alt="Courtyard with a Spanish-style tiled fountain, travertine paver patio and stone fire pit">
+    <p class="ph">Design visualisation</p>
   </div>
   <div class="wrap">
     <h1>Every tile, every brick, built with purpose.</h1>
@@ -224,27 +225,27 @@
 
     <div class="work">
       <figure class="tall">
-        <div class="slot"><p><b>Photo 01</b>Spanish-style tiled fountain — the arched blue-and-white mosaic, finished, shot straight on</p></div>
-        <figcaption><h3>Spanish-Style Fountain &amp; Fire Pit</h3><p>From bare block walls to a handcrafted centrepiece in tile and stone.</p></figcaption>
+        <img src="his-work/01-fountain-build.jpg" alt="Block-wall courtyard mid-build, before the Spanish-style fountain went in" loading="lazy">
+        <figcaption><h3>Spanish-Style Fountain &amp; Fire Pit</h3><p>Bare block walls and a vision. Every tile and every brick placed with purpose.</p></figcaption>
       </figure>
       <figure>
-        <div class="slot"><p><b>Photo 02</b>Travertine paver patio with the round stone fire pit, wide</p></div>
-        <figcaption><h3>Paver Patio &amp; Fire Pit</h3><p>Laid on a compacted base built for Florida rain and Florida sun.</p></figcaption>
+        <img src="his-work/03-beachwalk.jpg" alt="Paver patio build in Beachwalk, St Johns County" loading="lazy">
+        <figcaption><h3>Beachwalk Paver Patio</h3><p>Laid on a compacted base built for Florida rain and Florida sun.</p></figcaption>
       </figure>
       <figure>
-        <div class="slot"><p><b>Photo 03</b>The private basketball court, striped and finished — overhead or corner</p></div>
-        <figcaption><h3>Private Basketball Court</h3><p>Open lawn converted to a full court that gets used every day.</p></figcaption>
+        <img src="his-work/06-backyard-build.jpg" alt="Backyard transformation in progress" loading="lazy">
+        <figcaption><h3>Full Backyard Build</h3><p>Every great outdoor space starts with the mess no one sees.</p></figcaption>
       </figure>
       <figure>
-        <div class="slot"><p><b>Photo 04</b>Outdoor kitchen — the counter run and built-in grill</p></div>
+        <img src="his-work/04-outdoor-kitchen.jpg" alt="Outdoor kitchen build, Jacksonville" loading="lazy">
         <figcaption><h3>Outdoor Kitchen</h3><p>Built around how the family actually cooks and entertains.</p></figcaption>
       </figure>
       <figure class="tall">
-        <div class="slot"><p><b>Photo 05</b>Sidewalk base prep — the trench, gravel and string line, mid-build</p></div>
-        <figcaption><h3>Base Prep</h3><p>The stage that decides everything above it.</p></figcaption>
+        <img src="his-work/05-luxury-backyard.jpg" alt="Completed luxury backyard and pool surround" loading="lazy">
+        <figcaption><h3>Luxury Backyard</h3><p>The kind of work that speaks before we do.</p></figcaption>
       </figure>
       <figure>
-        <div class="slot"><p><b>Photo 06</b>Completed privacy fence run along the property line</p></div>
+        <img src="his-work/02-fence-line.jpg" alt="Fence posts set along a property boundary in Northeast Florida" loading="lazy">
         <figcaption><h3>Fencing &amp; Property Work</h3><p>Boundaries squared up, privacy restored.</p></figcaption>
       </figure>
     </div>
