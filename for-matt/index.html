@@ -51,6 +51,14 @@
   .dl:hover{opacity:.88}
   .hint{font-size:.85rem;color:#8d968f;margin-top:4px}
 
+  /* video */
+  .vids{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));margin-top:30px}
+  .vids figure{margin:0;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .vids video{width:100%;aspect-ratio:9/16;object-fit:cover;display:block;background:#0d120f}
+  .vids figcaption{padding:14px 16px 16px;display:flex;flex-direction:column;gap:9px}
+  .vids figcaption b{font-size:.95rem}
+  .vids figcaption span{font-size:.82rem;color:#9aa39d}
+
   .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-top:32px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px}
   .card h3{font-size:1.08rem;margin-bottom:9px}
@@ -145,6 +153,54 @@
     <div class="row">
       <a class="btn btn-s" href="#tweak">Want any of them changed?</a>
     </div>
+  </div>
+</section>
+
+<section id="video">
+  <div class="wrap">
+    <span class="kick">Video · free</span>
+    <h2>And one with a voiceover on it.</h2>
+    <p class="sub">
+      Vertical, built for Reels. This one runs the base-prep angle — the thing that actually
+      separates you from crews who lay stone on sand. Sound on.
+    </p>
+
+    <div class="vids">
+      <figure>
+        <video controls preload="metadata" playsinline poster="creatives/baseprep-01.png">
+          <source src="video/WHICHARD-AD-baseprep-VO.mp4" type="video/mp4">
+        </video>
+        <figcaption><b>Full ad with voiceover</b><span>28s · vertical · sound on</span>
+          <a class="dl" href="video/WHICHARD-AD-baseprep-VO.mp4" download>Download</a></figcaption>
+      </figure>
+      <figure>
+        <video controls preload="metadata" playsinline poster="creatives/cta-01.png">
+          <source src="video/01-beforeafter.mp4" type="video/mp4">
+        </video>
+        <figcaption><b>Before / after</b><span>5s · silent · loops</span>
+          <a class="dl" href="video/01-beforeafter.mp4" download>Download</a></figcaption>
+      </figure>
+      <figure>
+        <video controls preload="metadata" playsinline poster="creatives/baseprep-01.png">
+          <source src="video/02-baseprep.mp4" type="video/mp4">
+        </video>
+        <figcaption><b>Base prep</b><span>5s · silent · loops</span>
+          <a class="dl" href="video/02-baseprep.mp4" download>Download</a></figcaption>
+      </figure>
+      <figure>
+        <video controls preload="metadata" playsinline poster="creatives/cost-01.png">
+          <source src="video/03-cost.mp4" type="video/mp4">
+        </video>
+        <figcaption><b>What it costs</b><span>5s · silent · loops</span>
+          <a class="dl" href="video/03-cost.mp4" download>Download</a></figcaption>
+      </figure>
+    </div>
+
+    <p class="hint">
+      These use stand-in footage to show the format. The real versions cut your own reels —
+      the Beachwalk build, the fountain, the court. Send them over and I'll rebuild these
+      properly, free.
+    </p>
   </div>
 </section>
 
