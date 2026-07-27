@@ -8,8 +8,9 @@
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   :root{
-    --ink:#0d0f0e; --ink-2:#151917; --sand:#c9a227; --sand-lt:#e8c65a;
-    --paper:#f5f2ec; --muted:#a3a09a; --line:rgba(245,242,236,.12);
+    --ink:#101512; --ink-2:#18211c; --sand:#c98b52; --sand-lt:#e0a86c;
+    --green:#3d6b52;
+    --paper:#f2ece0; --muted:#a3a09a; --line:rgba(242,236,224,.12);
     --max:1180px;
   }
   html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
@@ -25,14 +26,17 @@
   /* ---------- nav ---------- */
   nav{position:sticky;top:0;z-index:50;background:rgba(13,15,14,.82);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
   nav .wrap{display:flex;align-items:center;justify-content:space-between;height:68px;gap:16px}
-  .logo{font-weight:800;letter-spacing:.14em;font-size:13px;text-transform:uppercase;text-decoration:none;line-height:1.25}
-  .logo span{display:block;color:var(--sand);font-size:9px;letter-spacing:.28em}
+  .logo{display:flex;align-items:center;gap:11px;text-decoration:none}
+  .mark{width:42px;height:42px;flex-shrink:0}
+  .wordmark{font-weight:800;letter-spacing:.14em;font-size:13px;text-transform:uppercase;line-height:1.25;color:var(--paper)}
+  .wordmark em{display:block;font-style:normal;color:var(--sand);font-size:9px;letter-spacing:.26em}
+  @media(max-width:520px){.wordmark{display:none}.mark{width:38px;height:38px}}
   .nav-cta{
     background:var(--sand);color:#1a1400;text-decoration:none;font-weight:800;
     padding:11px 18px;border-radius:999px;font-size:13px;white-space:nowrap;
     transition:transform .15s ease,box-shadow .15s ease;
   }
-  .nav-cta:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(201,162,39,.3)}
+  .nav-cta:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(201,139,82,.3)}
   .nav-phone{color:var(--paper);text-decoration:none;font-weight:800;font-size:15px;white-space:nowrap}
   .nav-phone:hover{color:var(--sand)}
   @media(max-width:640px){.nav-phone{font-size:13.5px}}
@@ -51,15 +55,15 @@
   header::before{
     content:"";position:absolute;inset:0;z-index:0;
     background:
-      radial-gradient(1100px 620px at 78% -8%,rgba(201,162,39,.20),transparent 62%),
-      radial-gradient(760px 520px at 8% 108%,rgba(201,162,39,.09),transparent 68%),
-      linear-gradient(175deg,#11150f 0%,var(--ink) 55%);
+      radial-gradient(1100px 620px at 78% -8%,rgba(201,139,82,.20),transparent 62%),
+      radial-gradient(760px 520px at 8% 108%,rgba(201,139,82,.09),transparent 68%),
+      linear-gradient(175deg,#152019 0%,var(--ink) 55%);
   }
   header .wrap{position:relative;z-index:1}
   .eyebrow{
     display:inline-flex;align-items:center;gap:9px;font-size:11px;letter-spacing:.2em;
     text-transform:uppercase;color:var(--sand);font-weight:700;margin-bottom:22px;
-    border:1px solid rgba(201,162,39,.32);padding:7px 14px;border-radius:999px;
+    border:1px solid rgba(201,139,82,.32);padding:7px 14px;border-radius:999px;
   }
   .eyebrow::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--sand)}
   h1{font-size:clamp(2.5rem,7.4vw,5.1rem);max-width:15ch}
@@ -72,7 +76,7 @@
     transition:transform .15s ease,box-shadow .15s ease,background .15s ease;
   }
   .btn-p{background:var(--sand);color:#1a1400}
-  .btn-p:hover{transform:translateY(-2px);box-shadow:0 14px 34px rgba(201,162,39,.32)}
+  .btn-p:hover{transform:translateY(-2px);box-shadow:0 14px 34px rgba(201,139,82,.32)}
   .btn-s{border:1px solid rgba(245,242,236,.28);color:var(--paper)}
   .btn-s:hover{background:rgba(245,242,236,.07);transform:translateY(-2px)}
   .trust{display:flex;flex-wrap:wrap;gap:10px 26px;margin-top:34px;font-size:13px;color:var(--muted)}
@@ -99,7 +103,7 @@
   .g3{grid-template-columns:repeat(auto-fit,minmax(258px,1fr))}
 
   .card{background:var(--ink-2);border:1px solid var(--line);border-radius:14px;padding:30px;transition:border-color .18s ease,transform .18s ease}
-  .card:hover{border-color:rgba(201,162,39,.4);transform:translateY(-3px)}
+  .card:hover{border-color:rgba(201,139,82,.4);transform:translateY(-3px)}
   .card h3{font-size:1.2rem;margin-bottom:11px}
   .card p{color:var(--muted);font-size:.95rem}
   .num{font-size:11px;letter-spacing:.2em;color:var(--sand);font-weight:800;margin-bottom:16px;display:block}
@@ -112,7 +116,7 @@
   .work p{color:var(--muted);font-size:.9rem}
 
   /* ---------- quote band ---------- */
-  .band{background:linear-gradient(135deg,#16110a,#0f120f);border-top:1px solid rgba(201,162,39,.24);border-bottom:1px solid rgba(201,162,39,.24)}
+  .band{background:linear-gradient(135deg,#1a2c21,#101512);border-top:1px solid rgba(201,139,82,.24);border-bottom:1px solid rgba(201,139,82,.24)}
   blockquote{font-size:clamp(1.35rem,3.4vw,2.3rem);font-weight:700;line-height:1.28;max-width:22ch;letter-spacing:-.02em}
   blockquote::before{content:"“";color:var(--sand)}
   blockquote::after{content:"”";color:var(--sand)}
@@ -162,7 +166,21 @@
 
 <nav>
   <div class="wrap">
-    <a class="logo" href="#top">Whichard<span>Construction &amp; Design</span></a>
+    <a class="logo" href="#top" aria-label="Whichard Construction &amp; Design">
+      <svg class="mark" viewBox="0 0 100 100" role="img" aria-hidden="true">
+        <circle cx="50" cy="50" r="49" fill="#15161e"/>
+        <circle cx="50" cy="50" r="46.5" fill="none" stroke="#b87333" stroke-width="4"/>
+        <circle cx="50" cy="50" r="41" fill="none" stroke="#0d0e14" stroke-width="3"/>
+        <path d="M50 17 L76 33 V78 H24 V33 Z" fill="#3d6b52"/>
+        <text x="50" y="55" text-anchor="middle" fill="#f2ece0"
+              font-family="Georgia,'Times New Roman',serif" font-size="30" font-weight="700">W</text>
+        <text x="50" y="66" text-anchor="middle" fill="#f2ece0"
+              font-family="Georgia,serif" font-size="8.5" letter-spacing="1.1">WHICHARD</text>
+        <text x="50" y="74" text-anchor="middle" fill="#f2ece0"
+              font-family="Georgia,serif" font-style="italic" font-size="6.5">Construction &amp; Design</text>
+      </svg>
+      <span class="wordmark">Whichard<em>Construction &amp; Design</em></span>
+    </a>
     <div style="display:flex;align-items:center;gap:18px">
       <a href="tel:+19044243459" class="nav-phone">✆ (904) 424-3459</a>
       <a class="nav-cta" href="#quote">Get a free quote</a>

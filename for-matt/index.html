@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>For Matt — Whichard Construction & Design</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --green:#1e3a2b; --green-d:#152a1f; --cream:#f2ece0; --cream-d:#ddd4c4;
+    --ink:#0f1512; --card:#18211c; --line:rgba(242,236,224,.13);
+    --accent:#c9a227;
+  }
+  html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+  body{background:var(--ink);color:var(--cream);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.65;overflow-x:hidden}
+  .wrap{max-width:1080px;margin-inline:auto;padding-inline:clamp(18px,5vw,36px)}
+  h1,h2,h3{line-height:1.1;letter-spacing:-.02em;font-weight:800}
+  a{color:var(--accent)}
+
+  header{padding:clamp(56px,10vw,104px) 0 clamp(40px,7vw,72px);position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;background:radial-gradient(900px 520px at 75% -10%,rgba(30,58,43,.85),transparent 65%),linear-gradient(170deg,#12211a,var(--ink) 60%)}
+  header .wrap{position:relative}
+  .tag{display:inline-block;border:1px solid rgba(242,236,224,.25);border-radius:999px;padding:6px 14px;font-size:11px;letter-spacing:.2em;text-transform:uppercase;font-weight:700;margin-bottom:20px;color:var(--cream-d)}
+  h1{font-size:clamp(2.1rem,6.2vw,3.9rem);max-width:17ch}
+  h1 em{font-style:normal;color:var(--accent)}
+  .lede{font-size:clamp(1.02rem,2vw,1.2rem);color:var(--cream-d);max-width:60ch;margin-top:22px}
+
+  section{padding:clamp(48px,7.5vw,86px) 0;border-top:1px solid var(--line)}
+  .kick{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);font-weight:800;margin-bottom:12px}
+  h2{font-size:clamp(1.6rem,4vw,2.6rem);max-width:20ch}
+  .sub{color:var(--cream-d);max-width:62ch;margin-top:16px}
+
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;text-decoration:none;font-weight:800;padding:15px 26px;border-radius:999px;font-size:15px;transition:transform .15s,box-shadow .15s}
+  .btn-p{background:var(--cream);color:var(--green-d)}
+  .btn-p:hover{transform:translateY(-2px);box-shadow:0 12px 30px rgba(242,236,224,.18)}
+  .btn-s{border:1px solid rgba(242,236,224,.3);color:var(--cream)}
+  .btn-s:hover{background:rgba(242,236,224,.07);transform:translateY(-2px)}
+  .row{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}
+
+  /* gallery */
+  .rail{display:flex;gap:18px;overflow-x:auto;padding:28px 0 20px;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch}
+  .rail::-webkit-scrollbar{height:8px}
+  .rail::-webkit-scrollbar-thumb{background:rgba(242,236,224,.22);border-radius:99px}
+  .shot{flex:0 0 300px;scroll-snap-align:start;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .shot img{width:100%;aspect-ratio:4/5;object-fit:cover;display:block;background:#101713}
+  .shot .meta{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;flex:1}
+  .shot b{font-size:.95rem}
+  .shot span{font-size:.82rem;color:#9aa39d;flex:1}
+  .dl{display:inline-block;text-align:center;background:var(--cream);color:var(--green-d);text-decoration:none;font-weight:800;font-size:13px;padding:10px;border-radius:8px}
+  .dl:hover{opacity:.88}
+  .hint{font-size:.85rem;color:#8d968f;margin-top:4px}
+
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-top:32px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px}
+  .card h3{font-size:1.08rem;margin-bottom:9px}
+  .card p{color:#a6afa8;font-size:.93rem}
+  .card .free{display:inline-block;background:rgba(201,162,39,.16);color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;border-radius:999px;margin-bottom:12px}
+
+  .price{background:linear-gradient(140deg,#1b3226,#141c18);border:1px solid rgba(201,162,39,.3);border-radius:16px;padding:clamp(24px,4vw,36px);margin-top:32px}
+  .price .was{color:#8d968f;text-decoration:line-through;font-size:1.05rem}
+  .price .now{font-size:clamp(2rem,5vw,2.9rem);font-weight:800;color:var(--accent);line-height:1}
+  .price .per{color:#a6afa8;font-size:.95rem}
+  .price ul{margin:20px 0 0;padding-left:20px;color:#c3ccc5}
+  .price li{margin-bottom:8px}
+
+  blockquote{border-left:3px solid var(--accent);padding-left:20px;margin:26px 0;color:var(--cream-d);font-size:1.06rem}
+
+  footer{padding:44px 0 60px;border-top:1px solid var(--line);color:#8d968f;font-size:.9rem}
+  @media(max-width:640px){.shot{flex:0 0 78vw}}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="tag">Private page · for Matt</span>
+    <h1>Matt — here's the lot. <em>All of it free.</em></h1>
+    <p class="lede">
+      You said three versions of your reel copy would be nice. I wrote those, then kept going,
+      because while I was writing them I found something worth more than the copy.
+      Everything on this page is yours to keep, whether we ever work together or not.
+    </p>
+    <div class="row">
+      <a class="btn btn-p" href="#site">See your website</a>
+      <a class="btn btn-s" href="#ads">See the ads</a>
+    </div>
+  </div>
+</header>
+
+<section id="site">
+  <div class="wrap">
+    <span class="kick">Built for you · free</span>
+    <h2>Your website. It's already live.</h2>
+    <p class="sub">
+      Not a mockup or a template preview — a real page, on the internet, right now.
+      Your number is on it in four places, including a call button that sticks to the
+      bottom of the screen on a phone. Every service you post about is on there.
+    </p>
+    <blockquote>
+      Right now your ad button sends people to your Instagram profile. There's no website
+      behind it and no phone number on it. So somebody watches your Beachwalk build, wants
+      a price, taps through — and lands somewhere they can't ask you anything. You're already
+      paying for those clicks.
+    </blockquote>
+    <div class="row">
+      <a class="btn btn-p" href="https://nikita-ctrl557.github.io/relay-work/whichard/" target="_blank" rel="noopener">Open your site</a>
+    </div>
+    <p class="hint">Six photo slots are marked and waiting. Send me your build photos and I'll drop them in — no charge for that either.</p>
+  </div>
+</section>
+
+<section id="ads">
+  <div class="wrap">
+    <span class="kick">Ad creatives · free</span>
+    <h2>Scroll through. Download whatever you like.</h2>
+    <p class="sub">
+      These are built the way ads for trades should look — like they came off your phone,
+      not out of an agency. Harsh sun, hose still on the floor, tyre ruts in the sand.
+      That's what makes someone believe a real crew did it on a real street.
+      <strong>Swipe sideways.</strong> Tap download on any of them.
+    </p>
+
+    <div class="rail" id="rail">
+      <!-- CREATIVES INJECTED -->
+    </div>
+
+    <p class="hint">
+      These are mock-ups built to show the format, using stand-in photos.
+      The real versions use your own build photos — which is why they'll be better than these.
+    </p>
+
+    <div class="row">
+      <a class="btn btn-s" href="#tweak">Want any of them changed?</a>
+    </div>
+  </div>
+</section>
+
+<section id="tweak">
+  <div class="wrap">
+    <span class="kick">No charge either way</span>
+    <h2>Tell me what to change and I'll change it.</h2>
+    <p class="sub">
+      If a headline's wrong, if I've described the work in a way you wouldn't, if the colours
+      aren't your brand — say so and I'll redo them. That offer stands whether or not you
+      ever pay me anything. I'd rather you had something accurate than something of mine.
+    </p>
+    <div class="row">
+      <a class="btn btn-p" href="tel:+4915170832003">Call me — +49 151 70832003</a>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="kick">What we do</span>
+    <h2>We run ads for local businesses.</h2>
+    <p class="sub">
+      That's the whole job. Trades, clinics, studios, gyms — businesses where one good customer
+      is worth a lot and the phone ringing is the only metric that counts.
+    </p>
+
+    <div class="grid">
+      <div class="card">
+        <span class="free">Free</span>
+        <h3>Website, set up properly</h3>
+        <p>Live already. Connected to a domain, quote form delivering to you, call button on mobile.</p>
+      </div>
+      <div class="card">
+        <span class="free">Free</span>
+        <h3>Search setup — SEO</h3>
+        <p>Google Business Profile, your own name ranking for your own company, service and area pages so you turn up for "paver patio St Johns".</p>
+      </div>
+      <div class="card">
+        <span class="free">Free</span>
+        <h3>Google Ads account build</h3>
+        <p>Built and handed over. You own it outright, whatever happens next.</p>
+      </div>
+      <div class="card">
+        <span class="free">Free</span>
+        <h3>Lead alerts</h3>
+        <p>Every enquiry texts your phone in seconds, because a five-minute callback closes far better than an hour-old one.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="kick">If you want us running it</span>
+    <h2>What it costs — and what I won't pretend to know.</h2>
+
+    <p class="sub">
+      I'm not going to put a revenue figure in front of you. I don't know your average job
+      value and I don't know your close rate, and inventing them to make a slide look good
+      is how agencies lose people.
+    </p>
+    <p class="sub">
+      What I can tell you is the ad mechanics. At <strong>$35/day for two weeks (about $490)</strong>,
+      a local campaign like this typically produces somewhere in the region of
+      <strong>8–14 enquiries</strong> — that's the range these campaigns land in, not a promise about yours.
+    </p>
+    <p class="sub">
+      <strong>You tell me what one job is worth to you and what share of quotes you win, and we'll do
+      that maths together in about a minute.</strong> If the number doesn't work, I'll tell you it
+      doesn't work.
+    </p>
+
+    <div class="price">
+      <div class="was">Normally $1,200/month</div>
+      <div class="now">$750<span class="per"> /month — first three months</span></div>
+      <p style="margin-top:14px;color:#c3ccc5">
+        Because you're the first Jacksonville trade we've built for, and I'd rather have the
+        case study than the extra $450.
+      </p>
+      <ul>
+        <li>Campaign built, run and optimised weekly</li>
+        <li>8 new creatives a month, cut from your own footage</li>
+        <li>Retargeting for people who watched but didn't call</li>
+        <li>Everything in the free list above, set up and maintained</li>
+        <li>Month to month — cancel any time, no lock-in</li>
+      </ul>
+      <p style="margin-top:16px;color:#a6afa8;font-size:.92rem">
+        Ad spend goes straight from you to Meta. We never handle it and never mark it up.
+        You own the ad account and the website regardless.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="kick">One last thing</span>
+    <h2>Search your own company name.</h2>
+    <p class="sub">
+      Type "Whichard Construction" into Google. Your business doesn't come up. What comes up
+      is a BBB listing showing a C rating and a complaint recorded as unanswered.
+    </p>
+    <p class="sub">
+      Here's the part that annoyed me on your behalf: the state record shows
+      <strong>Whichard Construction &amp; Design, LLC, active since November 2020, annual reports
+      filed on time every single year through April 2026.</strong> Nearly six years, clean.
+      The BBB partly marks you down for "length of time in business" — and nowhere on the
+      internet says otherwise.
+    </p>
+    <p class="sub">
+      That's on your new site now. It's the kind of thing that costs you jobs quietly, from
+      people who checked and never called, and you'd never know it happened.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Nikita Datsichin · Relay Agency · +49 151 70832003 · nikita.datsichin@gmail.com<br>
+    Everything on this page is yours to keep, free, with no strings and nothing to sign.
+  </div>
+</footer>
+
+<script>
+const CREATIVES = [
+  ["cta-01.png","Before / After — hard cut","The workhorse. One cut, the whole story, works on mute."],
+  ["cta-02.png","Before / After — variant","Same format, different framing. Test both."],
+  ["cta-03.png","Before / After — variant","Wider crop, more of the finished patio."],
+  ["cta-04.png","Before / After — variant","Tighter on the transformation."],
+  ["cost-01.png","What does it actually cost?","Answers the question everyone's thinking. Filters out tyre-kickers."],
+  ["cost-02.png","Cost card — variant","Same angle, different layout."],
+  ["cost-03.png","Cost card — variant","Third treatment of the price question."],
+  ["baseprep-01.png","The part nobody sees","Your real differentiator. Attracts people who care about it lasting."],
+  ["baseprep-02.png","Base prep — variant","Different crop on the trench and compactor."],
+  ["baseprep-03.png","Base prep — variant","Third treatment."],
+  ["services-01.png","One crew, the whole backyard","Four services in one frame. Good for cold audiences."],
+  ["services-02.png","Service grid — variant","Alternate arrangement."],
+  ["services-03.png","Service grid — variant","Third layout."],
+  ["beforeafter-01.png","Before / After — no CTA","Cleaner version if you'd rather the CTA sat in the caption."],
+  ["beforeafter-02.png","Before / After — no CTA","Variant."],
+  ["beforeafter-03.png","Before / After — no CTA","Variant."],
+  ["beforeafter-04.png","Before / After — no CTA","Variant."]
+];
+const rail = document.getElementById('rail');
+CREATIVES.forEach(([f,t,d])=>{
+  const el = document.createElement('div');
+  el.className='shot';
+  el.innerHTML = `<img src="creatives/${f}" alt="${t}" loading="lazy"
+      onerror="this.closest('.shot').style.display='none'">
+    <div class="meta"><b>${t}</b><span>${d}</span>
+    <a class="dl" href="creatives/${f}" download>Download</a></div>`;
+  rail.appendChild(el);
+});
+</script>
+</body>
+</html>
