@@ -121,6 +121,13 @@
   .svc p{color:var(--ink-2);font-size:.96rem}
 
   /* quote */
+  .contact-block{display:flex;flex-direction:column;gap:14px}
+  .contact-block h3{font-size:1.5rem;color:#fff}
+  .contact-block p{color:rgba(255,255,255,.82);font-size:1.02rem;max-width:46ch}
+  .contact-block .b{width:100%;text-align:center;font-size:1.06rem;padding:20px}
+  .contact-primary{background:var(--copper);color:#fff}
+  .contact-secondary{border:1px solid rgba(255,255,255,.5);color:#fff}
+  .contact-note{font-size:.94rem;color:rgba(255,255,255,.7)}
   .quote{background:var(--green);color:#fff}
   .quote .wrap{display:grid;gap:clamp(32px,5vw,64px);grid-template-columns:minmax(0,1fr)}
   @media(min-width:900px){.quote .wrap{grid-template-columns:minmax(0,.85fr) minmax(0,1fr)}}
@@ -352,40 +359,18 @@
       </div>
     </div>
 
-    <form name="quote" method="POST" action="#quote">
-      <div>
-        <label for="n">Name</label>
-        <input id="n" name="name" type="text" autocomplete="name" required>
+    <div class="contact-block">
+        <h3>Two ways to reach us</h3>
+        <p>Both go straight to Matt. No form, no waiting on an email that might not arrive.</p>
+
+        <a class="b b-solid contact-primary" href="tel:+19044243459">Call (904) 424-3459</a>
+        <a class="b b-ghost contact-secondary" href="sms:+19044243459?&body=Hi%20Matt%2C%20I%27d%20like%20a%20quote%20for%20">Text a photo of your yard</a>
+
+        <p class="contact-note">
+          Texting a photo is the fastest route. It tells us the size, the grade and the access
+          in one message, and you get a straight answer back the same day.
+        </p>
       </div>
-      <div>
-        <label for="p">Phone</label>
-        <input id="p" name="phone" type="tel" autocomplete="tel" required>
-      </div>
-      <div>
-        <label for="e">Email</label>
-        <input id="e" name="email" type="email" autocomplete="email">
-      </div>
-      <div>
-        <label for="s">What are you looking at?</label>
-        <select id="s" name="project">
-          <option>Paver patio or driveway</option>
-          <option>Fountain or water feature</option>
-          <option>Fire pit</option>
-          <option>Outdoor kitchen</option>
-          <option>Pool deck</option>
-          <option>Basketball or sport court</option>
-          <option>Fencing or land improvement</option>
-          <option>Full backyard</option>
-          <option>Something else</option>
-        </select>
-      </div>
-      <div>
-        <label for="m">Anything useful to know</label>
-        <textarea id="m" name="message" placeholder="Rough size, timing, and whether you've had anyone out already."></textarea>
-      </div>
-      <button type="submit">Request my free quote</button>
-      <p class="fine">Same-day reply, usually within a couple of hours.<br>If it isn't a fit, we'll say so.</p>
-    </form>
   </div>
 </section>
 
