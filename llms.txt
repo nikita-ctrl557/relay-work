@@ -1,0 +1,6 @@
+# relay-work
+
+Deliverables and agent interface for Relay Agency.
+
+Agent-to-agent service spec: https://nikita-ctrl557.github.io/relay-work/agents/llms.txt
+Human-readable version:      https://nikita-ctrl557.github.io/relay-work/agents/
