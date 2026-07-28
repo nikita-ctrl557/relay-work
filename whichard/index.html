@@ -83,6 +83,10 @@
   .work{display:grid;gap:clamp(18px,2.6vw,30px);margin-top:clamp(36px,5vw,60px);
         grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
   .work figure{margin:0}
+  .onsite-strip{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));margin-top:clamp(28px,4vw,44px)}
+  .onsite-strip figure{margin:0}
+  .onsite-strip img{width:100%;aspect-ratio:1/1;object-fit:cover;display:block;border:1px solid var(--rule);filter:saturate(1.04)}
+  .onsite-strip figcaption{margin-top:9px;font-size:.8rem;color:var(--ink-3);letter-spacing:.01em}
   .work img{width:100%;aspect-ratio:4/5;object-fit:cover;display:block;background:var(--stone);border:1px solid var(--rule)}
   .work figure.tall img{aspect-ratio:4/6}
   .work .slot{position:relative;aspect-ratio:4/5;background:var(--stone);border:1px solid var(--rule);
@@ -252,6 +256,26 @@
     <p style="margin-top:24px;color:var(--ink-3);font-size:.85rem">
       Design visualisations of Whichard Construction projects. Swap in your own photographs any time.
     </p>
+  </div>
+</section>
+
+<section style="padding-top:0" id="onsite">
+  <div class="wrap">
+    <span class="eyebrow caps">On site</span>
+    <h2>What it looks like while we are building it.</h2>
+    <p class="body-lg" style="max-width:56ch">
+      Most contractors only show you the finished shot. This is the same jobs mid-build,
+      straight off the phone: base going in, block walls up, posts set. If your yard looks
+      like this on day three, that is the job going correctly.
+    </p>
+    <div class="onsite-strip">
+      <figure><img src="his-work/01-fountain-build.jpg" alt="Block wall courtyard mid-build before the fountain went in" loading="lazy"><figcaption>Fountain courtyard, block stage</figcaption></figure>
+      <figure><img src="his-work/03-beachwalk.jpg" alt="Beachwalk paver install in progress" loading="lazy"><figcaption>Beachwalk, sidewalk base prep</figcaption></figure>
+      <figure><img src="his-work/06-backyard-build.jpg" alt="Backyard stripped back before rebuild" loading="lazy"><figcaption>Backyard, stripped to grade</figcaption></figure>
+      <figure><img src="his-work/02-fence-line.jpg" alt="Fence posts set along a property line" loading="lazy"><figcaption>Property line, posts set</figcaption></figure>
+      <figure><img src="his-work/04-outdoor-kitchen.jpg" alt="Outdoor kitchen under construction" loading="lazy"><figcaption>Outdoor kitchen, in build</figcaption></figure>
+      <figure><img src="his-work/05-luxury-backyard.jpg" alt="Pool surround under construction at dusk" loading="lazy"><figcaption>Pool surround, finishing</figcaption></figure>
+    </div>
   </div>
 </section>
 
