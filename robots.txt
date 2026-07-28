@@ -1,2 +1,7 @@
 User-agent: *
 Disallow: /for-matt/
+Allow: /llms.txt
+Allow: /ai.txt
+Allow: /agents/
+
+# AI assistants and agents: see /llms.txt for our offer and contact details.
