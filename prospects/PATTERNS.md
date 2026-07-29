@@ -3,6 +3,37 @@
 Read this before each run. Append findings — niches/geos/search patterns that
 yield broken funnels, and operational blockers that waste a run.
 
+## 2026-07-29 — Run 9: blocker unchanged; run 8's IG crack did NOT hold
+
+Quick reconfirmation only (full diagnosis already on record in runs 1-8,
+not repeated here):
+
+- `facebook.com/ads/library/*` → still HTTP 403, byte-identical JS
+  challenge body (`fetch('/__rd_verify_...?challenge=3')`). Unchanged
+  across 9 runs now.
+- `instagram.com/<handle>` via curl (mobile Safari UA) → **HTTP 302 to the
+  login wall this run**, not the HTTP 200 + readable `og:description`
+  follower count that run 8 found and confirmed across 3 accounts just
+  hours earlier same day. Retried 3x, consistently 302. So that crack was
+  either session/IP-specific or patched within hours — **not a stable
+  technique, don't rely on it going forward without re-verifying live.**
+- `adstransparency.google.com` → still HTTP 200 JS shell (2.5MB), no
+  advertiser data reachable without a real JS engine.
+
+No new discovery channel found or attempted this run beyond what runs 1-8
+already ruled out (Ad Library, IG API, IG legacy AJAX, TikTok Creative
+Center, Yelp, BBB, Maps, Google/Bing/DuckDuckGo SERPs, Wayback). Nothing
+in this session's toolset can execute Meta's client-side JS challenge or
+render Instagram's client-side-hydrated bio/link data, which is what
+qualifiers 1 and 2 require to verify (not fabricate) a lead. No push
+notification sent — runs 3 and 5 already escalated this exact blocker with
+actionable diagnoses, and nothing has changed that changes what the user
+can do about it.
+
+Nine consecutive runs, zero verifiable leads. Zero committed to
+inbox.json again this run — recording a guess to avoid an empty file
+would violate this brief's core instruction not to fabricate.
+
 ## 2026-07-29 — Run 8: found a genuine partial crack (IG follower counts now readable via curl), but it only serves qualifier 4, not 1 or 2 — still zero verifiable leads
 
 Re-tested the three canonical blockers first, per every prior run's own
