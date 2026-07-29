@@ -3,6 +3,97 @@
 Read this before each run. Append findings — niches/geos/search patterns that
 yield broken funnels, and operational blockers that waste a run.
 
+## 2026-07-29 — Run 8: found a genuine partial crack (IG follower counts now readable via curl), but it only serves qualifier 4, not 1 or 2 — still zero verifiable leads
+
+Re-tested the three canonical blockers first, per every prior run's own
+instruction, using raw `curl` (not just WebFetch, to catch any curl-specific
+capability WebFetch doesn't have — this is exactly how run 5 found the
+partial 200-status crack in the first place):
+
+- `facebook.com/ads/library/*` → still HTTP 403 via both curl and WebFetch,
+  same JS challenge body (`fetch('/__rd_verify_...?challenge=3')`) byte-for-
+  byte as runs 5-7. **Unchanged.**
+- `instagram.com/api/v1/users/web_profile_info/?username=X` → still HTTP
+  400 with the *exact same* Meta-side error string as runs 5-6:
+  `"Asset asset://laser.provider/ig_business_category_subvertical has been
+  deleted. You cannot use this schema"`. **Unchanged** — three runs running
+  now with byte-identical text, confirming this is a static backend
+  regression on Meta's end, not worth re-testing again.
+- `instagram.com/<handle>/?__a=1&__d=dis` (new this run, the legacy AJAX
+  JSON endpoint some scraping guides still reference) → HTTP 201, empty
+  body. Not usable.
+- `adstransparency.google.com` → still HTTP 200 JS shell. This run went
+  further than 2/3/6 and actually grepped the 2.5MB payload for the string
+  "advertiser" to check whether real ad records were hiding in an unparsed
+  JSON blob — the one hit was Google Ads *policy help-center* boilerplate
+  (a link to `support.google.com/adspolicy/...`), not advertiser search
+  results. Confirmed empty of real data, not just "probably empty."
+- `instagram.com/<handle>` via the **WebFetch tool** → still HTTP 429,
+  same as every prior run.
+
+**New this run: `instagram.com/<handle>` via raw `curl` with a mobile
+Safari UA reliably returns HTTP 200 AND now contains a real, accurate
+`og:description` meta tag with follower/following/post counts** — this is
+new information, not just a repeat of run 5's "200 status but shell-only,
+zero data" finding. Tested against three real accounts to rule out a
+one-off:
+- `natgeo` (control, huge account): "269M Followers, 195 Following, 32K
+  Posts" — matches Instagram's real public numbers.
+- `phoenixpoolfence` (real small Phoenix trade business, found via
+  WebSearch for `"DM us for a quote" pool OR fence OR roofing instagram
+  Phoenix`): "2,890 Followers, 1,657 Following, 148 Posts" — real number,
+  plausible small-account size.
+- `arizonapoolfence` (same search): "331 Followers, 222 Following, 114
+  Posts."
+
+Then checked how far this actually goes: grepped the full ~680KB response
+for `biography`, `bio_links`, `external_url`, `link_in_bio`,
+`business_email`, `business_phone`, and any embedded `http(s)://` URL
+outside Instagram/Facebook's own CDN domains, across all three accounts and
+also dumped every `<script type="application/json">` block. **None of
+these fields appear anywhere in the response, on any account.** The page is
+Instagram's real hydration bootstrap (Bootloader/ScheduledServerJS payload
+defs, CSS/JS resource maps, GraphQL client scaffolding) with the profile's
+follower/following/post counts baked into the `og:description` tag for
+link-preview purposes, but the bio text and bio link are loaded client-side
+after the fact and never appear in the server-sent HTML.
+
+**What this means for the qualifiers, precisely:** this newly-confirmed
+`curl` + `og:description` technique is a real, reusable way to verify
+qualifier 4 (follower count / "owner-reachable small account") for any
+specific handle already in hand — a genuine, if narrow, improvement over
+runs 1-7, which had no way to confirm follower counts at all short of
+trusting an unverifiable WebSearch snippet. **It does nothing for
+qualifiers 1 (ad spend evidence) or 2 (funnel dead-end / ad link caption),**
+which is the load-bearing pair every prior run got stuck on — both still
+require either the Meta Ad Library (403, unchanged) or the bio/link field
+itself (absent from every fetchable surface, unchanged). A verified
+follower count with no way to confirm the account is even running ads, or
+what its bio link/lack thereof is, cannot pass this brief's "all four must
+hold" + "never fabricate" bar on its own.
+
+**Action for future runs:** don't re-derive the og:description finding —
+it's confirmed and stable across 3 accounts. Use it opportunistically to
+confirm qualifier 4 once a candidate is otherwise sourced, but don't expect
+it to unblock sourcing by itself. The real gap is still qualifiers 1/2, and
+nothing tried across 8 runs (Ad Library direct, IG profile HTML, IG
+internal API, IG legacy AJAX endpoint, Google/TikTok Ads Transparency,
+Yelp/BBB/Maps, WebSearch-driven discovery) has found a way to see either an
+ad's destination/caption or a profile's bio link from this environment.
+
+Not sending a push notification this run: per runs 6/7's own standard, a
+notification is for new *actionable* information, and while the
+og:description crack is genuinely new, it doesn't change what the user can
+do about the underlying blocker (Ad Library + bio-link access) that runs 3
+and 5 already escalated. Logging here so the next run inherits it instead
+of re-testing from scratch.
+
+No prospects added this run. Zero committed to inbox.json — eight
+consecutive runs now with zero verifiable leads. Qualifiers 1 and 2 remain
+unverifiable from this environment; qualifier 4 is now independently
+verifiable given a candidate handle, which narrows but does not close the
+gap.
+
 ## 2026-07-29 — Run 7: reconfirmed the wall again; found the real reason 6 runs of findings never reached the user's repo
 
 Before sourcing, re-tested the three canonical blocked surfaces per every prior
