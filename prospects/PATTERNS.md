@@ -3,6 +3,77 @@
 Read this before each run. Append findings — niches/geos/search patterns that
 yield broken funnels, and operational blockers that waste a run.
 
+## 2026-07-29 — Run 10: blocker unchanged (10th straight run); this trigger fires HOURLY, not daily — flagged to user
+
+Discovered via `list_triggers` this run: the cron behind this routine is
+`13 * * * *` — **hourly**, created 2026-07-28T21:13, i.e. roughly one run
+every hour since yesterday evening. That's the real cadence behind runs
+1-10, not a daily job. Worth recording because it changes the cost/benefit
+of continuing to fire unattended on the current approach: ten straight
+hourly-ish runs have produced zero prospects for the same structural reason.
+
+Re-tested the three canonical blockers fresh (not reusing old output):
+- `facebook.com/ads/library/*` → still HTTP 403, byte-identical JS
+  challenge (`fetch('/__rd_verify_...?challenge=3')`). Unchanged since run 1.
+- `instagram.com/<handle>` via curl, mobile Safari UA → HTTP 302 to login
+  (matches run 9, not run 8's brief 200+og:description crack — that crack
+  has now failed to reproduce twice in a row across two different days).
+- `adstransparency.google.com` → HTTP 200, 2.5MB JS shell, no advertiser data.
+- Retested the Playwright/Chromium route from run 5 fresh, in case the
+  proxy bug had been fixed since: identical failure, byte-for-byte —
+  `net::ERR_CONNECTION_RESET` mid-TLS-handshake through the CONNECT tunnel,
+  on a neutral control domain (`example.com`), using the exact repro from
+  run 5. **Not fixed.**
+
+Three genuinely new channels tried this run, all dead ends:
+- `dumpor.io/v/<handle>` (IG mirror, not tried by runs 1-9) — actually
+  loads (HTTP 200, real HTML, correct page title) after a redirect from
+  `dumpor.com`, unlike every other IG mirror tried across all runs. But
+  it's Cloudflare-Turnstile-gated for the actual profile data — no
+  follower count, bio, or external link anywhere in the served HTML, only
+  UI chrome. Not usable.
+- `pixwox.com` → redirects to `picnob.com`, HTTP 403 (same class as run 6's
+  picuki.com finding).
+- `gramho.com` → proxy CONNECT tunnel itself fails (502), can't even reach
+  the TLS layer.
+- `web.archive.org` (direct curl, not via WebFetch tool) — this actually
+  works (HTTP 404 on the specific query tried, real Wayback HTML, not
+  "refused at the tool level" as run 1 reported for the WebFetch tool
+  specifically). But moot for this brief: Ad Library search-result pages
+  are dynamic/behind a JS challenge, so nothing meaningful would ever have
+  been archived for a given query even if a snapshot existed.
+- `site:facebook.com/ads/library <trade> <city>` and `"DM us for a quote"
+  ... instagram` via WebSearch (not WebFetch) — reproduced the *exact same
+  two* Phoenix pool-fence Instagram accounts (phoenixpoolfence,
+  arizonapoolfence) that run 8 already found and already correctly logged
+  as unverifiable beyond follower count. No new candidate surfaced —
+  confirms run 3/4's "WebSearch discovery is structurally biased toward
+  indexed/established businesses, not the target profile" finding is
+  still true four runs later with fresh queries.
+
+**No prospects added.** Ten consecutive runs, zero verified leads, same
+root cause every time: qualifiers 1 (ad evidence) and 2 (funnel dead-end)
+both require either the Meta Ad Library link caption or a live IG/FB
+profile's bio/link, and nothing reachable from this environment can render
+either. This is not going to resolve itself by firing again next hour.
+
+**Recommendation logged here for whoever reads this next (human or
+agent):** don't keep re-diagnosing this hourly. Either (a) fix the
+proxy-side TLS reset for large ClientHellos so a real browser can pass
+Meta's JS challenge, (b) drop the cron frequency drastically (hourly burns
+real cost for a guaranteed-identical result until (a) or (c) happens), or
+(c) switch inputs entirely — have a human forward candidate ad
+screenshots/handles for this session to verify against the business's own
+site, which sidesteps the Ad Library/IG wall completely since verification
+of qualifier 2 (dead-end) and 3/4 (job value, follower count) can often be
+done against the business's own site or a given handle even without Ad
+Library access — only qualifier 1 (ad evidence itself) strictly needs
+Meta's data if no screenshot is supplied.
+
+Sending a push notification this run (last one was run 5) — the new,
+actionable information is the hourly cadence itself plus the confirmed
+"still not fixed" status of the one concrete, previously-diagnosed bug.
+
 ## 2026-07-29 — Run 9: blocker unchanged; run 8's IG crack did NOT hold
 
 Quick reconfirmation only (full diagnosis already on record in runs 1-8,
