@@ -110,3 +110,52 @@ business's own site, or a different tool is added to the session that can
 reach these domains).
 
 No prospects added this run either. Zero committed to inbox.json.
+
+## 2026-07-29 — Run 3: blocker confirmed a third time, escalating to user via notification
+
+This run had two working tools the first two runs lacked full clarity on: a
+proper `WebSearch` tool (live, not just cached snippets) and `WebFetch`
+against ordinary business domains (confirmed working — `example.com` fetched
+cleanly). Neither closes the gap. Retested the core blocked surfaces plus a
+few new ones:
+
+- `facebook.com/ads/library/*` → still HTTP 403.
+- `facebook.com/<page>` and `/about` → loads but truncated/no usable data;
+  `mbasic.facebook.com/<page>` → still "Facebook is not available on this
+  browser."
+- `instagram.com/<handle>/embed/` (new) → "profile may be broken or removed"
+  — an embed-specific gate, not evidence the account is actually gone.
+- `threads.com/@<handle>` (new, redirects from threads.net) → login wall
+  only, no bio/follower/link data.
+- `instagram.com/explore/tags/*` → HTTP 429 this run (was intermittently
+  readable in run 2; not reliable either way).
+- `bing.com/search`, `duckduckgo.com` → still return CAPTCHA or irrelevant
+  generic results, not real SERPs.
+- `adstransparency.google.com` (new: queried by advertiser domain, not just
+  the bare shell) → still no advertiser data, sign-in prompt only.
+- `search.marginalia.nu` (new, indie search engine, tried on the theory that
+  a non-commercial index might surface low-SEO small businesses better) —
+  redirects fine but not pursued further once the FB/IG wall made the result
+  moot either way for qualifiers 1/2.
+
+New structural finding this run: even where `WebSearch`/`WebFetch` DO work
+(ordinary sites, general queries), results systematically skew toward
+businesses with real websites and decent SEO — e.g. a `"boosted post" OR
+"link in bio"` query for Phoenix roofing/fencing/pool returned established
+companies with full marketing sites, not the Instagram-only micro-businesses
+the brief targets. This is not a fluke: the qualifier profile (no
+site, Instagram/DM only, <10k followers) is close to invisible to
+search-engine indexing by construction, so a search-engine-first sourcing
+method fights its own target even before the Meta wall is considered.
+
+**Conclusion:** three consecutive runs, three different days, now confirm
+the same wall around the two mandatory verification surfaces (Meta Ad
+Library for qualifier 1, live IG/FB profile or ad link caption for qualifier
+2). This is not transient. Per run 2's own conclusion, continuing to fire
+this routine unattended on the same approach cannot produce a compliant
+lead — it can only burn budget re-confirming the same block. This run
+notifies the user directly (push notification) rather than only logging to
+a commit message nobody may read, since two prior silent log-only
+escalations did not change the environment or the routine's schedule.
+
+No prospects added this run. Zero committed to inbox.json.
