@@ -111,6 +111,71 @@ reach these domains).
 
 No prospects added this run either. Zero committed to inbox.json.
 
+## 2026-07-29 — Run 6: reconfirmed run 5's blocker byte-for-byte, tried three new channels (TikTok, Yelp, BBB/Maps), no fix
+
+Re-tested the core surfaces first, per every prior run's own recommendation.
+All identical to run 5, down to the exact bytes:
+
+- `facebook.com/ads/library/*` → still HTTP 403 (both raw curl and the
+  WebFetch tool).
+- `instagram.com/<handle>` via WebFetch → still HTTP 429. Via raw curl with
+  a mobile Safari UA → HTTP 200 but (as run 5 found) it's the React shell
+  only, no bio/link/follower data server-rendered.
+- `instagram.com/api/v1/users/web_profile_info/?username=X` → still fails
+  with the *exact same* error string run 5 got:
+  `"Asset asset://laser.provider/ig_business_category_subvertical has been
+  deleted. You cannot use this schema"`. Identical text two runs running
+  confirms this is a static Meta-side backend regression, not something
+  that fluctuates — not worth re-testing again short of a Meta-side fix.
+- `facebook.com/<small-business-page>` (plain curl, browser UA, tested
+  against a real small AZ business page rather than run 5's neutral
+  control) → HTTP 302 to login wall, zero bytes. No `og:description`
+  fallback available even for a Page (not a profile).
+- `adstransparency.google.com` → HTTP 200 shell, no advertiser data (same
+  as runs 2/3).
+
+**Three genuinely new channels tried this run, none usable:**
+- **TikTok Ad/Creative Center** (`library.tiktok.com/ads`) — not attempted
+  by any prior run. Returns a real HTTP 200, 38KB body — but it's a pure
+  client-rendered shell (`<div id="root">` empty, all JSON in an obfuscated
+  script tag). Same class of failure as Google Ads Transparency Center.
+  Also a weaker fit for this brief's target population than Meta anyway —
+  small local trade businesses running "boosted post" style spend skew
+  heavily Facebook/Instagram, not TikTok — so even if it worked it likely
+  wouldn't be the primary channel to build around.
+- **Yelp business pages** → HTTP 403 (bot-gated, same class as Facebook).
+- **BBB business search** and **Linktree** → both HTTP 200 with real
+  static HTML (confirms run 1's Linktree finding still holds). But neither
+  carries ad-spend evidence or a bio-link defect on its own — BBB shows
+  business existence/category/sometimes a website field, Linktree shows
+  destination-page content IF you already have the exact linktr.ee URL
+  from somewhere. Neither substitutes for qualifier 1 (ad evidence, which
+  only lives in the Meta Ad Library or a visible ad) or qualifier 2's
+  specific "ad link caption" requirement (which only lives on the live
+  IG/FB profile or ad itself). Google Maps search page also returns 200
+  but wasn't pursued further once it was clear it can't carry ad-spend
+  evidence either.
+
+**Assessment: this is the same wall as runs 1-5, reconfirmed with zero
+drift in failure mode, plus three new negative results.** Nothing in this
+session's toolset (WebSearch, WebFetch, raw curl/Bash) can render Meta's
+client-side JS or pass its bot challenge, and no alternate primary source
+(TikTok, Yelp, BBB, Maps) both (a) is fetchable and (b) carries the
+specific evidence qualifiers 1 and 2 require. Not re-sending a push
+notification — run 5 already gave the user the specific, actionable
+diagnosis (proxy TLS-reset on large ClientHello blocks headless Chrome;
+Meta's own backend API is separately broken) and nothing has changed since
+to report; a repeat ping with no new information would be noise per this
+routine's own standard. Next run should skip re-deriving this and, unless
+the environment changes (proxy fix, browser-capable session, or a
+user-supplied seed list of candidate handles/ad screenshots per run 4's
+suggested workaround), treat sourcing as blocked without spending budget
+on it.
+
+No prospects added this run. Zero committed to inbox.json — six
+consecutive runs now with zero verifiable leads, all for the same
+underlying reason.
+
 ## 2026-07-29 — Run 5: found and diagnosed a real browser toolchain, but it's blocked by a specific, fixable proxy/TLS bug — not a generic wall
 
 This run's environment description (system prompt) mentioned something the
