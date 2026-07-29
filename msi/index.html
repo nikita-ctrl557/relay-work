@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="robots" content="noindex,nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MY Sports Injury — Physiotherapy &amp; Chiropractic, Manchester</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;400;500;600&family=Poppins:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root{--cyan:#A6ECFF;--electric:#00e0ff;--purple:#b02fff;--bg:#14181d;--panel:#1a1f26;--panel2:#20262e;--line:#2c343e;--ink:#e8eef4;--mut:#96a2ae;--dark:#0e1216}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Outfit',sans-serif;background:var(--bg);color:var(--ink);line-height:1.65;font-weight:300}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+a{text-decoration:none}
+.caps{text-transform:uppercase;letter-spacing:.18em}
+.ghost{display:inline-block;border:1px solid var(--cyan);color:var(--cyan);padding:13px 34px;font-size:13px;font-weight:400;letter-spacing:.16em;text-transform:uppercase;border-radius:4px;transition:.25s;background:transparent}
+.ghost:hover{background:var(--cyan);color:var(--dark)}
+.ghost.solid{background:var(--cyan);color:var(--dark);font-weight:500}
+.nav{position:sticky;top:0;z-index:50;background:rgba(14,18,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.nav .wrap{display:flex;align-items:center;gap:26px;padding:16px 24px}
+.nav img{height:34px;opacity:.95}
+.nav .links{margin-left:auto;display:flex;gap:26px;align-items:center}
+.nav .links a{color:var(--mut);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;font-weight:400}
+.nav .links a:hover{color:var(--cyan)}
+.nav .links a.book{color:var(--cyan);border:1px solid var(--cyan);padding:8px 18px;border-radius:4px}
+.hero{position:relative;min-height:clamp(560px,88vh,760px);display:flex;align-items:center;overflow:hidden}
+.hero .bgvid{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:brightness(.55) saturate(.9)}
+.hero .veil{position:absolute;inset:0;background:linear-gradient(90deg,rgba(14,18,22,.86) 0%,rgba(14,18,22,.45) 45%,rgba(14,18,22,.12) 100%)}
+.hero .wrap{position:relative;z-index:2;width:100%}
+.hero .kick{color:var(--mut);font-size:12px;letter-spacing:.22em;text-transform:uppercase;margin-bottom:22px}
+.hero h1{font-weight:200;font-size:44px;letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);max-width:720px;line-height:1.3}
+.hero p{color:#c3ccd5;max-width:480px;margin:26px 0 34px;font-size:16.5px;font-weight:300}
+.hero .row{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+.hero .note{margin-top:22px;color:var(--mut);font-size:12.5px;letter-spacing:.08em}
+.strip{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--dark)}
+.strip .wrap{display:flex;align-items:center;justify-content:center;gap:44px;padding:18px 24px;flex-wrap:wrap}
+.strip img{height:24px;filter:grayscale(1) invert(.85);opacity:.55}
+.strip span{color:var(--mut);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase}
+section{padding:76px 0}
+.eyebrow{color:var(--electric);font-size:11.5px;letter-spacing:.24em;text-transform:uppercase;margin-bottom:14px;font-weight:400}
+h2{font-weight:200;font-size:30px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink);margin-bottom:12px}
+.sub{color:var(--mut);max-width:560px;font-size:15px}
+.prices{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:40px}
+.price{background:var(--panel);padding:36px 30px;text-align:center;position:relative}
+.price.feat{background:var(--panel2)}
+.price .tag{position:absolute;top:0;left:50%;transform:translate(-50%,-50%);background:var(--cyan);color:var(--dark);font-size:10px;letter-spacing:.18em;text-transform:uppercase;padding:4px 14px;font-weight:500}
+.price h3{font-weight:300;font-size:13px;letter-spacing:.2em;text-transform:uppercase;color:var(--mut)}
+.price .amt{font-weight:200;font-size:52px;color:var(--cyan);margin:16px 0 4px}
+.price .amt small{font-size:15px;color:var(--mut)}
+.price ul{list-style:none;margin:20px 0 26px;text-align:center}
+.price li{padding:6px 0;font-size:13.5px;color:#b9c3cd;font-weight:300}
+.svcgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:40px}
+.svc{background:var(--panel);padding:34px 26px}
+.svc h3{font-weight:300;font-size:13px;letter-spacing:.2em;text-transform:uppercase;color:var(--cyan);margin-bottom:12px}
+.svc p{font-size:13.5px;color:var(--mut);font-weight:300}
+.teamgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:40px}
+.teamgrid figure{position:relative;overflow:hidden}
+.teamgrid img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;filter:saturate(.85);transition:.4s}
+.teamgrid figure:hover img{transform:scale(1.04)}
+.vreview{border:1px solid var(--line);background:var(--panel);padding:40px;margin-top:44px;display:grid;grid-template-columns:280px 1fr;gap:40px;align-items:center}
+.vreview .phone{border:1px solid var(--line);border-radius:22px;overflow:hidden;background:#000;box-shadow:0 18px 44px rgba(0,0,0,.5)}
+.vreview .phone video{display:block;width:100%;aspect-ratio:9/16;object-fit:cover}
+@media(max-width:880px){.vreview{grid-template-columns:1fr}}
+.final{position:relative;text-align:center;padding:110px 0;overflow:hidden}
+.final .bgimg{position:absolute;inset:0;background:url('assets/team-ash.jpg') center 20%/cover no-repeat;filter:brightness(.28)}
+.final .wrap{position:relative;z-index:2}
+.final h2{font-size:34px;color:var(--cyan)}
+.final p{color:#c3ccd5;margin:16px auto 36px;max-width:440px;font-size:15.5px}
+.stickybar{position:fixed;bottom:0;left:0;right:0;background:rgba(14,18,22,.95);border-top:1px solid var(--line);padding:12px 16px;display:none;z-index:60}
+.stickybar .ghost{width:100%;text-align:center}
+.relay-ribbon{background:#0c0f12;border-top:1px solid var(--line);color:var(--mut);text-align:center;font-size:11.5px;letter-spacing:.06em;padding:12px 14px}
+.relay-ribbon b{color:#6fbfa4;font-weight:500}
+@media(max-width:880px){.hero h1{font-size:30px}.prices,.svcgrid{grid-template-columns:1fr}.teamgrid{grid-template-columns:1fr 1fr}.nav .links a:not(.book){display:none}.stickybar{display:block}body{padding-bottom:66px}}
+
+html{scroll-behavior:smooth}
+@keyframes riseIn{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:none}}
+.hero .kick{animation:riseIn .8s .15s both}.hero h1{animation:riseIn .9s .3s both}.hero p{animation:riseIn .9s .5s both}.hero .row{animation:riseIn .9s .7s both}.hero .note{animation:riseIn 1s .9s both}
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .7s ease,transform .7s ease}
+.reveal.in{opacity:1;transform:none}
+.ghost:hover{transform:translateY(-2px)}
+.price{transition:transform .35s ease}.price:hover{transform:translateY(-5px)}
+.svc{transition:transform .35s ease}.svc:hover{transform:translateY(-4px)}
+</style>
+</head>
+<body>
+
+<nav class="nav"><div class="wrap">
+  <img src="assets/logo.png" alt="MY Sports Injury">
+  <div class="links">
+    <a href="#services">Services</a><a href="#team">About us</a><a href="#location">Location</a>
+    <a class="book" href="https://mysportinjury.janeapp.co.uk/" target="_blank" rel="noopener">Book now</a>
+  </div>
+</div></nav>
+
+<header class="hero">
+  <video class="bgvid" autoplay muted loop playsinline poster="assets/team-anz.jpg">
+    <source src="assets/hero-video.mp4" type="video/mp4">
+  </video>
+  <div class="veil"></div>
+  <div class="wrap">
+    <div class="kick">HCPC &amp; CSP accredited &middot; Manchester city centre</div>
+    <h1>Unlock your body's full potential</h1>
+    <p>Physiotherapy and sports chiropractic, trusted by Manchester's athletes and office workers alike. See the price, pick a time, book in sixty seconds.</p>
+    <div class="row">
+      <a class="ghost solid" href="https://mysportinjury.janeapp.co.uk/" target="_blank" rel="noopener">Book now &middot; &pound;80</a>
+      <a class="ghost" href="https://mysportsinjury.co.uk/book-physiotherapy/" target="_blank" rel="noopener">Free posture check</a>
+    </div>
+    <div class="note">Manchester city centre &middot; recognised by Bupa, AXA and Aviva</div>
+  </div>
+</header>
+
+<div class="strip"><div class="wrap">
+  <span>Recognised by</span>
+  <img src="assets/bupa.png" alt="Bupa"><img src="assets/axa.png" alt="AXA"><img src="assets/aviva.png" alt="Aviva"><img src="assets/p-bbc.png" alt="BBC">
+  <span>HCPC registered</span><span>CSP chartered</span>
+</div></div>
+<div class="strip" style="border-top:none"><div class="wrap">
+  <span>Partners</span>
+  <img src="assets/p-trib3.png" alt="TRIB3"><img src="assets/p-classpass.png" alt="ClassPass"><img src="assets/p-reboots.png" alt="REBOOTS"><img src="assets/p-lifestyle.png" alt="Lifestyle Fitness"><img src="assets/p-sweat.png" alt="We Sweat Together"><img src="assets/p-chill.png" alt="Chill Factore">
+</div></div>
+
+<section id="book"><div class="wrap">
+  <div class="eyebrow">Transparent pricing</div>
+  <h2>Know the price before you click</h2>
+  <p class="sub">No hidden rates, no surprises inside a booking app. This is what a session costs.</p>
+  <div class="prices">
+    <div class="price">
+      <h3>Posture health check</h3><div class="amt">&pound;0</div>
+      <ul><li>15 minute assessment</li><li>Honest advice, no obligation</li><li>The perfect first visit</li></ul>
+      <a class="ghost" href="https://mysportsinjury.co.uk/book-physiotherapy/" target="_blank" rel="noopener">Claim yours</a>
+    </div>
+    <div class="price feat"><span class="tag">Most booked</span>
+      <h3>Single session</h3><div class="amt">&pound;80<small> / session</small></div>
+      <ul><li>Physiotherapy or chiropractic</li><li>Full assessment and treatment</li><li>A plan you take home</li></ul>
+      <a class="ghost solid" href="https://mysportinjury.janeapp.co.uk/" target="_blank" rel="noopener">Book now</a>
+    </div>
+    <div class="price">
+      <h3>Treatment course</h3><div class="amt" style="font-size:30px;padding:11px 0">Block pricing</div>
+      <ul><li>Multi-session plans</li><li>Priority scheduling</li><li>Insurer-friendly invoicing</li></ul>
+      <a class="ghost" href="tel:+441615244339">Ask about blocks &middot; 0161 524 4339</a>
+    </div>
+  </div>
+  <p class="sub" style="margin-top:18px;font-size:13px">Recognised by the insurers shown above.</p>
+</div></section>
+
+<section id="services" style="background:var(--dark);border-top:1px solid var(--line);border-bottom:1px solid var(--line)"><div class="wrap">
+  <div class="eyebrow">What we treat</div>
+  <h2>One clinic for the whole recovery</h2>
+  <div class="svcgrid">
+    <div class="svc"><h3>Physiotherapy</h3><p>From acute injury to long-term rehabilitation, built around your goals, not a template.</p></div>
+    <div class="svc"><h3>Chiropractic</h3><p>Sports chiropractic care for alignment, posture and performance.</p></div>
+    <div class="svc"><h3>Sports massage</h3><p>Soft-tissue work that keeps training niggles from becoming injuries.</p></div>
+    <div class="svc"><h3>Acupuncture</h3><p>Natural pain relief that restores balance and improves function.</p></div>
+  </div>
+</div></section>
+
+<section id="team"><div class="wrap">
+  <div class="eyebrow">Your team</div>
+  <h2>Real clinicians, faces first</h2>
+  <p class="sub">Patients book people, not services. Your team, front and centre.</p>
+  <div class="teamgrid">
+    <figure><img src="assets/team-ahmed.jpg" alt="Clinician"></figure>
+    <figure><img src="assets/team-ali.jpg" alt="Clinician"></figure>
+    <figure><img src="assets/team-anz.jpg" alt="Clinician"></figure>
+    <figure><img src="assets/team-ash.jpg" alt="Clinician"></figure>
+  </div>
+  <div class="vreview">
+    <div class="phone">
+      <video controls playsinline preload="metadata" poster="assets/team-ali.jpg">
+        <source src="assets/clinic-video.mp4" type="video/mp4">
+      </video>
+    </div>
+    <div>
+      <div class="stars" style="color:var(--cyan);font-size:18px;letter-spacing:8px;margin-bottom:16px">★★★★★</div>
+      <h3 style="font-weight:200;font-size:22px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink);margin-bottom:12px">Patients say it on camera</h3>
+      <p style="color:var(--mut);font-size:15px;max-width:420px">Your own video reviews, front and centre, where they close the deal. Written proof is good; a real patient's face and voice is better. Your strongest Google reviews rotate here beneath the video, word for word.</p>
+      <p style="margin-top:16px;font-size:16px;font-weight:200;font-style:italic;color:#d5dde5">"Your strongest Google review appears here — pulled live, never written by us."</p>
+    </div>
+  </div>
+</div></section>
+
+<section class="final" id="location">
+  <div class="bgimg"></div>
+  <div class="wrap">
+    <h2>Your body has been patient enough</h2>
+    <p>Manchester city centre. See the price, pick your clinician, book.</p>
+    <a class="ghost solid" href="https://mysportinjury.janeapp.co.uk/" target="_blank" rel="noopener">Book now &middot; &pound;80</a>
+  </div>
+</section>
+
+<div class="stickybar"><a class="ghost solid" href="https://mysportinjury.janeapp.co.uk/" target="_blank" rel="noopener">Book now &middot; &pound;80</a></div>
+
+<div class="relay-ribbon"><b>Prototype by Relay</b> &middot; generation two &middot; built from MY Sports Injury's own visual language, photography and services &middot; every element is a testable variant</div>
+
+<script>
+var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});
+document.querySelectorAll('.strip .wrap, section .eyebrow, section h2, section .sub, .prices, .svcgrid, .teamgrid, .vreview, .final h2, .final p, .final .ghost').forEach(function(el){el.classList.add('reveal');io.observe(el);});
+</script>
+</body>
+</html>
