@@ -111,6 +111,23 @@ reach these domains).
 
 No prospects added this run either. Zero committed to inbox.json.
 
+## 2026-07-29 — Run 4: found a partial crack in the fetch wall, but it exposes a deeper sourcing problem, not a fix
+
+Same day as run 3. Re-tested the core blockers first (Meta Ad Library `facebook.com/ads/library/*` → still 403; `instagram.com/<handle>` profile pages → still 429; `instagram.com/explore/tags/*` → still 429). No change there.
+
+**New finding: individual Instagram post/reel URLs sometimes fetch successfully via WebFetch even though the profile page and hashtag page for the same account 429.** Tried `instagram.com/<handle>/reel/<id>/` and `instagram.com/p/<id>/` for ~8 distinct accounts found via WebSearch. Roughly half returned real content (caption, business name, sometimes phone/location) instead of a 429/403/empty-shell. The other half still failed (429, or a fetch that resolved to raw base64 image data with no text). Not reliable enough to depend on, but worth trying per-post before writing an account off — it's a genuine capability the last three runs didn't have documented.
+
+**However, this doesn't solve the actual sourcing problem, and this run's real finding is why.** Used the post-URL trick plus targeted WebSearch queries (`"DM us for a quote"`, `"link in bio"`, `"message us"`, `linktr.ee <trade> <city>`, `"boosted post" <trade> <city>`) across pool fencing, roofing, fencing, outdoor kitchens, and hardscape in Phoenix metro, Texas (DFW, San Antonio), and Florida (Coral Springs). ~13 distinct candidate accounts surfaced and checked (WebSearch for a dedicated domain + BBB/Yelp listing, as a stand-in for the still-blocked live-profile check):
+
+- Gr8 Glass Pool Fencing — real defect (DM-only CTA, no link) but Perth, Australia. Wrong geography, otherwise the best-shaped lead found all run.
+- Wortham Brothers Roofing (TX), Glen C Landscape & Hardscape (Phoenix West Valley), Florida Outdoor Kitchens (Coral Springs), Texas Best Fence & Patio (DFW), Fence Pro's / Fence Pros of Texas (San Antonio), Boost Roofing (Tempe), Phoenix Roofing & Repair, Arizona Pool Fence — every one of these has a real, working, dedicated website with a contact/quote page (several also had BBB profiles and hundreds of Google reviews). All disqualify on qualifier 2 (no dead end) and most on qualifier 1 (sophisticated, not unsophisticated spend).
+
+**Root cause, stated plainly: WebSearch-driven discovery is structurally biased against the exact profile the brief targets.** The qualifier is "Instagram/DM-only, no site, <10k followers, owner-run" — which is close to the definition of "not SEO'd, not indexed." A search engine surfaces what's indexed well; the businesses that rank for `"<trade> DM quote" <city>` are disproportionately the ones with a real marketing site *also* ranking nearby, not the ones with nothing but an Instagram profile. Every trade/geo combination tried this run reproduced this: the query returns 2-3 Instagram-only-looking results mixed with 5-8 fully-built competitor sites, and the Instagram-only-looking ones turn out, on the one check WebSearch permits (search for the business name + "website"), to have a site too — it just didn't rank on the first query.
+
+**This means the blocker isn't just "can't fetch Meta/IG" anymore (run 4 shows partial workarounds exist for that) — it's "the discovery channel available (WebSearch) can't select for the target population in the first place."** A fix needs a discovery method that doesn't route through a general search engine's ranking: e.g. a real Meta Ad Library session (still 403), scrolling an Instagram hashtag/location feed as a human/browser would (still 429 on the feed endpoints, though individual posts sometimes load), or a seed list of candidate handles supplied by the user for this session to verify against.
+
+No prospects added this run. Zero committed to inbox.json. Not re-notifying the user by push — run 3 already escalated this exact structural blocker today and the actionable ask (need a different discovery channel) hasn't changed; a second same-day ping would be noise. This entry exists so run 5 doesn't re-spend budget re-discovering the WebSearch bias from scratch and instead goes straight for a non-search-engine discovery method or asks for seed handles.
+
 ## 2026-07-29 — Run 3: blocker confirmed a third time, escalating to user via notification
 
 This run had two working tools the first two runs lacked full clarity on: a
