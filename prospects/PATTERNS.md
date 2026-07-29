@@ -111,6 +111,113 @@ reach these domains).
 
 No prospects added this run either. Zero committed to inbox.json.
 
+## 2026-07-29 — Run 5: found and diagnosed a real browser toolchain, but it's blocked by a specific, fixable proxy/TLS bug — not a generic wall
+
+This run's environment description (system prompt) mentioned something the
+first four runs never checked: a pre-installed Chromium at
+`/opt/pw-browsers` plus a global Playwright npm package
+(`playwright@1.56.1` under `/opt/node22/lib/node_modules`), reachable via
+Bash. That's a *real browser*, which is exactly what runs 1-4 said was
+missing and needed to solve qualifier 1/2 verification (Meta Ad Library
+JS challenge, IG client-side rendering). Spent this run's budget
+determining whether it actually closes the gap. Short answer: **not yet —
+it's blocked by a specific TLS handshake bug between Chromium and this
+session's egress proxy, not by policy.** Full diagnosis below so run 6
+doesn't have to redo it.
+
+**What was newly confirmed working (raw curl, not WebFetch tool):**
+- Direct `curl` (not the WebFetch tool) with a real browser User-Agent
+  reaches `www.instagram.com/<handle>/` and sometimes gets a genuine
+  HTTP 200 instead of the 302-to-login-wall the WebFetch tool reported in
+  prior runs. Tested 5 consecutive fetches of a real profile
+  (`instagram.com/natgeo/`) — all 5 returned 200, ~600KB.
+  **But this is a dead end for data extraction**: the HTML is Instagram's
+  React app shell only — no `og:description`, no `biography`, no
+  `external_url`, no follower count anywhere in the markup. Instagram
+  serves profile data via client-side GraphQL/JS after load, not in the
+  initial document, for logged-out non-JS requests. A 200 status here is
+  not usable evidence of anything.
+- Instagram's internal `web_profile_info` API
+  (`instagram.com/api/v1/users/web_profile_info/?username=X` with an
+  `x-ig-app-id` header — a technique used by many scraping libraries) is
+  reachable through the proxy but returns a *server-side* error
+  (`"Asset asset://laser.provider/ig_business_category_subvertical has
+  been deleted. You cannot use this schema"`) on every known public app-id
+  tried. This looks like Meta's own backend regression/deprecation, not an
+  auth wall — not fixable from this end.
+- `graph.facebook.com/.../instagram_oembed` and
+  `instagram.com/api/v1/oembed/` need a valid post ID and (for the Graph
+  API) a real access token — not usable without a specific target post and
+  Meta app credentials Relay doesn't have.
+- Facebook Ad Library's 403 is a **client-side JS bot challenge**, not a
+  static block: the body is `<script>...fetch('/__rd_verify_...?
+  challenge=3')...window.location.reload()</script>`. It needs a real JS
+  engine to solve, confirming a browser really is the required tool here
+  — curl/WebFetch structurally cannot do this regardless of headers.
+- A raw `curl` fetch of `google.com/search?q=...` returns HTTP 200 but the
+  body is obfuscated/minified JS (no static result links) — Google's SERP
+  is not scrapable via plain curl either; the WebSearch tool remains the
+  only usable channel for search, with its existing "unverifiable
+  snippet" caveat from run 1.
+
+**Why Chromium itself doesn't work here, precisely:** launched
+`chromium-1194/chrome-linux/chrome` via Playwright with `--proxy-server=
+http://127.0.0.1:43015` (this session's `$HTTPS_PROXY`) and
+`--ignore-certificate-errors` (the proxy re-terminates TLS with its own CA
+per `/root/.ccr/README.md`, which Chromium's own NSS store doesn't trust
+by default — confirmed separately: a *direct*, non-proxied request to a
+`no_proxy`-listed host like `pypi.org` still hit
+`ERR_CERT_AUTHORITY_INVALID`, proving TLS interception is transparent at
+the network level here, not just on the explicit proxy path). Tried ~10
+flag combinations (disable QUIC/HTTP2, disable background networking/
+component-update/domain-reliability/client-side-phishing, disable
+post-quantum-Kyber key share, host-resolver-rules to kill Google's
+background preconnects, `--no-sandbox`). Every single variant fails
+identically: `net::ERR_CONNECTION_RESET`. Captured a full Chrome netlog
+(`--log-net-log`) for the failing case: the HTTP CONNECT tunnel to the
+proxy *succeeds* (confirmed independently with raw `nc` sending Chrome's
+exact CONNECT headers, including its `HeadlessChrome` User-Agent — proxy
+returns `200 Connection Established` every time, so it's not a UA-based
+policy block). The reset happens *after* the tunnel is up, during the TLS
+handshake inside it: `SSL_HANDSHAKE_ERROR net_error -101`,
+`SOCKET_READ_ERROR os_error 104` (ECONNRESET), on every domain tried
+(`example.com` included, as a neutral control — this is not
+target-site-specific). Meanwhile `curl` completes real TLS handshakes
+through the identical tunnel to the identical hosts without issue. The
+working theory: Chromium's TLS 1.3 ClientHello is materially larger/more
+complex than curl's (GREASE, ALPS, larger cipher/extension lists, and
+until disabled, a post-quantum hybrid key share) and the proxy's
+TLS-terminating egress hop resets the connection rather than parsing it —
+a known class of bug in simpler MITM proxies that don't handle large or
+fragmented ClientHellos. This is a proxy-side fix, not something more
+Chrome flags can route around — confirmed by testing with post-quantum
+Kyber explicitly disabled (`--disable-features=PostQuantumKyber,
+UseMLKEM`) and it made no difference.
+
+**Bottom line for run 6 and beyond:** don't re-attempt the Playwright
+route with new flag combinations — the failure is proxy-side and
+independent of Chrome's launch config, at least for every angle tried
+this run. Don't bother with the IG "post URL sometimes loads" trick from
+run 4 either — even a 200 status returns no embedded profile data, so it
+can't establish bio link / follower count / DM-only CTA either. The
+actual unblock, if one exists, is either: (a) whoever operates this
+session's egress proxy fixes it to handle a full-size browser ClientHello
+(this is a narrow, well-defined bug report — "TLS handshake reset for
+large ClientHellos through the CONNECT tunnel," reproducible with the nc/
+curl/Chrome comparison above), or (b) a future session gets a genuinely
+different network path (e.g., a non-MITM'd egress, or a session type with
+a browser tool built into the harness rather than raw Playwright over
+this proxy).
+
+Notifying the user by push: this is the first run with a *specific,
+narrow, reproducible* technical root cause (proxy TLS-reset on large
+ClientHello) rather than a vague "everything's blocked" — worth flagging
+because it's fixable and different in kind from runs 1-4's escalations.
+
+No prospects added this run. Zero committed to inbox.json — five
+consecutive runs now with zero verifiable leads, all for the same
+underlying reason.
+
 ## 2026-07-29 — Run 4: found a partial crack in the fetch wall, but it exposes a deeper sourcing problem, not a fix
 
 Same day as run 3. Re-tested the core blockers first (Meta Ad Library `facebook.com/ads/library/*` → still 403; `instagram.com/<handle>` profile pages → still 429; `instagram.com/explore/tags/*` → still 429). No change there.
