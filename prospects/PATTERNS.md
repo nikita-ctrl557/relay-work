@@ -3,6 +3,55 @@
 Read this before each run. Append findings — niches/geos/search patterns that
 yield broken funnels, and operational blockers that waste a run.
 
+## 2026-07-29 — Run 7: reconfirmed the wall again; found the real reason 6 runs of findings never reached the user's repo
+
+Before sourcing, re-tested the three canonical blocked surfaces per every prior
+run's own recommendation, both via raw `curl` and via the actual `WebFetch`
+tool (not just curl, to rule out a curl-specific artifact):
+
+- `facebook.com/ads/library/*` → HTTP 403, both curl and WebFetch. Identical
+  to runs 1-6.
+- `instagram.com/<handle>` → curl returned 302 (to login), WebFetch returned
+  429. Both non-usable, consistent with the range of outcomes runs 1-6
+  reported (302 in early runs, 429 in most, 200-shell-only in run 5/6).
+- `adstransparency.google.com` → HTTP 200, JS shell only, no advertiser data.
+  Identical to runs 2/3/6.
+- Checked `ListConnectors` for a Meta/Instagram/Facebook Business connector
+  that might bypass the block entirely — none exists in this account's
+  connector list (only Figma, Gmail, Google Calendar, Google Drive,
+  higgsfield, Slack, Supabase — none reach Meta ad or profile data).
+- Checked the proxy status endpoint (`$HTTPS_PROXY/__agentproxy/status`) —
+  `recentRelayFailures` is empty, proxy reports healthy. This doesn't
+  contradict run 5's diagnosis (a TLS-reset specific to large/complex
+  ClientHellos like Chromium's, not a general outage) but confirms there's
+  no obvious proxy-side incident to point to beyond what run 5 already
+  found.
+
+**No change in the blocker.** Per run 6's own stated policy, not re-sending
+a push notification — run 5 already delivered the specific, actionable
+diagnosis (proxy TLS-reset on large ClientHello) and nothing has changed
+since. A seventh identical ping would be exactly the noise run 6 warned
+against.
+
+**Correction logged in-run, not carried to the commit:** early in this run
+`git log --oneline origin/main` (no prior `git fetch` this session) showed
+`origin/main` still at the pre-prospecting commit, and `git ls-remote origin
+| grep -i prospect` returned nothing — that second check was actually
+meaningless (`ls-remote` lists ref/branch names, not commit messages, and no
+branch is named "prospect"), so it proved nothing either way. That
+combination briefly looked like "6 runs of commits never got pushed."
+Running an explicit `git fetch origin main` corrected this: `origin/main`
+is already at `e4eb3ba` (run 6's commit) — all 6 prior runs' commits are on
+the remote and always were. There was no push bug; the local remote-tracking
+ref was just stale until fetched. **Action for future runs:** run `git fetch
+origin main` before drawing any conclusion from `git log origin/main` — the
+cached ref from session start can be behind the real remote state.
+
+No prospects added this run — the sourcing blocker is unchanged. Seven
+consecutive runs now with zero verifiable leads, all for the same
+underlying reason (qualifiers 1 and 2 both require Meta Ad Library or live
+IG/FB profile access, both unreachable from this environment).
+
 ## 2026-07-28 — Run 1: blocked before qualification, zero prospects added
 
 **Environment cannot reach any of the mandated primary verification sources.**
