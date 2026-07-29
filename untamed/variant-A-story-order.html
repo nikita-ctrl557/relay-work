@@ -1,0 +1,179 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VARIANT A — story order — Untamed</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--green:#2E4740;--cream:#FCF5E3;--paper:#FFFDF5;--tan:#DAC5B2;--pink:#fdafcd;--cyan:#91dae0;--peach:#ffab8c;--trust:#00B67A;--ink:#22352f}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:'Poppins',sans-serif;background:var(--cream);color:var(--ink);line-height:1.65;font-size:16px}
+h1,h2,h3{font-family:'Fraunces',serif;color:var(--green);font-weight:600;letter-spacing:-.01em}
+.wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+a{text-decoration:none}
+.pill{display:inline-block;background:var(--cyan);color:var(--green);font-weight:600;padding:15px 38px;border-radius:999px;font-size:16.5px;transition:.25s;border:2px solid transparent;cursor:pointer}
+.pill:hover{transform:translateY(-2px);box-shadow:0 10px 24px rgba(46,71,64,.22)}
+.pill.ghost{background:transparent;border-color:var(--green);color:var(--green)}
+.pill.mega{font-size:20px;padding:20px 56px;box-shadow:0 12px 30px rgba(46,71,64,.22)}
+.topbanner{background:var(--pink);color:var(--green);text-align:center;font-weight:600;font-size:14px;padding:9px}
+.nav{background:var(--green);position:sticky;top:0;z-index:50}
+.nav .wrap{display:flex;align-items:center;gap:26px;padding:13px 22px}
+.nav img{height:30px;filter:brightness(0) invert(1)}
+.nav .links{margin-left:auto;display:flex;gap:22px;align-items:center}
+.nav .links a{color:#dfe9e4;font-size:14px}
+.nav .links a.try{background:var(--cyan);color:var(--green);padding:9px 22px;border-radius:999px;font-weight:600}
+section{padding:64px 0}
+h2{font-size:36px;margin-bottom:12px}
+.sub{color:#5d6f68;max-width:620px;font-size:16px}
+.center{text-align:center}.center .sub{margin:0 auto}
+.stars{color:var(--trust);letter-spacing:2px;font-size:17px}
+.hero .wrap{display:grid;grid-template-columns:1.02fr .98fr;gap:40px;align-items:center;padding-top:44px;padding-bottom:44px}
+.hero h1{font-size:56px;line-height:1.08;margin:14px 0 16px}
+.hero .trustline{display:flex;gap:10px;align-items:center;font-weight:600;color:var(--green);font-size:14.5px}
+.hero p.lead{color:#5d6f68;font-size:17.5px;max-width:440px;margin-bottom:26px}
+.hero .imgcol{position:relative}
+.hero .imgcol img{width:100%;border-radius:24px;display:block}
+.microtrust{margin-top:14px;font-size:13px;color:#8a978f}
+.bigoffer{background:var(--paper);border-top:1px solid #eee4cd;border-bottom:1px solid #eee4cd}
+.bigoffer .wrap{display:grid;grid-template-columns:.9fr 1.1fr;gap:46px;align-items:center}
+.bigoffer .tincol{position:relative;text-align:center}
+.bigoffer .tincol img{width:82%;max-width:380px}
+.flag{display:inline-block;background:var(--pink);color:var(--green);font-weight:700;font-size:13.5px;letter-spacing:.08em;text-transform:uppercase;padding:6px 16px;border-radius:999px;margin-bottom:14px}
+.pricerow{display:flex;align-items:baseline;gap:16px;margin:6px 0 4px}
+.pricerow .big{font-family:'Fraunces',serif;font-size:96px;line-height:1;color:var(--green)}
+.pricerow .per{color:#5d6f68;font-size:16px;max-width:150px;line-height:1.35}
+.ticks{list-style:none;margin:18px 0 26px}
+.ticks li{padding:7px 0 7px 34px;position:relative;font-size:16px;color:#3d4f48}
+.ticks li:before{content:"";position:absolute;left:0;top:9px;width:22px;height:22px;border-radius:50%;background:var(--cyan)}
+.ticks li:after{content:"";position:absolute;left:6px;top:15px;width:10px;height:6px;border-left:2.5px solid var(--green);border-bottom:2.5px solid var(--green);transform:rotate(-45deg)}
+.perks{background:var(--pink)}
+.perks .wrap{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding-top:22px;padding-bottom:22px}
+.perk{display:flex;gap:10px;align-items:center;font-weight:600;color:var(--green);font-size:14px}
+.benefits{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:36px}
+.ben{background:var(--paper);border:1px solid #eee4cd;border-radius:18px;padding:26px;transition:transform .3s}
+.ben:hover{transform:translateY(-4px)}
+.ben h3{font-size:18px;margin:12px 0 6px}
+.ben p{font-size:14px;color:#5d6f68}
+.dark{background:var(--green)}
+.dark h2,.dark .sub{color:var(--cream)}
+.dark .sub{color:#b9c9c1}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:34px;text-align:center}
+.stat .n{font-family:'Fraunces',serif;font-size:52px;color:var(--pink)}
+.stat p{color:#cfdcd5;font-size:14px}
+.tl{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:36px}
+.tlcard{background:var(--paper);border:1px solid #eee4cd;border-radius:18px;overflow:hidden;transition:transform .3s}
+.tlcard:hover{transform:translateY(-4px)}
+.tlcard img{width:100%;aspect-ratio:1/1.1;object-fit:cover;display:block}
+.tlcard .t{padding:14px 16px}
+.tlcard .t b{font-family:'Fraunces',serif;color:var(--green);font-size:16px}
+.tlcard .t p{font-size:13px;color:#5d6f68;margin-top:3px}
+.qgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:36px}
+.quote{background:var(--paper);border:1px solid #eee4cd;border-radius:18px;padding:24px;text-align:left}
+.quote .head{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+.quote .head img{width:52px;height:52px;border-radius:50%;object-fit:cover}
+.quote p{font-size:14.5px}
+.quote .who{margin-top:10px;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:#8a978f}
+.rangechips{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:22px 0}
+.chip{background:var(--paper);border:1.5px solid var(--green);color:var(--green);border-radius:999px;padding:9px 24px;font-weight:600;font-size:14.5px}
+.chip.on{background:var(--green);color:var(--cream)}
+.range .wrap{display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:center}
+.range img{width:78%;max-width:340px;display:block;margin:0 auto}
+.finalcta{background:linear-gradient(180deg,var(--cream),#f7ecd4);text-align:center}
+.stickybar{position:fixed;bottom:0;left:0;right:0;background:rgba(46,71,64,.97);padding:10px 16px;display:none;z-index:60;text-align:center}
+.stickybar .pill{width:min(440px,92%)}
+.relay-ribbon{background:var(--green);color:#b9c9c1;text-align:center;font-size:12px;padding:11px}
+.relay-ribbon b{color:var(--cyan)}
+.ribbon{color:#fff;text-align:center;font-size:12px;letter-spacing:.14em;text-transform:uppercase;padding:8px;position:relative;z-index:99}
+.ic{width:26px;height:26px;stroke:var(--green);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+@keyframes riseIn{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
+.hero h1{animation:riseIn .8s .1s both}.hero p.lead{animation:riseIn .8s .3s both}.hero .pill{animation:riseIn .8s .5s both}
+.reveal{opacity:0;transform:translateY(24px);transition:opacity .7s ease,transform .7s ease}
+.reveal.in{opacity:1;transform:none}
+@media(max-width:880px){.hero .wrap,.bigoffer .wrap,.range .wrap{grid-template-columns:1fr}.hero h1{font-size:38px}.pricerow .big{font-size:72px}.benefits,.tl,.qgrid{grid-template-columns:1fr 1fr}.perks .wrap{grid-template-columns:1fr 1fr}.stats{grid-template-columns:1fr}h2{font-size:28px}.stickybar{display:block}body{padding-bottom:72px}}
+
+@keyframes floaty{0%,100%{transform:translateY(0) rotate(var(--r,0deg))}50%{transform:translateY(-12px) rotate(var(--r,0deg))}}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes breathe{0%,94%,100%{transform:scale(1)}97%{transform:scale(1.035)}}
+.shape{position:absolute;border-radius:60% 40% 55% 45%/50% 60% 40% 50%;opacity:.85;animation:floaty 7s ease-in-out infinite;pointer-events:none;z-index:0}
+.shape.leaf{border-radius:0 50% 0 50%}
+.hero .wrap,.bigoffer .wrap{position:relative;z-index:1}
+.hero,.bigoffer{position:relative;overflow:hidden}
+.bigoffer .tincol img{animation:bob 6s ease-in-out infinite}
+.pill.mega{animation:breathe 7s ease-in-out infinite}
+.hero .imgcol img{transition:transform .6s ease}
+.hero .imgcol:hover img{transform:scale(1.02) rotate(-.5deg)}
+@media (prefers-reduced-motion: reduce){.shape,.bigoffer .tincol img,.pill.mega{animation:none}.reveal{opacity:1;transform:none;transition:none}.hero .kick,.hero h1,.hero p.lead,.hero .pill,.hero .note{animation:none}}
+
+.anchor{display:inline-flex;align-items:baseline;gap:12px;margin:2px 0}
+.anchor .was{font-family:'Fraunces',serif;font-size:34px;color:#b9a892;text-decoration:line-through;text-decoration-thickness:3px}
+.anchor .now{font-family:'Fraunces',serif;font-size:64px;color:var(--green);line-height:1}
+.savebadge{display:inline-block;background:var(--pink);color:var(--green);font-weight:700;font-size:13px;letter-spacing:.06em;text-transform:uppercase;padding:5px 13px;border-radius:999px;transform:rotate(-3deg)}
+.guarantee{display:flex;align-items:center;gap:8px;justify-content:center;margin-top:12px;color:#5d6f68;font-size:13.5px}
+.guarantee svg{width:18px;height:18px;stroke:var(--trust);fill:none;stroke-width:2}
+.hero .guarantee{justify-content:flex-start}
+.bigoffer{background:linear-gradient(180deg,#fff9ec,#fdf3dc)}
+.bigoffer .pricerow .big{font-size:104px}
+.stockline{margin-top:10px;font-size:13px;color:#c0673f;font-weight:600;display:flex;align-items:center;gap:7px}
+.stockline .dot{width:9px;height:9px;border-radius:50%;background:#e57a4d;box-shadow:0 0 0 0 rgba(229,122,77,.5);animation:pulseDot 1.8s infinite}
+@keyframes pulseDot{0%{box-shadow:0 0 0 0 rgba(229,122,77,.5)}70%{box-shadow:0 0 0 7px rgba(229,122,77,0)}100%{box-shadow:0 0 0 0 rgba(229,122,77,0)}}
+@media(max-width:880px){.anchor .now{font-size:48px}.anchor .was{font-size:26px}.bigoffer .pricerow .big{font-size:76px}}
+</style></head><body>
+<div class="ribbon" style="background:#2E4740">Variant A &middot; story order</div><div class="topbanner">LIMITED OFFER 40% OFF: 12-tin trial box now just &pound;7</div><nav class="nav"><div class="wrap"><img src="assets/logo.png" alt="Untamed">
+<div class="links"><a href="#why">Our food</a><a href="#reviews">Reviews</a><a href="#offer">How it works</a><a class="try" href="https://untamed.com/products/try-now" target="_blank" rel="noopener">Try for &pound;7</a></div></div></nav><header class="hero"><div class="shape" style="--r:8deg;width:90px;height:110px;background:#91dae0;top:8%;left:2%"></div>
+<div class="shape leaf" style="--r:-14deg;width:60px;height:80px;background:#fdafcd;bottom:12%;left:6%;animation-delay:1.2s"></div>
+<div class="shape" style="--r:20deg;width:70px;height:70px;background:#ffab8c;top:14%;right:4%;animation-delay:2.4s"></div><div class="wrap">
+<div>
+<div class="trustline"><span class="stars">★★★★★</span> Over 60 million meals delivered</div>
+<h1>Food they'll go wild for</h1>
+<p class="lead">The real meat diet they need to thrive. Tailored to your cat, delivered to your door, loved by the fussiest eaters in Britain.</p>
+<div class="anchor"><span class="savebadge">Save 40%</span><span class="was">&pound;12</span><span class="now">&pound;7</span></div>
+<a class="pill mega" href="https://untamed.com/products/try-now" target="_blank" rel="noopener">Try for &pound;7 today</a>
+<div class="guarantee"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>30-day happiness guarantee &middot; cancel any time</div>
+</div>
+<div class="imgcol"><img src="assets/cat-props.png" alt="A very pleased cat with Untamed tins"></div>
+</div></header><div class="perks"><div class="wrap">
+<div class="perk"><svg class="ic" viewBox="0 0 24 24"><path d="M1 7h12v9H1zM13 10h5l3 3v3h-8z"/><circle cx="6" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg> Free next-day delivery</div>
+<div class="perk"><svg class="ic" viewBox="0 0 24 24"><path d="M12 2v20M4 6l16 12M20 6L4 18"/></svg> No freezing or defrosting</div>
+<div class="perk"><svg class="ic" viewBox="0 0 24 24"><path d="M7 19H4l3-5M17 19h3l-3-5M12 4l2 3h-4zM7 19l5-2 5 2M9 7L6 12M15 7l3 5"/></svg> Recyclable packaging</div>
+<div class="perk"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 8h4a2 2 0 0 1 0 4H9zM9 12h4.5a2 2 0 0 1 0 4H9zM9 8v8"/></svg> Certified B Corp</div>
+</div></div><section id="why"><div class="wrap center">
+<h2>A feast for carnivores in every tin</h2>
+<div class="benefits">
+<div class="ben"><svg class="ic" viewBox="0 0 24 24"><path d="M15 11a4 4 0 1 0-6 3.5V21l3-2 3 2v-6.5A4 4 0 0 0 15 11z"/></svg><h3>Real meat &amp; wild fish</h3><p>Not brown mush or mystery mess. Succulent, flake-apart cuts your cat dreams of devouring.</p></div>
+<div class="ben"><svg class="ic" viewBox="0 0 24 24"><path d="M4 20C8 8 16 4 20 4c0 8-4 14-14 16z"/><path d="M4 20c4-4 8-6 12-8"/></svg><h3>No greens, no grains</h3><p>Cats didn't evolve sharp claws to peel veg.</p></div>
+<div class="ben"><svg class="ic" viewBox="0 0 24 24"><path d="M7 10a4 4 0 1 1 2-7.5A4.5 4.5 0 0 1 17 5a3.5 3.5 0 0 1 0 7v6H7v-8z"/><path d="M7 21h10"/></svg><h3>Human-grade ingredients</h3><p>Because your cat deserves better than supply-chain scraps.</p></div>
+<div class="ben"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3c1 4-4 5-3 9a4.5 4.5 0 0 0 9 .5C19 8 14 7 12 3z"/></svg><h3>Cooked low &amp; slow</h3><p>Prepared for peak nutrition, locking in vitamins and minerals.</p></div>
+</div></div></section><section class="dark"><div class="wrap center">
+<h2>The industry is a cat-astrophe</h2>
+<p class="sub">Most cat food fills cats up without the meat nutrients they need.</p>
+<div class="stats">
+<div class="stat"><div class="n">92%</div><p>contain animal "derivatives"</p></div>
+<div class="stat"><div class="n">84%</div><p>contain sugars</p></div>
+<div class="stat"><div class="n">74%</div><p>contain plant filler</p></div>
+</div></div></section><section><div class="wrap center">
+<h2>87% of cat parents see health improvements</h2>
+<p class="sub">A happier, healthier cat is just a few tins away.</p>
+<div class="tl">
+<div class="tlcard"><img src="assets/tl1.png" alt="Day one with Untamed"><div class="t"><b>Day One</b><p>Fresh, natural ingredients are easier to digest, so your cat should be happier, and the litter box less messy.</p></div></div>
+<div class="tlcard"><img src="assets/tl2.png" alt="Two months in"><div class="t"><b>2 Months</b><p>Look for your cat having more energy, more get up and go, after a month or two of high-protein whole meats.</p></div></div>
+<div class="tlcard"><img src="assets/tl3.png" alt="Four months in"><div class="t"><b>4 Months</b><p>A shiny coat and less irritating hairballs, thanks to a diet rich in the primal nutrients cats need.</p></div></div>
+<div class="tlcard"><img src="assets/tl4.png" alt="For life"><div class="t"><b>For Life</b><p>Natural weight control and long-term health benefits from food that mirrors your cat's innate diet.</p></div></div>
+</div>
+<p style="margin-top:14px;font-size:12px;color:#8a978f">Untamed customer study with 900 participants</p>
+</div></section><section id="reviews" style="background:var(--paper)"><div class="wrap center">
+<h2>The proof is in the purrs</h2>
+<p class="sub"><span class="stars">★★★★★</span> Rated Excellent on Trustpilot</p>
+<div class="qgrid">
+<div class="quote"><div class="head"><span class="stars">★★★★★</span></div><p>"Our 7-year-old cat is a fussy eater, but she eats Untamed very enthusiastically. Her coat feels great and her energy levels have increased."</p><div class="who">Verified customer</div></div>
+<div class="quote"><div class="head"><span class="stars">★★★★★</span></div><p>"My 3 cats love Untamed, including my picky senior. Easy to order and delivery on time to my door. Two paws up from my cats."</p><div class="who">Verified customer</div></div>
+<div class="quote"><div class="head"><span class="stars">★★★★★</span></div><p>"My kitten loves it. Merlin is usually fussy but always finishes his bowl. No complaints here!"</p><div class="who">Verified customer</div></div>
+</div></div></section><section class="finalcta"><div class="wrap center">
+<h2>Two ways in, both easy</h2>
+<p class="sub" style="margin:10px auto 26px">Know what you want? Order the box. Not sure? Let the quiz build it around your cat.</p>
+<a class="pill mega" href="https://untamed.com/products/try-now" target="_blank" rel="noopener">Order the &pound;7 box</a>
+<div style="margin-top:14px"><a href="https://untamed.com/products/try-now" target="_blank" rel="noopener" style="color:#5d6f68;text-decoration:underline;font-size:14px">or let the 60-second quiz build it around your cat</a></div>
+<p style="margin-top:14px;font-size:13px;color:#8a978f">Free next-day delivery &middot; cancel any time &middot; Certified B Corp</p>
+</div></section><div class="stickybar"><a class="pill" href="https://untamed.com/products/try-now" target="_blank" rel="noopener">Try for &pound;7 today</a></div>
+<div class="relay-ribbon"><b>Prototype by Relay</b> &middot; rebuilt natively in Untamed's own design language, imagery and reviews &middot; every element is a testable variant</div>
+<script>
+var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.1});
+document.querySelectorAll('h2, .sub, .benefits, .stats, .tl, .qgrid, .rangechips, .bigoffer .wrap > *, .perks .wrap, .finalcta .pill').forEach(function(el){el.classList.add('reveal');io.observe(el);});
+</script></body></html>
