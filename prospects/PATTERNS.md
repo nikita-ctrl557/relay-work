@@ -3,6 +3,44 @@
 Read this before each run. Append findings — niches/geos/search patterns that
 yield broken funnels, and operational blockers that waste a run.
 
+## 2026-07-29 — Run 11: blocker unchanged, minimal spot-check only (per own prior guidance not to re-burn budget re-diagnosing)
+
+Did not repeat the full diagnostic sweep — runs 1-10 already exhausted the
+realistic channel list (Ad Library direct, IG profile/API/legacy-AJAX, IG
+mirrors, TikTok/Google Ads Transparency, Yelp/BBB/Maps, SERPs, Wayback,
+Playwright/Chromium via the proxy) and run 10 reconfirmed all of them fresh
+just one cycle ago. Instead ran the three cheapest possible spot-checks to
+see if anything shifted in the last hour:
+
+- `facebook.com/ads/library/*` via WebFetch AND raw curl → still HTTP 403
+  on both. Unchanged.
+- `instagram.com/natgeo/` via curl with mobile Safari UA → still HTTP 200
+  shell-only (consistent with runs 5-10's finding that this status code
+  carries no bio/link/ad data, only og:description follower counts).
+- `ListConnectors` filtered for meta/facebook/instagram/ads → only Gmail
+  is connected; no Meta/Instagram/ads-data connector exists on this
+  account. Confirms run 7's same check, still true.
+
+No new channel attempted, no new capability found. **Not sending a push
+notification** — run 10 already delivered the actionable escalation
+(hourly cadence + confirmed-unfixed proxy bug) one cycle ago, and nothing
+has changed since that would give the user new information to act on.
+Repeating that ping every hour with no new content is exactly the noise
+runs 6/7/9 already decided against.
+
+No prospects added. Eleven consecutive runs, zero verifiable leads, same
+root cause. Not committing prospects/inbox.json (still doesn't exist —
+nothing to add). Committing only this log entry.
+
+**Standing recommendation for whoever reads this next, unchanged from run
+10:** this cron (`13 * * * *`, hourly) will keep producing an identical
+null result every run until one of: (a) the egress proxy's TLS-reset on
+large ClientHellos gets fixed so a real browser can clear Meta's JS
+challenge, (b) the schedule is dropped to something far less frequent than
+hourly, or (c) a human seeds candidate handles/ad screenshots for this
+session to verify against the business's own site instead of sourcing from
+Ad Library/IG directly.
+
 ## 2026-07-29 — Run 10: blocker unchanged (10th straight run); this trigger fires HOURLY, not daily — flagged to user
 
 Discovered via `list_triggers` this run: the cron behind this routine is
