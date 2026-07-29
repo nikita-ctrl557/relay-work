@@ -1,6 +1,214 @@
-<meta name="robots" content="noindex, nofollow">
-<title>Relay</title>
-<style>body{font:16px/1.6 -apple-system,Helvetica,Arial,sans-serif;max-width:600px;margin:80px auto;padding:0 20px;color:#15181c}</style>
-<h1>Relay</h1>
-<p>Ad concept work. Each page here was built for one business and is linked to them directly.</p>
-<p>Nikita &middot; +49 151 70832003</p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex,nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Relay — concept work</title>
+<style>
+:root{--cyan:#A6ECFF;--electric:#00e0ff;--bg:#14181d;--panel:#1a1f26;--panel2:#20262e;--line:#2c343e;--ink:#e8eef4;--mut:#96a2ae;--dark:#0e1216}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.65;font-weight:300;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+a{text-decoration:none;color:inherit}
+.eyebrow{color:var(--electric);font-size:11.5px;letter-spacing:.24em;text-transform:uppercase;margin-bottom:14px;font-weight:400}
+
+/* ---- masthead ---- */
+.nav{border-bottom:1px solid var(--line);background:var(--dark)}
+.nav .wrap{display:flex;align-items:baseline;gap:18px;padding:18px 24px;flex-wrap:wrap}
+.mark{font-size:15px;letter-spacing:.34em;text-transform:uppercase;color:var(--cyan);font-weight:400}
+.nav .tag{color:var(--mut);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase}
+.nav .tel{margin-left:auto;color:var(--mut);font-size:12px;letter-spacing:.1em}
+.nav .tel:hover{color:var(--cyan)}
+
+/* ---- hero ---- */
+.hero{padding:82px 0 10px}
+.hero h1{font-weight:200;font-size:clamp(27px,4.6vw,42px);letter-spacing:.13em;text-transform:uppercase;color:var(--cyan);max-width:820px;line-height:1.32}
+.hero p{color:#c3ccd5;max-width:600px;margin-top:26px;font-size:16.5px}
+
+/* ---- the honesty panel ---- */
+.plain{border:1px solid var(--line);border-left:3px solid var(--electric);background:var(--panel);padding:26px 28px;margin:40px 0 4px;max-width:820px}
+.plain h2{font-weight:400;font-size:11.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--electric);margin-bottom:14px}
+.plain p{color:var(--mut);font-size:15px;max-width:660px}
+.plain p+p{margin-top:12px}
+.plain b{color:var(--ink);font-weight:500}
+
+section{padding:66px 0 0}
+section h2.sec{font-weight:200;font-size:clamp(21px,3vw,28px);letter-spacing:.1em;text-transform:uppercase;color:var(--ink);margin-bottom:10px}
+.sub{color:var(--mut);max-width:620px;font-size:15px}
+
+/* ---- gallery ---- */
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:36px}
+.card{background:var(--panel);padding:32px 28px 28px;display:flex;flex-direction:column;transition:transform .35s ease,background .35s ease}
+.card:hover{transform:translateY(-4px);background:var(--panel2)}
+.card .loc{color:var(--mut);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:12px}
+.card h3{font-weight:300;font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);margin-bottom:14px;line-height:1.45}
+.card .built{color:var(--ink);font-size:14px;font-weight:400;margin-bottom:9px}
+.card p{color:var(--mut);font-size:13.5px;font-weight:300}
+.card .go{margin-top:22px;padding-top:16px;border-top:1px solid var(--line);color:var(--cyan);font-size:11px;letter-spacing:.18em;text-transform:uppercase}
+.card:hover .go{color:var(--electric)}
+
+/* ---- footer ---- */
+footer{margin-top:74px;border-top:1px solid var(--line);background:var(--dark);padding:44px 0 56px}
+footer .who{font-size:15px;color:var(--ink);font-weight:400}
+footer .who a:hover{color:var(--cyan)}
+footer p{color:var(--mut);font-size:13.5px;max-width:640px;margin-top:14px}
+footer .fine{margin-top:26px;padding-top:20px;border-top:1px solid var(--line);color:var(--mut);font-size:12px;letter-spacing:.04em}
+footer .fine a{color:var(--mut);text-decoration:underline;text-underline-offset:3px}
+footer .fine a:hover{color:var(--cyan)}
+
+@media(max-width:980px){.grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){
+  .grid{grid-template-columns:1fr}
+  .hero{padding:52px 0 6px}
+  .nav .tel{margin-left:0;flex-basis:100%}
+  .plain{padding:22px 20px;margin:32px 0 0}
+  section{padding:48px 0 0}
+  .card{padding:26px 22px 24px}
+}
+</style>
+</head>
+<body>
+
+<nav class="nav"><div class="wrap">
+  <span class="mark">Relay</span>
+  <span class="tag">Concept work</span>
+  <a class="tel" href="tel:+4915170832003">+49 151 70832003</a>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <div class="eyebrow">Portfolio</div>
+  <h1>Pages and ad concepts, each built for one named business</h1>
+  <p>Twelve builds. Every one made from a real business's own logo, photography and live advertising, then sent to that business directly. Open any of them below.</p>
+
+  <div class="plain">
+    <h2>What this is, plainly</h2>
+    <p><b>All of this is unpaid concept work.</b> Nothing here was commissioned, invoiced or run as a paid engagement. Several of the pages are titled "free ad batch for…" because that is exactly what they are — work produced unprompted and handed over with no strings.</p>
+    <p>Nothing here claims a result. There are no performance figures, no testimonials and no endorsements, because none have been earned on these pieces. Each business owns its concepts outright and is free to use or ignore them. Where a page contains an assumption or an estimate rather than a verified fact, that page says so on its own face.</p>
+  </div>
+</div></header>
+
+<section><div class="wrap">
+  <div class="eyebrow">Full builds</div>
+  <h2 class="sec">Sites and landing pages</h2>
+  <p class="sub">Complete pages rebuilt from the business's own material, clickable end to end.</p>
+
+  <div class="grid">
+
+    <a class="card" href="msi/">
+      <div class="loc">Manchester, UK · Physiotherapy</div>
+      <h3>MY Sports Injury</h3>
+      <div class="built">Full homepage rebuild</div>
+      <p>A second-generation prototype built from the clinic's own photography, video and service list. Leads on transparent pricing — the cost of a session shown before the click, rather than discovered inside a booking app. Buttons point at their real booking system.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+    <a class="card" href="whichard/">
+      <div class="loc">Jacksonville &amp; St Johns County, FL · Outdoor living</div>
+      <h3>Whichard Construction &amp; Design</h3>
+      <div class="built">Full website rebuild</div>
+      <p>Paver patios, outdoor kitchens and fire pits. The build argues from base preparation — the part nobody photographs — and uses their own mid-build phone footage alongside finished shots. Credentials shown are the contractor's own public record.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+    <a class="card" href="untamed/">
+      <div class="loc">Direct-to-consumer · Cat food</div>
+      <h3>Untamed</h3>
+      <div class="built">Six landing pages + thirteen ad creatives</div>
+      <p>One sign-up page with a single variable changed six ways — story order, proof first, offer first, CTA placement, menu forward, transformation — so the versions are testable against each other on real traffic. Every review quoted is one the brand already publishes.</p>
+      <span class="go">Open the pages →</span>
+    </a>
+
+    <a class="card" href="prime/">
+      <div class="loc">Riverside &amp; Inland Empire, CA · Auto detailing</div>
+      <h3>Prime Auto Care Solutions</h3>
+      <div class="built">Quote page concept</div>
+      <p>Their Instagram auto-reply asks every enquirer for year, make and model — a form having a conversation. This collects the same three answers unattended at 11pm and returns a price range instead of a wait. Marked as a mockup, with its two placeholder figures flagged on the page.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Ad concepts</div>
+  <h2 class="sec">Creative batches</h2>
+  <p class="sub">Each batch starts from a specific, checkable defect in what the business is currently running — a dead link, a stale line, a route the customer cannot complete — and then shows the ads that would replace it.</p>
+
+  <div class="grid">
+
+    <a class="card" href="octo-pro/">
+      <div class="loc">Orange &amp; LA County, CA · Floor coatings</div>
+      <h3>Octo Pro Coatings</h3>
+      <div class="built">Four ads</div>
+      <p>Annotated before/after, a nine-city proof grid, epoxy versus polyaspartic, and dated scarcity that is actually falsifiable. The page opens with three fixes worth making regardless: the ad points at fb.me rather than their own quote form, and the copy still thanks people for "an awesome 2023 year".</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+    <a class="card" href="beautyfix/">
+      <div class="loc">NYC · Westchester · West Hartford · Miami · Med spa</div>
+      <h3>BeautyFix Med Spa</h3>
+      <div class="built">Four city ads, four structures</div>
+      <p>They already run four geo-variants naming the actual city, which almost nobody does. The gap is that all four launched the same day on the same creative, so they tire together with nothing queued behind. Same four cities, four different structures. One estimated figure is flagged for replacement.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+    <a class="card" href="zz/">
+      <div class="loc">Flatiron, New York · Med spa</div>
+      <h3>ZZ Med Spa</h3>
+      <div class="built">Three location-led ads</div>
+      <p>Four locations, one campaign — someone on 23rd Street sees the same ad as someone in SoHo, and neither is told there is a room four blocks away. These three name the address. Their published results are labelled by treatment area rather than presented as one client's transformation.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+    <a class="card" href="infinity/">
+      <div class="loc">SouthPark, Charlotte NC · Med spa</div>
+      <h3>Infinity MedSpa &amp; Wellness</h3>
+      <div class="built">Two ads</div>
+      <p>Their offer asks the patient to remember a promo code at checkout. They run on Zenoti, so the code can live inside the booking link instead — every step you ask someone to remember costs you some of them. Paired with a geo grid naming twelve neighbourhoods from their own site.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+    <a class="card" href="miami-valley/">
+      <div class="loc">Waynesville, OH · Roofing</div>
+      <h3>Miami Valley Roofing &amp; Restoration</h3>
+      <div class="built">Two ads</div>
+      <p>Built from their own drone photograph. A town-named proof card designed to have the town swapped every week, with their eleven service towns running underneath, and their 61-point inspection written out as a checklist — closing on the line that makes it credible: if the roof is fine, we say so.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+    <a class="card" href="asia-pacific/">
+      <div class="loc">Honolulu, HI · Plastic surgery</div>
+      <h3>Asia Pacific Aesthetics</h3>
+      <div class="built">Two concepts</div>
+      <p>A Meta ad running twenty-nine months points at an Instagram profile that now returns "Profile isn't available" — checked logged out too. It will never show as broken in Ads Manager. The page also documents credentials that were removed from an earlier draft; claims are limited to what their own profile verifies.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+    <a class="card" href="karin-ross/">
+      <div class="loc">Kansas City metro · Home remodelling</div>
+      <h3>Karin Ross Designs</h3>
+      <div class="built">Landing concept</div>
+      <p>Their ad has spent roughly ten months asking people to DM for a free consultation. We tried it: Instagram replies that the account does not accept new message requests. The working path already exists — three consultation buttons on their own site — so this concept routes there instead.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+    <a class="card" href="rejali/">
+      <div class="loc">Scottsdale, AZ · Hair restoration</div>
+      <h3>Dr. Rejali Hair &amp; Skin Institute</h3>
+      <div class="built">Physician-facing concept</div>
+      <p>The domain printed on their live ad is misspelled and does not resolve at all, while the real site loads fine — an ad-side typo that looks completely normal in Ads Manager. The concept advertises the private FUE training they sell to physicians, which currently appears in none of their advertising. Unconfirmed claims are listed on the page.</p>
+      <span class="go">Open the page →</span>
+    </a>
+
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="who">Relay · Nikita · <a href="tel:+4915170832003">+49 151 70832003</a></div>
+  <p>Each page above was built for one business and sent to that business directly. If you have landed here from one of them, the page with your name on it is yours to keep, use or ignore — whatever happens next.</p>
+  <div class="fine">Concept and spec work only. No commissioned engagements, results, testimonials or endorsements are represented anywhere on this site. · <a href="agents/">For AI agents</a></div>
+</div></footer>
+
+</body>
+</html>
