@@ -3,6 +3,50 @@
 Read this before each run. Append findings — niches/geos/search patterns that
 yield broken funnels, and operational blockers that waste a run.
 
+## 2026-07-29 — Run 12: blocker unchanged, minimal spot-check only, no push (nothing new since run 10's escalation)
+
+Ran the same minimal spot-check as run 11, since runs 1-11 already exhausted
+the realistic channel list and reconfirmed it repeatedly:
+
+- `facebook.com/ads/library/*` via raw curl → still HTTP 403. Unchanged.
+- `instagram.com/natgeo/` via curl with mobile Safari UA → still HTTP 200,
+  `og:description` follower count readable (269M Followers — matches real
+  IG data, confirms run 8's crack is still live for qualifier 4 only), but
+  no bio/link/business-contact field anywhere in the response, same as
+  every run since 8. Still doesn't touch qualifiers 1/2.
+- `adstransparency.google.com` → still HTTP 200 shell.
+- `ListConnectors` filtered for meta/facebook/instagram/ads/browser → only
+  Gmail connected. No ads-data connector exists on this account. Same as
+  runs 7/11.
+- Retried the Playwright/Chromium route from run 5 fresh (proxy fix check,
+  per run 10's own recommended trigger) → this time it didn't even reach
+  run 5/10's `ERR_CONNECTION_RESET` error message within a 30s timeout; the
+  launch just hung and was killed. Consistent with "still broken," not a
+  new failure mode — not worth deeper diagnosis, the underlying proxy bug
+  was already root-caused in run 5 and confirmed unfixed in run 10.
+
+No new channel, no new capability, no change in any of the three canonical
+blockers. **No push notification sent** — run 10 already delivered the
+actionable escalation (hourly cadence + proxy TLS-reset root cause) two
+cycles ago, and runs 11-12 confirm nothing has changed that would give the
+user new information to act on. Repeating that ping every run is exactly
+the noise runs 6/7/9/11 already decided against.
+
+No prospects added. Twelve consecutive runs, zero verifiable leads, same
+root cause throughout: qualifiers 1 (ad spend evidence) and 2 (funnel
+dead-end/link caption) both require either the Meta Ad Library or a live
+IG/FB profile's bio/link, and nothing reachable from this environment can
+render either. Not committing prospects/inbox.json (still doesn't exist).
+Committing only this log entry.
+
+**Unchanged standing recommendation:** this cron (hourly) will keep
+producing an identical null result every run until one of: (a) the egress
+proxy's TLS-reset on large ClientHellos gets fixed so a real browser can
+clear Meta's JS challenge, (b) the schedule is dropped to something far
+less frequent than hourly, or (c) a human seeds candidate handles/ad
+screenshots for this session to verify against the business's own site
+instead of sourcing from Ad Library/IG directly.
+
 ## 2026-07-29 — Run 11: blocker unchanged, minimal spot-check only (per own prior guidance not to re-burn budget re-diagnosing)
 
 Did not repeat the full diagnostic sweep — runs 1-10 already exhausted the
