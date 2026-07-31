@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 260" width="720" height="260" role="img" aria-label="Relay animated logo">
+  <title>Relay</title>
+
+  <defs>
+    <!-- pulse glow -->
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- the signal head: bright core with a falling tail -->
+    <linearGradient id="tail" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"   stop-color="var(--accent,#4F8CFF)" stop-opacity="0"/>
+      <stop offset="70%"  stop-color="var(--accent,#4F8CFF)" stop-opacity=".55"/>
+      <stop offset="100%" stop-color="var(--accent,#4F8CFF)" stop-opacity="1"/>
+    </linearGradient>
+
+    <path id="track" d="M110 96 H610"/>
+  </defs>
+
+  <style>
+    :root { color-scheme: light dark; }
+    .ink    { fill: #0E1116; }
+    .muted  { fill: #6B7280; }
+    .rail   { stroke: #D7DCE3; }
+    .node   { fill: #FFFFFF; stroke: #C3CAD4; }
+    @media (prefers-color-scheme: dark) {
+      .ink   { fill: #F4F6F8; }
+      .muted { fill: #98A2B3; }
+      .rail  { stroke: #2A313B; }
+      .node  { fill: #0E1116; stroke: #39414D; }
+    }
+    .wordmark {
+      font-family: ui-sans-serif, -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+      font-weight: 640;
+      letter-spacing: .30em;
+    }
+    .sub {
+      font-family: ui-sans-serif, -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+      font-weight: 500;
+      letter-spacing: .34em;
+      font-size: 15px;
+    }
+  </style>
+
+  <!-- ================= the relay rail ================= -->
+  <g fill="none" stroke-width="2.5" stroke-linecap="round">
+    <line class="rail" x1="110" y1="96" x2="610" y2="96"/>
+  </g>
+
+  <!-- travelling tail -->
+  <g filter="url(#glow)">
+    <rect x="0" y="92.5" width="132" height="7" rx="3.5" fill="url(#tail)">
+      <animate attributeName="x" values="-132;610" dur="2.6s"
+               keySplines=".45 0 .15 1" calcMode="spline" repeatCount="indefinite"/>
+    </rect>
+  </g>
+
+  <!-- ================= the three nodes ================= -->
+  <!-- each ring expands as the pulse passes through it -->
+  <g>
+    <!-- node 1 -->
+    <circle cx="110" cy="96" r="15" class="node" stroke-width="2.5"/>
+    <circle cx="110" cy="96" r="6" fill="var(--accent,#4F8CFF)" opacity="0">
+      <animate attributeName="opacity" values="0;1;1;0" dur="2.6s"
+               keyTimes="0;.10;.20;.34" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="110" cy="96" r="15" fill="none" stroke="var(--accent,#4F8CFF)" stroke-width="2.5" opacity="0">
+      <animate attributeName="r"       values="15;34" dur="2.6s" keyTimes="0;.30" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;.85;0" dur="2.6s" keyTimes="0;.10;.30" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- node 2 -->
+    <circle cx="360" cy="96" r="15" class="node" stroke-width="2.5"/>
+    <circle cx="360" cy="96" r="6" fill="var(--accent,#4F8CFF)" opacity="0">
+      <animate attributeName="opacity" values="0;1;1;0" dur="2.6s"
+               keyTimes="0;.42;.52;.66" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="360" cy="96" r="15" fill="none" stroke="var(--accent,#4F8CFF)" stroke-width="2.5" opacity="0">
+      <animate attributeName="r"       values="15;34" dur="2.6s" keyTimes=".32;.62" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0;.85;0" dur="2.6s" keyTimes="0;.32;.42;.62" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- node 3 — the handoff lands here -->
+    <circle cx="610" cy="96" r="15" class="node" stroke-width="2.5"/>
+    <circle cx="610" cy="96" r="6" fill="var(--accent,#4F8CFF)" opacity="0">
+      <animate attributeName="opacity" values="0;1;1;0" dur="2.6s"
+               keyTimes="0;.74;.90;1" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="610" cy="96" r="15" fill="none" stroke="var(--accent,#4F8CFF)" stroke-width="2.5" opacity="0">
+      <animate attributeName="r"       values="15;42" dur="2.6s" keyTimes=".64;1" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0;.9;0" dur="2.6s" keyTimes="0;.64;.74;1" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- ================= wordmark ================= -->
+  <text class="wordmark ink" x="360" y="196" font-size="62" text-anchor="middle">RELAY</text>
+  <text class="sub muted"    x="360" y="228" text-anchor="middle">AD CREATIVE, ON REPEAT</text>
+</svg>

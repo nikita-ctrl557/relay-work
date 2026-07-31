@@ -5,6 +5,8 @@
 <meta name="robots" content="noindex,nofollow">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Relay — concept work</title>
+<link rel="icon" type="image/svg+xml" href="/relay-work/favicon.svg">
+<link rel="alternate icon" href="/relay-work/favicon.svg">
 <style>
 :root{--cyan:#A6ECFF;--electric:#00e0ff;--bg:#14181d;--panel:#1a1f26;--panel2:#20262e;--line:#2c343e;--ink:#e8eef4;--mut:#96a2ae;--dark:#0e1216}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -16,7 +18,11 @@ a{text-decoration:none;color:inherit}
 /* ---- masthead ---- */
 .nav{border-bottom:1px solid var(--line);background:var(--dark)}
 .nav .wrap{display:flex;align-items:baseline;gap:18px;padding:18px 24px;flex-wrap:wrap}
-.mark{font-size:15px;letter-spacing:.34em;text-transform:uppercase;color:var(--cyan);font-weight:400}
+.mark{font-size:15px;letter-spacing:.34em;text-transform:uppercase;color:var(--cyan);font-weight:400;display:inline-flex;align-items:center;gap:11px}
+.relaymark{display:block;flex:none}
+.marktext{letter-spacing:.34em}
+@media (max-width:560px){.relaymark{width:84px;height:18px}}
+@media (prefers-reduced-motion:reduce){.relaymark animate{display:none}}
 .nav .tag{color:var(--mut);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase}
 .nav .tel{margin-left:auto;color:var(--mut);font-size:12px;letter-spacing:.1em}
 .nav .tel:hover{color:var(--cyan)}
@@ -71,7 +77,41 @@ footer .fine a:hover{color:var(--cyan)}
 <body>
 
 <nav class="nav"><div class="wrap">
-  <span class="mark">Relay</span>
+  <span class="mark" aria-label="Relay">
+    <svg class="relaymark" viewBox="0 0 132 26" width="132" height="26" role="img" aria-hidden="true" focusable="false">
+      <line x1="9" y1="13" x2="123" y2="13" stroke="var(--line)" stroke-width="1.6" stroke-linecap="round"/>
+      <defs>
+        <linearGradient id="rmTail" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="var(--electric)" stop-opacity="0"/>
+          <stop offset="100%" stop-color="var(--electric)" stop-opacity="1"/>
+        </linearGradient>
+        <clipPath id="rmClip"><rect x="0" y="0" width="132" height="26"/></clipPath>
+      </defs>
+      <g clip-path="url(#rmClip)">
+        <rect x="-34" y="11.6" width="34" height="2.8" rx="1.4" fill="url(#rmTail)">
+          <animate attributeName="x" values="-34;123" dur="2.6s" calcMode="spline"
+                   keySplines=".45 0 .15 1" repeatCount="indefinite"/>
+        </rect>
+      </g>
+      <g fill="var(--dark)" stroke="var(--line)" stroke-width="1.6">
+        <circle cx="9" cy="13" r="4.4"/><circle cx="66" cy="13" r="4.4"/><circle cx="123" cy="13" r="4.4"/>
+      </g>
+      <circle cx="9" cy="13" r="2.1" fill="var(--electric)" opacity="0">
+        <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;.10;.20;.34" dur="2.6s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="66" cy="13" r="2.1" fill="var(--electric)" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;.40;.46;.56;.68" dur="2.6s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="123" cy="13" r="2.1" fill="var(--electric)" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;.72;.78;.92;1" dur="2.6s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="123" cy="13" r="4.4" fill="none" stroke="var(--electric)" stroke-width="1.4" opacity="0">
+        <animate attributeName="r" values="4.4;11" keyTimes=".74;1" dur="2.6s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;0;.8;0" keyTimes="0;.74;.80;1" dur="2.6s" repeatCount="indefinite"/>
+      </circle>
+    </svg>
+    <span class="marktext">Relay</span>
+  </span>
   <span class="tag">Concept work</span>
   <a class="tel" href="tel:+4915170832003">+49 151 70832003</a>
 </div></nav>
