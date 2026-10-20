@@ -1,0 +1,216 @@
+{
+  "gym": "Your Gym",
+  "members": [
+    {
+      "id": "alex",
+      "name": "Alex",
+      "tag": 1
+    },
+    {
+      "id": "sam",
+      "name": "Sam",
+      "tag": 2
+    },
+    {
+      "id": "jordan",
+      "name": "Jordan",
+      "tag": 3
+    },
+    {
+      "id": "priya",
+      "name": "Priya",
+      "tag": 4
+    },
+    {
+      "id": "mo",
+      "name": "Mo",
+      "tag": 5
+    }
+  ],
+  "machines": [
+    {
+      "id": "bench",
+      "name": "Bench press",
+      "kind": "free weight"
+    },
+    {
+      "id": "squat",
+      "name": "Squat rack",
+      "kind": "free weight"
+    },
+    {
+      "id": "deadlift",
+      "name": "Deadlift platform",
+      "kind": "free weight"
+    },
+    {
+      "id": "latpull",
+      "name": "Lat pulldown",
+      "kind": "machine"
+    },
+    {
+      "id": "legpress",
+      "name": "Leg press",
+      "kind": "machine"
+    },
+    {
+      "id": "cable",
+      "name": "Cable row",
+      "kind": "machine"
+    }
+  ],
+  "cameras": [
+    {
+      "id": "cam-1",
+      "name": "Free weights",
+      "source": "rtsp://USER:PASS@192.168.1.64:554/Streaming/Channels/102",
+      "fps": 8,
+      "zones": [
+        {
+          "machine": "bench",
+          "polygon": [
+            [
+              20,
+              70
+            ],
+            [
+              215,
+              70
+            ],
+            [
+              215,
+              340
+            ],
+            [
+              20,
+              340
+            ]
+          ]
+        },
+        {
+          "machine": "squat",
+          "polygon": [
+            [
+              225,
+              70
+            ],
+            [
+              420,
+              70
+            ],
+            [
+              420,
+              340
+            ],
+            [
+              225,
+              340
+            ]
+          ]
+        },
+        {
+          "machine": "deadlift",
+          "polygon": [
+            [
+              430,
+              70
+            ],
+            [
+              625,
+              70
+            ],
+            [
+              625,
+              340
+            ],
+            [
+              430,
+              340
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cam-2",
+      "name": "Machine floor",
+      "source": "rtsp://USER:PASS@192.168.1.108:554/cam/realmonitor?channel=1&subtype=1",
+      "fps": 8,
+      "zones": [
+        {
+          "machine": "latpull",
+          "polygon": [
+            [
+              20,
+              70
+            ],
+            [
+              215,
+              70
+            ],
+            [
+              215,
+              340
+            ],
+            [
+              20,
+              340
+            ]
+          ]
+        },
+        {
+          "machine": "legpress",
+          "polygon": [
+            [
+              225,
+              70
+            ],
+            [
+              420,
+              70
+            ],
+            [
+              420,
+              340
+            ],
+            [
+              225,
+              340
+            ]
+          ]
+        },
+        {
+          "machine": "cable",
+          "polygon": [
+            [
+              430,
+              70
+            ],
+            [
+              625,
+              70
+            ],
+            [
+              625,
+              340
+            ],
+            [
+              430,
+              340
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "webcam",
+      "name": "Test webcam",
+      "source": "0",
+      "fps": 10,
+      "zones": []
+    }
+  ],
+  "thresholds": {
+    "checkout_s": 600
+  }
+}
