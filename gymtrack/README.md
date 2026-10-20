@@ -34,6 +34,23 @@ pip install -r requirements.txt
 python -m gymtrack demo        # simulated gym + 6 weeks of sample history -> http://localhost:8000
 ```
 
+### Analyse a recording
+
+Got footage already (an NVR export, a phone video)? No setup needed:
+
+```bash
+python -m gymtrack analyse gym-floor.mp4 --report report.html
+# with machine zones and member history:
+python -m gymtrack analyse cam1-export.mp4 --config my-gym.json --camera cam-1 --start "2026-10-20 07:00" --db gymtrack.db
+```
+
+Or upload it in the dashboard under **Cameras & setup → Analyse a recording**. Analysis runs about 30× faster than
+real time (a 40-minute recording takes about 80 seconds on 4 CPU cores). The report has a per-machine timeline,
+per-member lifting/rest totals and every set.
+
+`python -m gymtrack fetch URL --minutes 40` downloads and trims a video for testing (uses yt-dlp; only for footage
+you're allowed to use).
+
 ### Connect real cameras
 
 ```bash
@@ -77,6 +94,8 @@ Each camera costs roughly 10 ms of CPU per analysed frame, so one mini-PC handle
 | `POST /api/cameras`, `PUT /api/cameras/{id}/zones`, `DELETE /api/cameras/{id}` | camera setup (token) |
 | `POST /api/members`, `POST /api/machines` | setup (token) |
 | `PUT /api/sets/{id}/weight` | member logs the kg for a set |
+| `PUT /api/recordings?camera=&start=` | upload a video as the request body; analysed in the background (token) |
+| `GET /api/recordings`, `GET /api/recordings/{id}`, `.../report.html` | progress and results |
 
 ## Tests
 
@@ -116,6 +135,17 @@ pip install pylance
 python bench/fetch_repcount.py data/repcount     # downloads the 515 clips (~4.7 GB, research use only)
 python bench/eval_repcount.py data/repcount --split test
 ```
+
+### 40-minute recordings
+
+| Recording | Sets | Found | Right person | Reps within ±1 | False sets | Analysis time |
+|---|---|---|---|---|---|---|
+| Simulated CCTV, 40 min, 5 people (4 tagged + guest), 3 machines | 102 | 102 | 102 | 92 | 0 | 68 s |
+| Real lifting footage, 39.6 min (38 real sets joined with rest gaps, no zones drawn) | 38 | 30 | n/a (no tags) | 13 | 0 | 80 s |
+
+On the real-footage recording the total came to 415 reps against 365 labelled (+14%).
+
+Build them yourself with `bench/make_sim_recording.py` and `bench/make_real_recording.py`.
 
 ## Privacy and limits
 

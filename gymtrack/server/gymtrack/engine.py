@@ -16,7 +16,8 @@ from .vision import FrameReading
 
 FUSE_WINDOW_S = 1.0  # readings older than this are ignored when fusing cameras
 VISIT_GAP_S = 1.5    # a tag unseen this long starts a new visit
-DWELL_S = 2.0        # a tag must stay this long in a zone to occupy the machine
+DWELL_S = 2.0        # a tag must stay this long in a zone to occupy the machine...
+DWELL_RADIUS_PX = 60 # ...without moving further than this (walking past doesn't count)
 SET_PRESENCE = 0.3   # share of a set's frames a tag must appear in to be credited
 LIVE_REPS_EVERY_S = 1.0
 MAX_SET_FRAMES = 3000  # per camera; ~5 minutes at 10 fps
@@ -51,7 +52,8 @@ class MachineTracker:
         self.thumbs: dict[str, deque] = {}     # camera -> recent (t, thumbnail) for rep counting
         self._live_reps, self._live_at = 0, -1e9
         self.tag_seen: dict[int, float] = {}   # tag -> last time seen in this zone
-        self.tag_since: dict[int, float] = {}  # tag -> start of its current continuous visit
+        self.tag_since: dict[int, float] = {}  # tag -> since when it has stayed (roughly) in place
+        self.tag_anchor: dict[int, tuple[float, float]] = {}
         self.set_frames = 0
         self.ema = 0.0
         self.last_t: float | None = None
@@ -65,12 +67,19 @@ class MachineTracker:
         self.occupied_since: float | None = None
 
     # -- signal fusion -----------------------------------------------------
-    def ingest(self, cam: str, t: float, motion: float, thumb, tags: list[int]):
+    def ingest(self, cam: str, t: float, motion: float, thumb, tags: list[int], positions: dict | None = None):
         th = self.e.cfg.thresholds
         self.cams[cam] = _CamZone(t, motion)
         for tag in tags:
-            if t - self.tag_seen.get(tag, -1e9) > VISIT_GAP_S:
+            pos = (positions or {}).get(tag)
+            anchor = self.tag_anchor.get(tag)
+            moved = pos is not None and anchor is not None and (pos[0] - anchor[0]) ** 2 + (pos[1] - anchor[1]) ** 2 > DWELL_RADIUS_PX ** 2
+            if t - self.tag_seen.get(tag, -1e9) > VISIT_GAP_S or moved:
                 self.tag_since[tag] = t
+                if pos is not None:
+                    self.tag_anchor[tag] = pos
+            elif anchor is None and pos is not None:
+                self.tag_anchor[tag] = pos
             self.tag_seen[tag] = t
             if self.state == "lifting":
                 self.set_tags[tag] += 1
@@ -94,6 +103,7 @@ class MachineTracker:
         live = {tag: ts for tag, ts in self.tag_seen.items() if t - ts <= th.tag_hold_s}
         self.tag_seen = live
         self.tag_since = {tag: s for tag, s in self.tag_since.items() if tag in live}
+        self.tag_anchor = {tag: p for tag, p in self.tag_anchor.items() if tag in live}
         # only someone who has stayed a moment counts; walking past a machine does not
         settled = {tag: ts for tag, ts in live.items() if ts - self.tag_since.get(tag, ts) >= DWELL_S}
         member = None
@@ -136,7 +146,7 @@ class MachineTracker:
         self.state, self.above_since, self.below_since, self.set_start = "idle", None, None, None
         if end - start < th.min_set_s:
             return
-        member = self._set_member() or self.occupant
+        member = self._set_member() or self._occupant_if_seen()
         reps = max(1, self._count(start, end))  # too short to see a repeat, but a set is at least one rep
         self._trim(end)
         self.e._record_set(SetRecord(member, self.id, start, end, reps, sorted(self.set_cams)))
@@ -156,6 +166,14 @@ class MachineTracker:
             reps, conf = count_reps([t for t, _ in seq], [th for _, th in seq])
             best = max(best, (conf, reps))
         return best[1]
+
+    def _occupant_if_seen(self) -> str | None:
+        """Fall back to the machine's occupant only if their tag showed up during the set.
+
+        Otherwise a guest who steps in right after a member leaves would be credited to that member.
+        """
+        m = next((x for x in self.e.cfg.members if x.id == self.occupant), None)
+        return m.id if m and self.set_tags.get(m.tag) else None
 
     def _set_member(self) -> str | None:
         """Member whose tag was present for a good share of the set."""
@@ -209,9 +227,11 @@ class MemberSession:
 
 
 class Engine:
-    def __init__(self, cfg: GymConfig, store=None):
+    def __init__(self, cfg: GymConfig, store=None, keep_all: bool = False):
         self.cfg = cfg
         self.store = store
+        self.keep_all = keep_all          # offline analysis keeps every set; live keeps the last 200
+        self.recent_sets_all: list[SetRecord] = []
         self.lock = threading.RLock()
         self.machines: dict[str, MachineTracker] = {m.id: MachineTracker(m.id, self) for m in cfg.machines}
         self.sessions: dict[str, MemberSession] = {}
@@ -236,7 +256,7 @@ class Engine:
                 mt = self.machines.get(z.machine)
                 if mt is None:
                     mt = self.machines[z.machine] = MachineTracker(z.machine, self)
-                mt.ingest(r.camera, r.t, z.motion, z.thumb, z.tags)
+                mt.ingest(r.camera, r.t, z.motion, z.thumb, z.tags, r.tags)
             for s in self.sessions.values():
                 s.location = next((mid for mid, mt in self.machines.items() if mt.occupant == s.member), None)
             self._expire(r.t)
@@ -271,6 +291,8 @@ class Engine:
             rec.id = self.store.add_set(rec, None)
         self.recent_sets.append(rec)
         del self.recent_sets[:-200]
+        if self.keep_all:
+            self.recent_sets_all.append(rec)
 
     def _machine_usage(self, machine: str, member: str, start: float, end: float):
         if self.store and end - start >= 5:

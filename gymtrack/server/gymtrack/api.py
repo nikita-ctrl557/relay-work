@@ -8,13 +8,14 @@ import time
 from pathlib import Path
 
 import cv2
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from .cameras import CameraWorker, redact
 from .config import Camera, GymConfig, Machine, Member, Zone
 from .engine import Engine
+from .offline import Job, analyse, report_html, whole_frame_zone
 from .store import Store
 from .vision import ARUCO_DICT
 
@@ -51,7 +52,7 @@ class WeightIn(BaseModel):
     kg: float | None
 
 
-def create_app(cfg: GymConfig, store: Store, start_workers: bool = True) -> FastAPI:
+def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordings_dir: str | Path = "recordings") -> FastAPI:
     engine = Engine(cfg, store)
     workers: dict[str, CameraWorker] = {}
     token = os.environ.get("GYMTRACK_TOKEN")
@@ -197,6 +198,82 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True) -> Fast
         cfg.machines.append(Machine(m.id, m.name, m.kind))
         cfg.save()
         return m
+
+    # -- recordings: analyse an uploaded video (NVR export etc.) in the background -------
+    rec_dir = Path(recordings_dir)
+    jobs: dict[str, Job] = {}
+    app.state.jobs = jobs
+
+    def run_job(job: Job):
+        job.status = "running"
+        try:
+            base = cfg.camera(job.camera)
+            cap = cv2.VideoCapture(job.file)
+            w, h = cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            cap.release()
+            if not w:
+                raise ValueError("not a video file OpenCV can read (try MP4/H.264)")
+            if base and base.zones:
+                cam = Camera(base.id, base.name, job.file, base.fps, base.width, base.zones)
+            else:
+                if not cfg.machine("floor"):
+                    cfg.machines.append(Machine("floor", "Whole view"))
+                cam = Camera(job.camera or "recording", "Recording", job.file, zones=[whole_frame_zone(640, int(h * 640 / w))])
+
+            def progress(frac, t, speed):
+                job.progress, job.video_s, job.speed = round(frac, 4), round(t, 1), round(speed, 1)
+
+            job.report = analyse(job.file, cfg, cam, store, start_ts=job.start_ts, on_progress=progress)
+            job.progress, job.status = 1.0, "done"
+            (rec_dir / f"{job.id}.html").write_text(report_html(job.report))
+        except Exception as exc:
+            job.status, job.error = "failed", str(exc)
+
+    @app.put("/api/recordings", dependencies=[Depends(require_token)])
+    async def upload_recording(request: Request, name: str = "recording.mp4", camera: str = "", start: float | None = None):
+        """Upload a video as the raw request body. `start` = recording start (unix time); default: now minus its length."""
+        rec_dir.mkdir(parents=True, exist_ok=True)
+        jid = f"{int(time.time())}-{len(jobs) + 1}"
+        suffix = Path(name).suffix.lower() if Path(name).suffix.lower() in {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"} else ".mp4"
+        path = rec_dir / f"{jid}{suffix}"
+        size = 0
+        with open(path, "wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > 8 * 1024 ** 3:
+                    f.close()
+                    path.unlink(missing_ok=True)
+                    raise HTTPException(413, "recordings over 8 GB are not accepted")
+                f.write(chunk)
+        if not size:
+            path.unlink(missing_ok=True)
+            raise HTTPException(400, "empty upload")
+        if start is None:
+            cap = cv2.VideoCapture(str(path))
+            fps, n = cap.get(cv2.CAP_PROP_FPS) or 25, cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            cap.release()
+            start = time.time() - n / fps
+        job = Job(jid, str(path), camera, start)
+        jobs[jid] = job
+        threading.Thread(target=run_job, args=(job,), daemon=True, name=f"rec-{jid}").start()
+        return job.info()
+
+    @app.get("/api/recordings")
+    def list_recordings():
+        return [j.info() | {"report": None, "totals": (j.report or {}).get("totals")} for j in sorted(jobs.values(), key=lambda j: -j.created)]
+
+    @app.get("/api/recordings/{jid}")
+    def get_recording(jid: str):
+        if jid not in jobs:
+            raise HTTPException(404, "unknown recording")
+        return jobs[jid].info()
+
+    @app.get("/api/recordings/{jid}/report.html", response_class=HTMLResponse)
+    def recording_report(jid: str):
+        p = rec_dir / f"{jid}.html"
+        if jid not in jobs or not p.exists():
+            raise HTTPException(404, "report not ready")
+        return HTMLResponse(p.read_text())
 
     @app.put("/api/sets/{set_id}/weight")
     def set_weight(set_id: int, w: WeightIn):

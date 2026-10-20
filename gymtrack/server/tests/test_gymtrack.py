@@ -148,7 +148,7 @@ def client(tmp_path, monkeypatch):
     p = tmp_path / "cfg.json"
     p.write_text(json.dumps(d))
     monkeypatch.setenv("GYMTRACK_TOKEN", "t0k")
-    app = create_app(GymConfig.load(p), Store(str(tmp_path / "db.sqlite")), start_workers=False)
+    app = create_app(GymConfig.load(p), Store(str(tmp_path / "db.sqlite")), start_workers=False, recordings_dir=tmp_path / "rec")
     return TestClient(app), p
 
 
@@ -195,3 +195,56 @@ def test_rep_counter_counts_whole_cycles_not_half_cycles():
             frames.append(img + rng.normal(0, 3, img.shape))
         assert count_reps(t, frames)[0] == reps
     assert count_reps([0, .1], [np.zeros((24, 24))] * 2)[0] == 0
+
+
+def test_guest_after_member_leaves_is_not_credited_to_member():
+    e = Engine(demo_cfg())
+    feed(e, 0, 10, tags=[4])                      # Priya rests at the machine
+    feed(e, 10, 12)                               # she leaves; her tag is still "recent"
+    feed(e, 12, 25, motion=0.05)                  # an untagged guest lifts
+    feed(e, 25, 30)
+    assert e.recent_sets and e.recent_sets[-1].member is None
+
+
+def test_analyse_recording_end_to_end(tmp_path):
+    import cv2
+    from gymtrack.offline import analyse, report_html
+    cfg = demo_cfg(["cam-north"])
+    world, cam = SimWorld(cfg), cfg.cameras[0]
+    path = str(tmp_path / "clip.mp4")
+    vw = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 10, (640, 360))
+    for i in range(900):                          # 90 s of "NVR export"
+        vw.write(world.render(cam, i / 10))
+    vw.release()
+    store = Store(str(tmp_path / "db.sqlite"))
+    rep = analyse(path, cfg, cam, store, start_ts=1_800_000_000)
+    assert rep["totals"]["sets"] >= 3 and rep["speed_x"] > 1
+    assert all(s["start"] >= 1_800_000_000 for s in rep["sets"])
+    assert store._all("SELECT COUNT(*) n FROM sets")[0]["n"] == rep["totals"]["sets"]
+    assert "Machine timeline" in report_html(rep)
+
+
+def test_upload_recording_runs_in_background(client, tmp_path):
+    import time as _t
+    import cv2
+    c, _ = client
+    cfg = demo_cfg(["cam-north"])
+    world, cam = SimWorld(cfg), cfg.cameras[0]
+    path = tmp_path / "up.mp4"
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 10, (640, 360))
+    for i in range(400):
+        vw.write(world.render(cam, i / 10))
+    vw.release()
+    assert c.put("/api/recordings?camera=cam-north", content=path.read_bytes()).status_code == 401
+    r = c.put("/api/recordings?camera=cam-north&name=up.mp4", content=path.read_bytes(), headers={"X-Token": "t0k"})
+    assert r.status_code == 200
+    jid = r.json()["id"]
+    for _ in range(120):
+        info = c.get(f"/api/recordings/{jid}").json()
+        if info["status"] in ("done", "failed"):
+            break
+        _t.sleep(0.5)
+    assert info["status"] == "done", info
+    assert info["report"]["totals"]["sets"] >= 1
+    assert "Machine timeline" in c.get(f"/api/recordings/{jid}/report.html").text
+    assert c.get("/api/members/alex/progress").json()["recent_sets"]  # results land in members' history

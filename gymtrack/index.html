@@ -257,6 +257,18 @@ select,.inp{background:var(--panel2);border:1px solid var(--line);border-radius:
       </div>
 
       <div class="panel">
+        <h2>Analyse a recording</h2>
+        <p class="small muted" style="margin-bottom:10px">Upload footage exported from your NVR or phone (MP4, MOV, MKV). It runs through the same tracking as the live cameras, about 30× faster than real time, so a 40-minute recording takes around 80 seconds. Results go into members' history and a report.</p>
+        <div class="form">
+          <label for="rFile">Video file</label><input id="rFile" class="inp" type="file" accept="video/*,.mkv">
+          <label for="rCam">Camera view</label><select id="rCam"></select>
+          <label for="rStart">Recorded at</label><input id="rStart" class="inp" type="datetime-local">
+        </div>
+        <div class="row" style="margin-top:10px"><button class="btn" id="rGo">Upload &amp; analyse</button><span class="small muted" id="rMsg"></span></div>
+        <div class="zlist" id="rList"></div>
+      </div>
+
+      <div class="panel">
         <h2>Members &amp; tags</h2>
         <p class="small muted" style="margin-bottom:10px">Each member gets a printed tag (on a wristband, lanyard or key fob). Cameras read the tag, so there's no face recognition and no biometric data. Members who don't wear a tag still count toward machine usage as "guest".</p>
         <div class="row" style="margin-bottom:12px"><input id="mName" class="inp" placeholder="Member name"><button class="btn" id="mAdd">Add member</button><span class="small muted" id="mMsg"></span></div>
@@ -268,6 +280,9 @@ select,.inp{background:var(--panel2);border:1px solid var(--line);border-radius:
         <p class="small muted" style="margin-bottom:8px">On any PC or mini-PC on the gym network (a single machine handles about 8–12 cameras at 8 fps):</p>
         <div class="code">cd gymtrack/server
 pip install -r requirements.txt
+
+# analyse a recording (NVR export, phone video) into a report
+python -m gymtrack analyse gym-floor.mp4 --report report.html
 
 # check a camera and grab a frame
 python -m gymtrack probe "rtsp://admin:PASS@192.168.1.64:554/Streaming/Channels/102"
@@ -328,7 +343,7 @@ function nearPoly(x, y, poly) { if (pointInPoly(x, y, poly)) return true; const 
    Tracking engine: a port of server/gymtrack/engine.py
    ================================================================ */
 const TH = {lift_on: .02, lift_off: .008, on_hold_s: 1, off_hold_s: 2, min_set_s: 4, tag_hold_s: 8, max_rest_s: 300, checkout_s: 600};
-const FUSE_WINDOW_S = 1, VISIT_GAP_S = 1.5, DWELL_S = 2, SET_PRESENCE = .3;
+const FUSE_WINDOW_S = 1, VISIT_GAP_S = 1.5, DWELL_S = 2, DWELL_RADIUS_PX = 60, SET_PRESENCE = .3;
 
 /* Rep counting from how often the zone repeats: a port of server/gymtrack/reps.py */
 const THUMB = 24, DETREND_S = 4, WINDOW_S = 12, HOP_S = 1, MIN_PERIOD_S = .5, ALPHA = .75, LIVE_REPS_EVERY_S = 1;
@@ -366,12 +381,15 @@ function countReps(times, thumbs) {
 
 class MachineTracker {
   constructor(id, e) {
-    Object.assign(this, {id, e, cams: {}, thumbs: {}, liveN: 0, liveAt: -1e9, tagSeen: {}, tagSince: {}, ema: 0, lastT: null, state: "idle",
+    Object.assign(this, {id, e, cams: {}, thumbs: {}, liveN: 0, liveAt: -1e9, tagAnchor: {}, tagSeen: {}, tagSince: {}, ema: 0, lastT: null, state: "idle",
       aboveSince: null, belowSince: null, setStart: null, setTags: {}, setFrames: 0, setCams: new Set(), occupant: null, occupiedSince: null});
   }
-  ingest(cam, t, motion, thumb, tags) {
+  ingest(cam, t, motion, thumb, tags, positions = {}) {
     for (const tag of tags) {
-      if (t - (this.tagSeen[tag] ?? -1e9) > VISIT_GAP_S) this.tagSince[tag] = t;
+      const pos = positions[tag], anc = this.tagAnchor[tag];
+      const moved = pos && anc && (pos[0] - anc[0]) ** 2 + (pos[1] - anc[1]) ** 2 > DWELL_RADIUS_PX ** 2; // walking past doesn't count
+      if (t - (this.tagSeen[tag] ?? -1e9) > VISIT_GAP_S || moved) { this.tagSince[tag] = t; if (pos) this.tagAnchor[tag] = pos; }
+      else if (!anc && pos) this.tagAnchor[tag] = pos;
       this.tagSeen[tag] = t;
       if (this.state === "lifting") this.setTags[tag] = (this.setTags[tag] || 0) + 1;
     }
@@ -385,7 +403,7 @@ class MachineTracker {
     this.updateOccupant(t); this.step(t);
   }
   updateOccupant(t) {
-    for (const k of Object.keys(this.tagSeen)) if (t - this.tagSeen[k] > TH.tag_hold_s) { delete this.tagSeen[k]; delete this.tagSince[k]; }
+    for (const k of Object.keys(this.tagSeen)) if (t - this.tagSeen[k] > TH.tag_hold_s) { delete this.tagSeen[k]; delete this.tagSince[k]; delete this.tagAnchor[k]; }
     let best = null, bestT = -1;
     for (const [tag, ts] of Object.entries(this.tagSeen)) if (ts - (this.tagSince[tag] ?? ts) >= DWELL_S && ts > bestT) { best = +tag; bestT = ts; }
     const m = best == null ? null : this.e.memberByTag(best);
@@ -422,7 +440,8 @@ class MachineTracker {
     const start = this.setStart ?? end;
     this.state = "idle"; this.aboveSince = this.belowSince = this.setStart = null;
     if (end - start < TH.min_set_s) return;
-    const member = this.setMember() || this.occupant;
+    const occ = this.e.cfg.members.find(x => x.id === this.occupant);
+    const member = this.setMember() || (occ && this.setTags[occ.tag] ? occ.id : null); // occupant only if seen during the set
     const reps = Math.max(1, this.count(start, end)); this.trim(end); // a set is at least one rep
     this.e.recordSet({member, machine: this.id, start, end, reps, cameras: [...this.setCams].sort()});
   }
@@ -465,7 +484,7 @@ class Engine {
   ingest(r) {
     this.now = Math.max(this.now, r.t);
     for (const tag of Object.keys(r.tags)) { const m = this.memberByTag(+tag); if (m) { const s = this.session(m.id, r.t); s.lastSeen = Math.max(s.lastSeen, r.t); s.camera = r.camera; } }
-    for (const z of r.zones) (this.machines[z.machine] ||= new MachineTracker(z.machine, this)).ingest(r.camera, r.t, z.motion, z.thumb, z.tags);
+    for (const z of r.zones) (this.machines[z.machine] ||= new MachineTracker(z.machine, this)).ingest(r.camera, r.t, z.motion, z.thumb, z.tags, r.tags);
     for (const s of Object.values(this.sessions)) s.location = Object.values(this.machines).find(mt => mt.occupant === s.member)?.id ?? null;
     this.expire(r.t);
   }
@@ -809,6 +828,19 @@ class ServerSource {
   frame(cam) { return new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error("No frame from this camera yet.")); i.src = this.base + "api/cameras/" + encodeURIComponent(cam.id) + "/frame.jpg?overlay=false&_=" + Date.now(); }); }
   async setZones(camId, zones) { await this.j("api/cameras/" + encodeURIComponent(camId) + "/zones", {method: "PUT", body: JSON.stringify(zones)}); await this.config(); }
   async addMember(name) { const tag = Math.max(0, ...this.cfg.members.map(m => m.tag)) + 1; const m = await this.j("api/members", {method: "POST", body: JSON.stringify({id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + tag, name, tag})}); await this.config(); return m; }
+  recordings() { return this.j("api/recordings"); }
+  upload(file, camera, startTs, onProgress) {
+    return new Promise((ok, bad) => {
+      const q = new URLSearchParams({name: file.name, camera}); if (startTs) q.set("start", startTs);
+      const x = new XMLHttpRequest(); x.open("PUT", this.base + "api/recordings?" + q);
+      if (this.token) x.setRequestHeader("X-Token", this.token);
+      x.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
+      x.onload = () => { if (x.status === 401) { this.token = prompt("Admin token (GYMTRACK_TOKEN)") || ""; try { localStorage.setItem("gymtrack-token", this.token); } catch {} bad(new Error("Token needed. Try again.")); }
+        else if (x.status >= 300) { let m = x.statusText; try { m = JSON.parse(x.responseText).detail || m; } catch {} bad(new Error(m)); } else ok(JSON.parse(x.responseText)); };
+      x.onerror = () => bad(new Error("Upload failed. Check the connection to the server."));
+      x.send(file);
+    });
+  }
   async addCamera(spec) { if (spec.source === "webcam") throw new Error("Pick 'USB camera on the server' for a camera plugged into the server."); const c = await this.j("api/cameras", {method: "POST", body: JSON.stringify(spec)}); await this.config(); return c; }
 }
 
@@ -1022,7 +1054,20 @@ function drawZones() {
   if (zPoints.length) { g.strokeStyle = "#00e0ff"; g.beginPath(); zPoints.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.stroke(); g.fillStyle = "#00e0ff"; for (const [x, y] of zPoints) { g.beginPath(); g.arc(x, y, 4, 0, 7); g.fill(); } }
   $("#zList").innerHTML = zZones.map((z, i) => `<div><span class="stdot" style="background:#ffc800"></span>${esc(machineName(z.machine))} <span class="muted small">${z.polygon.length} points</span><button class="btn ghost" data-delzone="${i}">Remove</button></div>`).join("") || `<div class="muted small">No zones on this camera yet.</div>`;
 }
+async function renderRecordings() {
+  if (src.mode !== "server") return;
+  const jobs = await src.recordings().catch(() => []);
+  $("#rList").innerHTML = jobs.map(j => {
+    const when = new Date(j.start_ts * 1000).toLocaleString(undefined, {dateStyle: "medium", timeStyle: "short"});
+    const st = j.status === "done" ? `<a href="${src.base}api/recordings/${encodeURIComponent(j.id)}/report.html" target="_blank" style="color:var(--accent)">Open report</a> · ${j.totals?.sets ?? 0} sets, ${j.totals?.reps ?? 0} reps`
+      : j.status === "failed" ? `<span style="color:var(--bad)">Failed: ${esc(j.error)}</span>` : `${j.status === "queued" ? "Queued" : "Analysing"} ${(j.progress * 100).toFixed(0)}% · ${Math.round(j.speed)}× real time`;
+    return `<div><span class="stdot" style="background:${j.status === "done" ? "var(--good)" : j.status === "failed" ? "var(--bad)" : "var(--warn)"}"></span><span>${esc(when)} <span class="muted small">${fmtDur(j.video_s)} of video</span></span><span class="small" style="margin-left:auto">${st}</span></div>`;
+  }).join("") || `<div class="muted small">No recordings analysed yet.</div>`;
+  if ($("#rMsg").textContent.startsWith("Uploaded") && !jobs.some(j => j.status === "running" || j.status === "queued")) $("#rMsg").textContent = "Done. Open the report below.";
+}
+
 function renderSetup() {
+  renderRecordings();
   $("#camTable").innerHTML = (live.camera_status || []).map(c => {
     const color = c.status === "live" ? "var(--good)" : c.status === "offline" ? "var(--bad)" : "var(--warn)";
     return `<tr><td>${esc(c.name)}<div class="small muted">${c.zones.length} zone${c.zones.length === 1 ? "" : "s"}</div></td><td class="small" style="word-break:break-all">${esc(c.source)}</td><td><span class="pill"><i style="background:${color}"></i>${esc(c.status)}</span>${c.error ? `<div class="small muted">${esc(c.error)}</div>` : ""}</td><td class="n num">${(+c.fps).toFixed(1)}</td></tr>`;
@@ -1032,6 +1077,7 @@ function fillSetupSelects() {
   const cur = $("#zCam").value;
   $("#zCam").innerHTML = cfg.cameras.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join(""); if (cur && cfg.cameras.some(c => c.id === cur)) $("#zCam").value = cur;
   $("#zMachine").innerHTML = cfg.machines.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join("");
+  $("#rCam").innerHTML = `<option value="">Whole view (no machine zones)</option>` + cfg.cameras.filter(c => c.zones.length).map(c => `<option value="${esc(c.id)}">Same view as ${esc(c.name)} (${c.zones.length} zones)</option>`).join("");
   $("#tagGrid").innerHTML = "";
   for (const m of cfg.members) {
     const f = document.createElement("figure"), c = document.createElement("canvas"); c.width = c.height = 72;
@@ -1093,6 +1139,16 @@ function wire() {
   $("#zCam").onchange = loadZoneCam;
   $("#mAdd").onclick = async () => { const n = $("#mName").value.trim(); if (!n) return; try { const m = await src.addMember(n); cfg = await src.config(); fillSetupSelects(); $("#mMsg").textContent = `${m.name} gets tag #${m.tag}.`; $("#mName").value = ""; } catch (e) { $("#mMsg").textContent = e.message; } };
   $("#speed").onchange = e => { src.speed = +e.target.value; };
+  $("#rGo").onclick = async () => {
+    const f = $("#rFile").files[0];
+    if (src.mode !== "server") { $("#rMsg").textContent = "Analysing recordings needs the GymTrack server: run  python -m gymtrack analyse your-video.mp4  or start the server and upload here."; return; }
+    if (!f) { $("#rMsg").textContent = "Choose a video file first."; return; }
+    const st = $("#rStart").value ? new Date($("#rStart").value).getTime() / 1000 : null;
+    $("#rGo").disabled = true;
+    try { await src.upload(f, $("#rCam").value, st, p => { $("#rMsg").textContent = `Uploading ${(p * 100).toFixed(0)}%…`; }); $("#rMsg").textContent = "Uploaded. Analysing…"; $("#rFile").value = ""; renderRecordings(); }
+    catch (e) { $("#rMsg").textContent = e.message; }
+    finally { $("#rGo").disabled = false; }
+  };
 }
 
 (async function boot() {

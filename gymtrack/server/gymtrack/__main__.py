@@ -1,4 +1,4 @@
-"""Command line: `python -m gymtrack demo | run CONFIG | probe URL | tags IDS...`"""
+"""Command line: `python -m gymtrack demo | run CONFIG | analyse VIDEO | probe URL | fetch URL | tags IDS...`"""
 from __future__ import annotations
 
 import argparse
@@ -26,6 +26,20 @@ def main(argv=None):
     p.add_argument("source", help="rtsp://user:pass@ip:554/..., http://..., 0 for USB, or a video file")
     p.add_argument("--out", default="snapshot.jpg")
 
+    an = sub.add_parser("analyse", aliases=["analyze"], help="analyse a recorded video (NVR export, phone video) and write a report")
+    an.add_argument("video")
+    an.add_argument("--config", help="gym config; its camera zones say where the machines are (default: whole frame = one zone)")
+    an.add_argument("--camera", help="which camera in the config the video comes from (default: first)")
+    an.add_argument("--start", help='when the recording started, e.g. "2026-10-20 07:30" (default: file time)')
+    an.add_argument("--db", help="also store the results in this database (shows up in members' history)")
+    an.add_argument("--report", default="report.html", help="HTML report to write (JSON alongside)")
+
+    f = sub.add_parser("fetch", help="download a video (e.g. YouTube) and trim it, for testing; needs yt-dlp")
+    f.add_argument("url")
+    f.add_argument("--minutes", type=float, default=40)
+    f.add_argument("--start", default="0", help="start offset in seconds")
+    f.add_argument("--out", default="recording.mp4")
+
     t = sub.add_parser("tags", help="write printable member tags (PNG)")
     t.add_argument("ids", type=int, nargs="+")
     t.add_argument("--out", default="tags")
@@ -38,6 +52,14 @@ def main(argv=None):
             print(json.dumps(probe(a.source, a.out), indent=2))
         except ConnectionError as exc:
             sys.exit(f"probe failed: {exc}")
+        return
+
+    if a.cmd in ("analyse", "analyze"):
+        _analyse(a)
+        return
+
+    if a.cmd == "fetch":
+        _fetch(a)
         return
 
     if a.cmd == "tags":
@@ -73,7 +95,72 @@ def main(argv=None):
 
     print(f"GymTrack: {len(cfg.cameras)} cameras, {len(cfg.machines)} machines, {len(cfg.members)} members")
     print(f"Dashboard: http://{'localhost' if a.host in ('0.0.0.0', '127.0.0.1') else a.host}:{a.port}/")
-    uvicorn.run(create_app(cfg, store), host=a.host, port=a.port, log_level="warning")
+    rec_dir = (Path(a.dir) if a.cmd == "demo" else Path(a.db).resolve().parent) / "recordings"
+    uvicorn.run(create_app(cfg, store, recordings_dir=rec_dir), host=a.host, port=a.port, log_level="warning")
+
+
+def _analyse(a):
+    import os
+    import time
+    from datetime import datetime
+
+    import cv2
+
+    from .config import Camera, GymConfig
+    from .offline import analyse, report_html, whole_frame_zone
+    from .store import Store
+
+    if a.config:
+        cfg = GymConfig.load(a.config)
+        cam = cfg.camera(a.camera) if a.camera else (cfg.cameras[0] if cfg.cameras else None)
+        if cam is None:
+            sys.exit(f"camera {a.camera!r} not found in {a.config}")
+        cam = Camera(cam.id, cam.name, a.video, cam.fps, cam.width, cam.zones)
+    else:
+        cfg = GymConfig.from_dict({"gym": Path(a.video).stem, "members": [], "machines": [{"id": "floor", "name": "Whole view"}], "cameras": []})
+        cam = Camera("recording", Path(a.video).stem, a.video)
+    if not cam.zones:  # no machines drawn yet: treat the whole view as one zone
+        cap = cv2.VideoCapture(a.video)
+        w, h = cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        cap.release()
+        if not w:
+            sys.exit(f"cannot open video: {a.video}")
+        if not cfg.machine("floor"):
+            from .config import Machine
+            cfg.machines.append(Machine("floor", "Whole view"))
+        cam.zones = [whole_frame_zone(cam.width, int(h * cam.width / w))]
+        print("No zones for this camera: analysing the whole view as one zone. Draw machine zones in the dashboard for per-machine results.")
+    start = datetime.strptime(a.start, "%Y-%m-%d %H:%M").timestamp() if a.start else os.path.getmtime(a.video)
+    store = Store(a.db) if a.db else None
+
+    def progress(frac, t, speed):
+        print(f"\r  {frac:6.1%}  {int(t // 60):3d} min of video  ({speed:.0f}x real time)", end="", flush=True)
+
+    t0 = time.time()
+    rep = analyse(a.video, cfg, cam, store, start_ts=start, on_progress=progress)
+    print(f"\rDone: {rep['video_s'] / 60:.1f} min of video in {time.time() - t0:.0f}s ({rep['speed_x']}x real time)          ")
+    print(f"  {rep['totals']['sets']} sets, {rep['totals']['reps']} reps, {rep['totals']['lifting_s'] // 60} min under load, "
+          f"{len(rep['machines'])} machines, {len(rep['members'])} people/groups")
+    Path(a.report).write_text(report_html(rep))
+    Path(a.report).with_suffix(".json").write_text(json.dumps(rep, indent=1, default=list))
+    print(f"  report: {a.report}")
+
+
+def _fetch(a):
+    """Download for testing. Respect the video's licence/terms; this is for footage you may use."""
+    import shutil
+    import subprocess
+    if not shutil.which("yt-dlp"):
+        sys.exit("needs yt-dlp: pip install yt-dlp")
+    if not shutil.which("ffmpeg"):
+        sys.exit("needs ffmpeg on PATH")
+    tmp = Path(a.out).with_suffix(".full.mp4")
+    subprocess.run(["yt-dlp", "-f", "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/b", "--merge-output-format", "mp4",
+                    "-o", str(tmp), a.url], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(a.start), "-i", str(tmp), "-t", str(int(a.minutes * 60)),
+                    "-c", "copy", a.out], check=True)
+    tmp.unlink(missing_ok=True)
+    print(f"saved {a.minutes:g} min to {a.out}. Next: python -m gymtrack analyse {a.out}")
 
 
 if __name__ == "__main__":
