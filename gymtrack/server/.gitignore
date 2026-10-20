@@ -3,3 +3,4 @@ __pycache__/
 *.db-journal
 gymtrack-demo.json
 .pytest_cache/
+data/

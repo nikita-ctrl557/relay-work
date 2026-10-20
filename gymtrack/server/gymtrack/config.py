@@ -51,7 +51,6 @@ class Thresholds:
     tag_hold_s: float = 8.0     # keep a member on a machine this long after the tag was last seen
     max_rest_s: float = 300.0   # gaps longer than this are not counted as rest
     checkout_s: float = 600.0   # unseen this long = session ends
-    rep_amplitude_px: float = 3.0
 
 
 @dataclass
@@ -90,7 +89,7 @@ class GymConfig:
             members=[Member(m["id"], m["name"], int(m["tag"])) for m in d.get("members", [])],
             machines=[Machine(m["id"], m["name"], m.get("kind", "strength")) for m in d.get("machines", [])],
             cameras=cams,
-            thresholds=Thresholds(**d.get("thresholds", {})),
+            thresholds=Thresholds(**{k: v for k, v in d.get("thresholds", {}).items() if k in Thresholds.__dataclass_fields__}),
             path=path,
         )
 

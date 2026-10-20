@@ -6,8 +6,8 @@ Two cheap, robust signals are extracted from every frame:
   are detected and mapped to the zone they sit in. This identifies members
   without face recognition or storing biometric data.
 * **Zone motion** - frame differencing inside each machine's polygon gives a
-  motion ratio (lifting vs resting) and the vertical centre of the moving
-  pixels (used to count reps as the weight travels up and down).
+  motion ratio (lifting vs resting). A small thumbnail of the zone is kept too;
+  reps are counted from how often it repeats (see reps.py).
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from .config import Camera
+from .reps import THUMB
 
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 
@@ -25,7 +26,7 @@ ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 class ZoneReading:
     machine: str
     motion: float                 # 0..1 share of the zone's pixels that changed
-    y_centroid: float | None      # vertical centre of motion, px (None if nothing moved)
+    thumb: np.ndarray | None      # small grayscale image of the zone, used to count reps
     tags: list[int] = field(default_factory=list)
 
 
@@ -88,14 +89,11 @@ class FrameAnalyzer:
             mask, area, (x, y, w, h) = self._zone_masks(blur.shape)[z.machine]
             sub = moving[y:y + h, x:x + w] & mask
             n = int(np.count_nonzero(sub))
-            yc = None
-            if n > 15:
-                ys = np.nonzero(sub)[0]
-                yc = float(ys.mean() + y)
+            thumb = cv2.resize(blur[y:y + h, x:x + w], (THUMB, THUMB), interpolation=cv2.INTER_AREA) if w and h else None
             poly = np.array(z.polygon, dtype=np.float32)
             inside = [tid for tid, (tx, ty) in tags.items()
                       if cv2.pointPolygonTest(poly, (tx, ty), True) > -12]  # small tolerance at the edge
-            zones.append(ZoneReading(z.machine, n / max(area, 1), yc, inside))
+            zones.append(ZoneReading(z.machine, n / max(area, 1), thumb, inside))
         return FrameReading(self.cam.id, t, zones, tags)
 
 

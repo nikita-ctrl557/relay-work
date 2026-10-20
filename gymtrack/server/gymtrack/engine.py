@@ -7,48 +7,19 @@ simulator, and in fast-forward inside the tests.
 from __future__ import annotations
 
 import threading
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, field
 
 from .config import GymConfig
+from .reps import count_reps
 from .vision import FrameReading
 
 FUSE_WINDOW_S = 1.0  # readings older than this are ignored when fusing cameras
 VISIT_GAP_S = 1.5    # a tag unseen this long starts a new visit
 DWELL_S = 2.0        # a tag must stay this long in a zone to occupy the machine
 SET_PRESENCE = 0.3   # share of a set's frames a tag must appear in to be credited
-
-
-class RepCounter:
-    """Counts up/down cycles in the vertical position of the moving weight."""
-
-    def __init__(self, amplitude: float):
-        self.amp = amplitude
-        self.base: float | None = None
-        self.phase = 0  # -1 below baseline, +1 above
-        self.reps = 0
-        self.last_t: float | None = None
-
-    def reset(self):
-        self.base, self.phase, self.reps, self.last_t = None, 0, 0, None
-
-    def update(self, y: float | None, t: float):
-        if y is None:
-            return
-        dt = 0.1 if self.last_t is None else max(1e-3, t - self.last_t)
-        self.last_t = t
-        if self.base is None:
-            self.base = y
-            return
-        alpha = min(1.0, dt / 2.5)  # slow baseline (~2.5 s) so single reps stand out
-        self.base += alpha * (y - self.base)
-        d = y - self.base
-        if d < -self.amp:
-            if self.phase == 1:
-                self.reps += 1  # completed a down -> up -> down cycle
-            self.phase = -1
-        elif d > self.amp:
-            self.phase = 1
+LIVE_REPS_EVERY_S = 1.0
+MAX_SET_FRAMES = 3000  # per camera; ~5 minutes at 10 fps
 
 
 @dataclass
@@ -77,7 +48,8 @@ class MachineTracker:
         self.id = machine_id
         self.e = engine
         self.cams: dict[str, _CamZone] = {}
-        self.rep_counters: dict[str, RepCounter] = {}
+        self.thumbs: dict[str, deque] = {}     # camera -> recent (t, thumbnail) for rep counting
+        self._live_reps, self._live_at = 0, -1e9
         self.tag_seen: dict[int, float] = {}   # tag -> last time seen in this zone
         self.tag_since: dict[int, float] = {}  # tag -> start of its current continuous visit
         self.set_frames = 0
@@ -93,7 +65,7 @@ class MachineTracker:
         self.occupied_since: float | None = None
 
     # -- signal fusion -----------------------------------------------------
-    def ingest(self, cam: str, t: float, motion: float, y: float | None, tags: list[int]):
+    def ingest(self, cam: str, t: float, motion: float, thumb, tags: list[int]):
         th = self.e.cfg.thresholds
         self.cams[cam] = _CamZone(t, motion)
         for tag in tags:
@@ -105,7 +77,8 @@ class MachineTracker:
         if self.state == "lifting":
             self.set_cams.add(cam)
             self.set_frames += 1
-        self.rep_counters.setdefault(cam, RepCounter(th.rep_amplitude_px)).update(y if motion > th.lift_off else None, t)
+        if thumb is not None:
+            self.thumbs.setdefault(cam, deque(maxlen=MAX_SET_FRAMES)).append((t, thumb))
 
         if self.last_t is not None and t < self.last_t:
             return  # out-of-order reading from a slower camera: signal kept, timing not advanced
@@ -144,11 +117,11 @@ class MachineTracker:
                     self.set_tags = Counter()
                     self.set_frames = 0
                     self.set_cams = {c for c, z in self.cams.items() if t - z.t <= FUSE_WINDOW_S}
-                    for rc in self.rep_counters.values():
-                        rc.reps = 0
+                    self._live_reps, self._live_at = 0, -1e9
                     self.below_since = None
             else:
                 self.above_since = None
+                self._trim(t - th.on_hold_s - 1.0)  # keep only a short pre-roll while idle
         else:
             if self.ema < th.lift_off:
                 self.below_since = self.below_since if self.below_since is not None else t
@@ -164,8 +137,25 @@ class MachineTracker:
         if end - start < th.min_set_s:
             return
         member = self._set_member() or self.occupant
-        reps = max((rc.reps for rc in self.rep_counters.values()), default=0)
+        reps = max(1, self._count(start, end))  # too short to see a repeat, but a set is at least one rep
+        self._trim(end)
         self.e._record_set(SetRecord(member, self.id, start, end, reps, sorted(self.set_cams)))
+
+    def _trim(self, before: float):
+        for q in self.thumbs.values():
+            while q and q[0][0] < before:
+                q.popleft()
+
+    def _count(self, start: float, end: float) -> int:
+        """Reps from the camera that sees the repetition most clearly."""
+        best = (0.0, 0)
+        for q in self.thumbs.values():
+            seq = [(t, th) for t, th in q if start <= t <= end]
+            if len(seq) < 6:
+                continue
+            reps, conf = count_reps([t for t, _ in seq], [th for _, th in seq])
+            best = max(best, (conf, reps))
+        return best[1]
 
     def _set_member(self) -> str | None:
         """Member whose tag was present for a good share of the set."""
@@ -176,7 +166,11 @@ class MachineTracker:
         return None
 
     def live_reps(self) -> int:
-        return max((rc.reps for rc in self.rep_counters.values()), default=0) if self.state == "lifting" else 0
+        if self.state != "lifting" or self.set_start is None or self.last_t is None:
+            return 0
+        if self.last_t - self._live_at >= LIVE_REPS_EVERY_S:
+            self._live_reps, self._live_at = self._count(self.set_start, self.last_t), self.last_t
+        return self._live_reps
 
     def snapshot(self, now: float) -> dict:
         m = self.e.cfg.machine(self.id)
@@ -242,7 +236,7 @@ class Engine:
                 mt = self.machines.get(z.machine)
                 if mt is None:
                     mt = self.machines[z.machine] = MachineTracker(z.machine, self)
-                mt.ingest(r.camera, r.t, z.motion, z.y_centroid, z.tags)
+                mt.ingest(r.camera, r.t, z.motion, z.thumb, z.tags)
             for s in self.sessions.values():
                 s.location = next((mid for mid, mt in self.machines.items() if mt.occupant == s.member), None)
             self._expire(r.t)

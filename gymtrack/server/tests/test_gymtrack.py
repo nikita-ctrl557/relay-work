@@ -177,3 +177,21 @@ def test_live_progress_and_tags(client):
     png = c.get("/api/tags/7.png")
     assert png.status_code == 200 and png.content[:4] == b"\x89PNG"
     assert c.get("/").status_code == 200
+
+
+# --- rep counter -------------------------------------------------------------
+
+def test_rep_counter_counts_whole_cycles_not_half_cycles():
+    import numpy as np
+    from gymtrack.reps import count_reps
+    rng = np.random.default_rng(0)
+    for reps, period in ((5, 3.0), (12, 2.0), (8, 4.5)):
+        t = np.arange(0, reps * period, 0.1)
+        frames = []
+        for ti in t:  # a bar moving up and down once per rep, plus sensor noise
+            img = np.full((24, 24), 40.0)
+            y = int(4 + 14 * (1 - np.cos(2 * np.pi * ti / period)) / 2)
+            img[y:y + 3, 3:21] = 220
+            frames.append(img + rng.normal(0, 3, img.shape))
+        assert count_reps(t, frames)[0] == reps
+    assert count_reps([0, .1], [np.zeros((24, 24))] * 2)[0] == 0

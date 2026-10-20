@@ -327,28 +327,49 @@ function nearPoly(x, y, poly) { if (pointInPoly(x, y, poly)) return true; const 
 /* ================================================================
    Tracking engine: a port of server/gymtrack/engine.py
    ================================================================ */
-const TH = {lift_on: .02, lift_off: .008, on_hold_s: 1, off_hold_s: 2, min_set_s: 4, tag_hold_s: 8, max_rest_s: 300, checkout_s: 600, rep_amplitude_px: 3};
+const TH = {lift_on: .02, lift_off: .008, on_hold_s: 1, off_hold_s: 2, min_set_s: 4, tag_hold_s: 8, max_rest_s: 300, checkout_s: 600};
 const FUSE_WINDOW_S = 1, VISIT_GAP_S = 1.5, DWELL_S = 2, SET_PRESENCE = .3;
 
-class RepCounter {
-  constructor(amp) { this.amp = amp; this.base = null; this.phase = 0; this.reps = 0; this.lastT = null; }
-  update(y, t) {
-    if (y == null) return;
-    const dt = this.lastT == null ? .1 : Math.max(1e-3, t - this.lastT); this.lastT = t;
-    if (this.base == null) { this.base = y; return; }
-    this.base += Math.min(1, dt / 2.5) * (y - this.base);
-    const d = y - this.base;
-    if (d < -this.amp) { if (this.phase === 1) this.reps++; this.phase = -1; }
-    else if (d > this.amp) this.phase = 1;
+/* Rep counting from how often the zone repeats: a port of server/gymtrack/reps.py */
+const THUMB = 24, DETREND_S = 4, WINDOW_S = 12, HOP_S = 1, MIN_PERIOD_S = .5, ALPHA = .75, LIVE_REPS_EVERY_S = 1;
+function countReps(times, thumbs) {
+  const n = thumbs.length, D = THUMB * THUMB;
+  if (n < 6) return [0, 0];
+  const dts = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b), dt = dts[dts.length >> 1] || .1;
+  // detrend with a moving average, then L2-normalise each frame
+  let k = Math.round(DETREND_S / dt) | 1; const X = thumbs.map(() => new Float32Array(D));
+  for (let d = 0; d < D; d++) {
+    if (k < 3 || n <= k) { let m = 0; for (let i = 0; i < n; i++) m += thumbs[i][d]; m /= n; for (let i = 0; i < n; i++) X[i][d] = thumbs[i][d] - m; continue; }
+    const h = k >> 1, at = i => thumbs[Math.min(n - 1, Math.max(0, i))][d]; let sum = 0;
+    for (let j = -h; j <= h; j++) sum += at(j);
+    for (let i = 0; i < n; i++) { X[i][d] = thumbs[i][d] - sum / k; sum += at(i + h + 1) - at(i - h); }
   }
+  for (const x of X) { let q = 0; for (let d = 0; d < D; d++) q += x[d] * x[d]; q = Math.sqrt(q) || 1e-6; for (let d = 0; d < D; d++) x[d] /= q; }
+  const lmin = Math.max(2, Math.round(MIN_PERIOD_S / dt)), w = Math.round(WINDOW_S / dt), maxLag = Math.min(n, w) >> 1;
+  const dot = new Map(); // lag -> per-frame similarity with the frame `lag` later
+  for (let l = 1; l <= maxLag; l++) { const a = new Float32Array(n - l); for (let i = 0; i < n - l; i++) { let q = 0; const x = X[i], y = X[i + l]; for (let d = 0; d < D; d++) q += x[d] * y[d]; a[i] = q; } dot.set(l, a); }
+  const period = (a, b) => {
+    const lmax = (b - a) >> 1; if (lmax <= lmin + 1) return [null, 0];
+    const S = []; for (let l = 1; l <= lmax; l++) { const arr = dot.get(l); let q = 0; for (let i = a; i < b - l; i++) q += arr[i]; S.push(q / (b - l - a)); }
+    const peaks = []; for (let l = Math.max(lmin, 2); l < lmax; l++) if (S[l - 1] >= S[l - 2] && S[l - 1] >= S[l] && S[l - 1] > 0) peaks.push(l);
+    if (!peaks.length) return [null, 0];
+    const best = Math.max(...peaks.map(l => S[l - 1])), p = peaks.find(l => S[l - 1] >= ALPHA * best);
+    return [p, S[p - 1]];
+  };
+  if (n <= w) { const [p, c] = period(0, n); return [p ? Math.round(n / p) : 0, c]; }
+  const rate = new Float64Array(n), cover = new Float64Array(n), confs = [], hop = Math.max(1, Math.round(HOP_S / dt));
+  const starts = new Set(); for (let s0 = 0; s0 <= n - w; s0 += hop) starts.add(s0); starts.add(n - w);
+  for (const s0 of starts) { const [p, c] = period(s0, s0 + w); if (p) { for (let i = s0; i < s0 + w; i++) { rate[i] += 1 / p; cover[i]++; } confs.push(c); } }
+  let r = 0; for (let i = 0; i < n; i++) if (cover[i]) r += rate[i] / cover[i];
+  return [Math.round(r), confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : 0];
 }
 
 class MachineTracker {
   constructor(id, e) {
-    Object.assign(this, {id, e, cams: {}, rc: {}, tagSeen: {}, tagSince: {}, ema: 0, lastT: null, state: "idle",
+    Object.assign(this, {id, e, cams: {}, thumbs: {}, liveN: 0, liveAt: -1e9, tagSeen: {}, tagSince: {}, ema: 0, lastT: null, state: "idle",
       aboveSince: null, belowSince: null, setStart: null, setTags: {}, setFrames: 0, setCams: new Set(), occupant: null, occupiedSince: null});
   }
-  ingest(cam, t, motion, y, tags) {
+  ingest(cam, t, motion, thumb, tags) {
     for (const tag of tags) {
       if (t - (this.tagSeen[tag] ?? -1e9) > VISIT_GAP_S) this.tagSince[tag] = t;
       this.tagSeen[tag] = t;
@@ -356,7 +377,7 @@ class MachineTracker {
     }
     this.cams[cam] = {t, motion};
     if (this.state === "lifting") { this.setCams.add(cam); this.setFrames++; }
-    (this.rc[cam] ||= new RepCounter(TH.rep_amplitude_px)).update(motion > TH.lift_off ? y : null, t);
+    if (thumb) { const q = this.thumbs[cam] ||= []; q.push([t, thumb]); if (q.length > 3000) q.shift(); }
     if (this.lastT != null && t < this.lastT) return;
     const dt = this.lastT == null ? .1 : t - this.lastT; this.lastT = t;
     let fused = 0; for (const z of Object.values(this.cams)) if (t - z.t <= FUSE_WINDOW_S) fused = Math.max(fused, z.motion);
@@ -381,10 +402,10 @@ class MachineTracker {
         if (t - this.aboveSince >= TH.on_hold_s) {
           this.state = "lifting"; this.setStart = this.aboveSince; this.setTags = {}; this.setFrames = 0;
           this.setCams = new Set(Object.entries(this.cams).filter(([, z]) => t - z.t <= FUSE_WINDOW_S).map(([c]) => c));
-          for (const r of Object.values(this.rc)) r.reps = 0;
+          this.liveN = 0; this.liveAt = -1e9;
           this.belowSince = null;
         }
-      } else this.aboveSince = null;
+      } else { this.aboveSince = null; this.trim(t - TH.on_hold_s - 1); }
     } else {
       if (this.ema < TH.lift_off) {
         this.belowSince ??= t;
@@ -402,10 +423,24 @@ class MachineTracker {
     this.state = "idle"; this.aboveSince = this.belowSince = this.setStart = null;
     if (end - start < TH.min_set_s) return;
     const member = this.setMember() || this.occupant;
-    const reps = Math.max(0, ...Object.values(this.rc).map(r => r.reps));
+    const reps = Math.max(1, this.count(start, end)); this.trim(end); // a set is at least one rep
     this.e.recordSet({member, machine: this.id, start, end, reps, cameras: [...this.setCams].sort()});
   }
-  liveReps() { return this.state === "lifting" ? Math.max(0, ...Object.values(this.rc).map(r => r.reps)) : 0; }
+  trim(before) { for (const q of Object.values(this.thumbs)) { let i = 0; while (i < q.length && q[i][0] < before) i++; if (i) q.splice(0, i); } }
+  count(start, end) { // reps from the camera that sees the repetition most clearly
+    let best = [0, 0];
+    for (const q of Object.values(this.thumbs)) {
+      const seq = q.filter(([t]) => t >= start && t <= end); if (seq.length < 6) continue;
+      const [reps, conf] = countReps(seq.map(x => x[0]), seq.map(x => x[1]));
+      if (conf > best[0]) best = [conf, reps];
+    }
+    return best[1];
+  }
+  liveReps() {
+    if (this.state !== "lifting" || this.setStart == null) return 0;
+    if (this.lastT - this.liveAt >= LIVE_REPS_EVERY_S) { this.liveN = this.count(this.setStart, this.lastT); this.liveAt = this.lastT; }
+    return this.liveN;
+  }
   snapshot(now) {
     const m = this.e.cfg.machines.find(x => x.id === this.id);
     let occ = this.occupant;
@@ -430,7 +465,7 @@ class Engine {
   ingest(r) {
     this.now = Math.max(this.now, r.t);
     for (const tag of Object.keys(r.tags)) { const m = this.memberByTag(+tag); if (m) { const s = this.session(m.id, r.t); s.lastSeen = Math.max(s.lastSeen, r.t); s.camera = r.camera; } }
-    for (const z of r.zones) (this.machines[z.machine] ||= new MachineTracker(z.machine, this)).ingest(r.camera, r.t, z.motion, z.y, z.tags);
+    for (const z of r.zones) (this.machines[z.machine] ||= new MachineTracker(z.machine, this)).ingest(r.camera, r.t, z.motion, z.thumb, z.tags);
     for (const s of Object.values(this.sessions)) s.location = Object.values(this.machines).find(mt => mt.occupant === s.member)?.id ?? null;
     this.expire(r.t);
   }
@@ -628,6 +663,18 @@ class SimWorld {
   }
 }
 
+/* zone thumbnail (THUMB x THUMB, box-averaged) for rep counting */
+function thumbOf(gray, [x0, y0, x1, y1]) {
+  const out = new Float32Array(THUMB * THUMB), cw = (x1 - x0) / THUMB, ch = (y1 - y0) / THUMB;
+  if (cw <= 0 || ch <= 0) return null;
+  for (let r = 0; r < THUMB; r++) for (let c = 0; c < THUMB; c++) {
+    const ya = Math.floor(y0 + r * ch), yb = Math.max(ya + 1, Math.floor(y0 + (r + 1) * ch)), xa = Math.floor(x0 + c * cw), xb = Math.max(xa + 1, Math.floor(x0 + (c + 1) * cw));
+    let s = 0, k = 0; for (let y = ya; y < yb; y++) for (let x = xa; x < xb; x++) { s += gray[y * AW + x]; k++; }
+    out[r * THUMB + c] = s / k;
+  }
+  return out;
+}
+
 /* Motion analysis on real pixels: same method as server/gymtrack/vision.py (frame differencing per zone) */
 const AW = 320, AH = 180, SCALE = W / AW;
 class PixelAnalyzer {
@@ -636,7 +683,7 @@ class PixelAnalyzer {
     this.cam.zones = zones;
     this.masks = zones.map(z => { const pts = [], poly = z.polygon.map(([x, y]) => [x / SCALE, y / SCALE]), [bx, by, bw, bh] = bbox(poly);
       for (let y = Math.max(0, Math.floor(by)); y < Math.min(AH, by + bh); y++) for (let x = Math.max(0, Math.floor(bx)); x < Math.min(AW, bx + bw); x++) if (pointInPoly(x + .5, y + .5, poly)) pts.push(y * AW + x);
-      return {machine: z.machine, polygon: z.polygon, idx: Int32Array.from(pts)}; });
+      return {machine: z.machine, polygon: z.polygon, idx: Int32Array.from(pts), box: [Math.max(0, Math.floor(bx)), Math.max(0, Math.floor(by)), Math.min(AW, Math.ceil(bx + bw)), Math.min(AH, Math.ceil(by + bh))]}; });
   }
   analyze(source, t, tags) {
     this.g.drawImage(source, 0, 0, AW, AH);
@@ -644,10 +691,10 @@ class PixelAnalyzer {
     for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
     const prev = this.prev; this.prev = gray;
     const zones = this.masks.map(m => {
-      let n = 0, ys = 0;
-      if (prev) for (const i of m.idx) if (Math.abs(gray[i] - prev[i]) > 22) { n++; ys += (i / AW) | 0; }
+      let n = 0;
+      if (prev) for (const i of m.idx) if (Math.abs(gray[i] - prev[i]) > 22) n++;
       const inside = Object.entries(tags).filter(([, [x, y]]) => nearPoly(x, y, m.polygon)).map(([k]) => +k);
-      return {machine: m.machine, motion: n / Math.max(1, m.idx.length), y: n > 4 ? ys / n * SCALE : null, tags: inside};
+      return {machine: m.machine, motion: n / Math.max(1, m.idx.length), thumb: thumbOf(gray, m.box), tags: inside};
     });
     return {camera: this.cam.id, t, zones, tags};
   }
