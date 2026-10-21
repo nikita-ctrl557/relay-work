@@ -82,7 +82,7 @@ class CameraWorker(threading.Thread):
                     from .pose import POSE_MODEL, PoseEstimator
                     plan = (cfg.plan["width"], cfg.plan["depth"]) if cfg.plan else None
                     self.tracker = PeopleTracker(cam.zones, PersonDetector(), pose=PoseEstimator() if POSE_MODEL.exists() else None,
-                                                 homography=cam.homography(), plan_size=plan)
+                                                 homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names)
             except Exception as exc:  # no model / no DNN support: zone tracking still works
                 self.error = f"people tracking off: {exc}"
         self._tracks = []

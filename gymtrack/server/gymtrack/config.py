@@ -42,6 +42,8 @@ class Camera:
     # floor calibration: 4 image points (px, in the resized frame) and where they are on the floor plan (metres)
     calib: dict | None = None
     people: bool = True   # run person detection/tracking on this camera (needs the model)
+    # name the exercise from body pose; turn off for far or steep cameras where it guesses (sets/reps still count)
+    exercise_names: bool = True
 
     def homography(self):
         """3x3 image->floor-plan matrix, or None if the camera isn't calibrated."""
@@ -93,7 +95,7 @@ class GymConfig:
                 id=c["id"], name=c.get("name", c["id"]), source=str(c["source"]),
                 fps=float(c.get("fps", 10)), width=int(c.get("width", 640)),
                 zones=[Zone(z["machine"], [list(map(int, p)) for p in z["polygon"]]) for z in c.get("zones", [])],
-                calib=c.get("calib"), people=bool(c.get("people", True)),
+                calib=c.get("calib"), people=bool(c.get("people", True)), exercise_names=bool(c.get("exercise_names", True)),
             )
             for c in d.get("cameras", [])
         ]

@@ -29,7 +29,11 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer 
 
   // everything below lives in OpenCV camera coordinates; this group turns it into three.js axes
   const world = new THREE.Group(); world.quaternion.set(1, 0, 0, 0); scene.add(world);
-  const splat = new SplatMesh({url: base + meta.splat, onLoad: () => wrap.querySelector(".s3d-load")?.remove()});
+  let loaded = false;
+  const fail = why => { if (loaded) return; const l = wrap.querySelector(".s3d-load"); if (l) l.innerHTML = `3D model couldn't load here (${why}). People and zones are still shown; switch to Plan for the 2D map.`; };
+  const splat = new SplatMesh({url: base + meta.splat, onLoad: () => { loaded = true; wrap.querySelector(".s3d-load")?.remove(); }});
+  splat.initialized?.catch?.(e => fail(e?.message || "error"));
+  const slow = setTimeout(() => fail("timed out"), 45000);
   world.add(splat);
 
   const rayFloor = (u, v) => { // pixel in the splat image -> point on the floor (camera coords)
@@ -175,6 +179,6 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer 
 
   return {
     highlight(pid) { hoverPid = pid; },
-    destroy() { cancelAnimationFrame(raf); ro.disconnect(); controls.dispose(); splat.dispose?.(); renderer.dispose(); wrap.remove(); },
+    destroy() { clearTimeout(slow); cancelAnimationFrame(raf); ro.disconnect(); controls.dispose(); splat.dispose?.(); renderer.dispose(); wrap.remove(); },
   };
 }

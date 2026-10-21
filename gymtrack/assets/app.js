@@ -537,7 +537,7 @@ function openReport(url, title) {
 function CamerasPage() {
   const thumbs = {};
   return {
-    title: "Cameras", sub: PAGES[4].sub,
+    title: "Cameras", sub: PAGES.find(p => p.id === "cameras").sub,
     actions(a) { a.append(el(`<button class="btn">${IC.plus}Add camera</button>`)); a.lastChild.onclick = addCamera; },
     mount(v) {
       v.append(el(`<div class="cgrid" id="cg"></div>`));
@@ -559,7 +559,7 @@ python -m gymtrack analyse cam1-export.mp4 --report report.html                 
     render() {
       $("#cg").innerHTML = "";
       for (const cam of cfg.cameras) {
-        const card = el(`<article class="card ccard" data-cam="${esc(cam.id)}"><div class="thumb"></div><div class="body"><div class="row"><span class="nm">${esc(cam.name)}</span><span class="st" style="margin-left:auto"></span></div><div class="src">${esc(cam.source)}</div><div class="muted" style="font-size:12.5px">${cam.zones.length} machine zone${cam.zones.length === 1 ? "" : "s"}${cam.zones.length ? ": " + cam.zones.map(z => esc(machineName(z.machine))).join(", ") : ""}</div></div>
+        const card = el(`<article class="card ccard" data-cam="${esc(cam.id)}"><div class="thumb"></div><div class="body"><div class="row"><span class="nm">${esc(cam.name)}</span><span class="st" style="margin-left:auto"></span></div><div class="src">${esc(cam.source)}</div><div class="muted" style="font-size:12.5px">${cam.zones.length} machine zone${cam.zones.length === 1 ? "" : "s"}${cam.zones.length ? ": " + cam.zones.map(z => esc(machineName(z.machine))).join(", ") : ""}</div>${cam.exercise_names === false ? `<div class="muted" style="font-size:12.5px" data-tip="This camera is too far or steep to name exercises reliably from body pose. Sets, reps, rest and time per station are still tracked.">Exercise names off for this camera</div>` : ""}</div>
           <div class="foot"><button class="btn secondary sm" data-act="zones" data-cam="${esc(cam.id)}">${IC.zones}Edit zones</button><button class="btn secondary sm" data-act="calib" data-cam="${esc(cam.id)}">${IC.map}Floor map</button><button class="btn ghost sm" data-act="remove" data-cam="${esc(cam.id)}" style="margin-left:auto">${IC.trash}Remove</button></div></article>`);
         let t;
         if (src.mode !== "server") { t = document.createElement("canvas"); t.width = 320; t.height = 180; }

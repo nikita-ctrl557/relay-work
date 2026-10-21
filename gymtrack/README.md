@@ -67,6 +67,9 @@ python bench/train_activity.py data/repcount --labels labels_all.json      # -> 
 wrong (people walking get called "pull-up"), so the tracker only reports an exercise when the model is confident
 (≥ 0.7), agrees with itself on at least 2 of the last 3 checks, and the person is staying in one spot. Otherwise it
 reports nothing rather than a wrong exercise. Sets and reps don't depend on this: they come from motion in each zone.
+Even with the gate, the CrossFit wall camera's steep, far view still produced wrong names, so each camera has an
+`"exercise_names": false` switch in `config.json`; the demo turns it off for that camera and keeps it on for the
+garage camera, where both squat sets are named correctly.
 
 RepCount-A is for research use, so the trained model isn't committed. For a commercial launch, retrain on labelled
 footage from the gym's own cameras (the same scripts work on any folder of labelled clips).

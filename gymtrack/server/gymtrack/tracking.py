@@ -169,7 +169,8 @@ class PeopleTracker:
     """Per-camera multi-person tracker with zone dwell times."""
 
     def __init__(self, zones, detector: PersonDetector, detect_every_s: float = 0.34, max_age_s: float = 6.0, min_hits: int = 3,
-                 pose=None, homography=None, plan_size: tuple[float, float] | None = None):
+                 pose=None, homography=None, plan_size: tuple[float, float] | None = None, exercise_names: bool = True):
+        self.exercise_names = exercise_names
         self.zones = [(z.machine, np.array(z.polygon, np.float32)) for z in zones]
         self.det = detector
         self.every, self.max_age, self.min_hits = detect_every_s, max_age_s, min_hits
@@ -260,7 +261,7 @@ class PeopleTracker:
                 continue
             tr.pose_hits += 1
             tr.kps = [k for k in tr.kps if t - k[0] <= 8.0] + [(t, kp)]
-            if t - tr.act_at >= 1.0 and len(tr.kps) >= 6:
+            if self.exercise_names and t - tr.act_at >= 1.0 and len(tr.kps) >= 6:
                 tr.act_at = t
                 raw, conf, _ = classify([k for _, k in tr.kps[-18:]])
                 tr.act_raw = (tr.act_raw + [(raw, conf)])[-3:]
