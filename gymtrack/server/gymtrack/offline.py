@@ -7,6 +7,7 @@ show up in members' history like live sessions do.
 """
 from __future__ import annotations
 
+import base64
 import time
 from dataclasses import dataclass, field
 
@@ -42,8 +43,14 @@ def whole_frame_zone(width: int, height: int, machine: str = "floor") -> Zone:
 
 
 def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float | None = None,
-            sample_fps: float = 10.0, on_progress=None, should_stop=None) -> dict:
-    """Run one recording through the pipeline. Returns a report dict (see `report`)."""
+            sample_fps: float = 10.0, on_progress=None, should_stop=None,
+            people: bool | None = None, video_out: str | None = None, timeline: list | None = None) -> dict:
+    """Run one recording through the pipeline. Returns a report dict (see `report`).
+
+    people: track individual people (needs the detector model; default: on if it's installed).
+    video_out: also write an annotated MP4 showing zones, tracked people and live set state.
+    """
+    from .tracking import DEFAULT_MODEL, PeopleTracker, PersonDetector, draw_people, heatmap_image
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise ValueError(f"cannot open video: {path}")
@@ -56,6 +63,12 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
 
     engine = Engine(cfg, store, keep_all=True)
     analyser = FrameAnalyzer(cam)
+    if people is None:
+        people = DEFAULT_MODEL.exists()
+    tracker = PeopleTracker(cam.zones, PersonDetector()) if people else None
+    names = {m.id: m.name for m in cfg.members}
+    tag_names = {m.tag: m.name for m in cfg.members}
+    writer, background = None, None
     width = cam.width
     i, next_t, t, wall0, last_cb = 0, 0.0, 0.0, time.time(), 0.0
     while True:
@@ -71,28 +84,82 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
             break
         if frame.shape[1] != width:
             frame = cv2.resize(frame, (width, int(frame.shape[0] * width / frame.shape[1])), interpolation=cv2.INTER_AREA)
-        engine.ingest(analyser.analyze(frame, start_ts + t))
+        reading = analyser.analyze(frame, start_ts + t)
+        tracks = []
+        if tracker:
+            tracks = tracker.update(frame, start_ts + t, reading.tags, cfg.member_by_tag)
+            reading.people = [(tr.id, tr.member, tr.zone, tr.planted) for tr in tracks]
+            reading.tracking = True
+        engine.ingest(reading)
+        if background is None:
+            background = frame.copy()
+        if timeline is not None and (not timeline or t - timeline[-1]["t"] >= 1.0):
+            H, W = frame.shape[:2]
+            timeline.append({"t": round(t, 2),
+                             "m": [[mid, st["state"] == "lifting", st["reps"], round(st["set_elapsed"], 1)]
+                                   for mid, mt in engine.machines.items() for st in [mt.snapshot(start_ts + t)]],
+                             "p": [[tr.id, tr.member, tr.zone, int(tr.planted), *[round(v, 3) for v in (tr.box[0] / W, tr.box[1] / H, tr.box[2] / W, tr.box[3] / H)]]
+                                   for tr in tracks]})
+        if video_out:
+            if writer is None:
+                writer = cv2.VideoWriter(video_out, cv2.VideoWriter_fourcc(*"mp4v"), sample_fps, (frame.shape[1], frame.shape[0]))
+            writer.write(_annotated(frame, cam, reading, engine, tracks, names, tag_names, start_ts + t))
         if on_progress and time.time() - last_cb > 0.5:
             last_cb = time.time()
             on_progress(t / duration if duration else 0.0, t, t / max(1e-3, last_cb - wall0))
         if should_stop and should_stop():
             break
     cap.release()
+    if writer is not None:
+        writer.release()
     end = start_ts + t
     for mt in engine.machines.values():  # recording ended mid-set
         if mt.state == "lifting":
             mt._finish_set(end)
     engine.tick(end + cfg.thresholds.checkout_s + 1)  # close everyone's session
     wall = time.time() - wall0
-    rep = report(cfg, engine, start_ts, end)
+    rep = report(cfg, engine, start_ts, end, tracker)
+    if tracker is not None and background is not None:
+        ok, jpg = cv2.imencode(".jpg", heatmap_image(background, tracker.heat), [cv2.IMWRITE_JPEG_QUALITY, 80])
+        rep["heatmap_jpg_b64"] = base64.b64encode(jpg.tobytes()).decode() if ok else None
+    if video_out:
+        rep["video_out"] = video_out
     rep.update({"file": path, "camera": cam.id, "video_s": round(t, 1), "processing_s": round(wall, 1),
                 "speed_x": round(t / max(wall, 1e-3), 1), "frames_analysed": int(t * sample_fps)})
     return rep
 
 
-def report(cfg: GymConfig, engine: Engine, start: float, end: float) -> dict:
+def _annotated(frame, cam, reading, engine, tracks, names, tag_names, ts):
+    """One frame of the 'tracking view' video: zones with live state, tracked people, a status bar."""
+    from datetime import datetime
+
+    from .tracking import draw_people
+    from .vision import annotate
+    states = {mid: mt.snapshot(ts) for mid, mt in engine.machines.items()}
+    for st in states.values():  # name the lifter after the tracked person if there's no tag
+        if st["state"] == "lifting" and not st["member_name"]:
+            who = [tr for tr in tracks if tr.zone == st["id"]]
+            if who:
+                st["member_name"] = who[0].short(names)
+    img = annotate(frame, cam, reading, states, None, tag_names)
+    draw_people(img, tracks, names)
+    active = sum(1 for st in states.values() if st["state"] == "lifting")
+    bar = f"GymTrack  {datetime.fromtimestamp(ts).strftime('%H:%M:%S')}   people {len(tracks)}   lifting in {active} zone{'s' if active != 1 else ''}"
+    cv2.rectangle(img, (0, img.shape[0] - 24), (img.shape[1], img.shape[0]), (12, 10, 8), -1)
+    cv2.putText(img, bar, (10, img.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (235, 235, 235), 1, cv2.LINE_AA)
+    return img
+
+
+def report(cfg: GymConfig, engine: Engine, start: float, end: float, tracker=None) -> dict:
     sets = sorted(engine.recent_sets_all, key=lambda s: s.start)
     names = {m.id: m.name for m in cfg.members}
+
+    def who(s) -> tuple[str, str]:
+        if s.member:
+            return s.member, names.get(s.member, s.member)
+        if s.person is not None:
+            return f"person-{s.person}", f"Person {s.person}"
+        return "guest", "Unidentified"
     machines = {}
     for s in sets:
         r = machines.setdefault(s.machine, {"machine": s.machine, "name": (cfg.machine(s.machine).name if cfg.machine(s.machine) else s.machine),
@@ -100,13 +167,13 @@ def report(cfg: GymConfig, engine: Engine, start: float, end: float) -> dict:
         r["sets"] += 1
         r["reps"] += s.reps
         r["busy_s"] += s.duration
-        r["members"].add(s.member or "guest")
+        r["members"].add(who(s)[0])
     members = {}
     for s in sets:
-        key = s.member or "guest"
-        r = members.setdefault(key, {"member": key, "name": names.get(key, "Guests (no tag)"), "sets": 0, "reps": 0,
+        key, label = who(s)
+        r = members.setdefault(key, {"member": key, "name": label, "sets": 0, "reps": 0,
                                      "lifting_s": 0.0, "rests": [], "machines": set(), "_last": None})
-        if r["_last"] is not None and s.member:
+        if r["_last"] is not None and key != "guest":
             gap = s.start - r["_last"]
             if 0 < gap <= cfg.thresholds.max_rest_s:
                 r["rests"].append(gap)
@@ -129,9 +196,21 @@ def report(cfg: GymConfig, engine: Engine, start: float, end: float) -> dict:
                      "avg_rest_s": round(sum(r["rests"]) / len(r["rests"])) if r["rests"] else None,
                      "machines": sorted(r["machines"])}
                     for r in sorted(members.values(), key=lambda r: -r["lifting_s"])],
-        "sets": [{"member": s.member, "machine": s.machine, "start": round(s.start, 1), "end": round(s.end, 1),
-                  "reps": s.reps, "id": s.id} for s in sets],
+        "sets": [{"member": s.member, "who": who(s)[0], "who_name": who(s)[1], "machine": s.machine,
+                  "start": round(s.start, 1), "end": round(s.end, 1), "reps": s.reps, "id": s.id} for s in sets],
+        "people": _people(tracker, names, sets, cfg) if tracker else None,
     }
+
+
+def _people(tracker, names, sets, cfg) -> dict:
+    """Everyone the tracker followed: time on camera and time in each zone."""
+    tracks = [tr for tr in tracker.all_tracks() if tr.last - tr.first >= 20]  # ignore passers-by
+    rows = []
+    for tr in sorted(tracks, key=lambda tr: -(tr.last - tr.first)):
+        rows.append({"id": tr.id, "name": tr.label(names), "member": tr.member, "first": tr.first, "last": tr.last,
+                     "seen_s": round(tr.last - tr.first), "zones": {z: round(v) for z, v in sorted(tr.dwell.items(), key=lambda kv: -kv[1])},
+                     "sets": sum(1 for s in sets if s.person == tr.id)})
+    return {"tracked": len(tracker.all_tracks()), "shown": len(rows), "rows": rows[:60]}
 
 
 def report_html(rep: dict) -> str:
@@ -150,7 +229,7 @@ def report_html(rep: dict) -> str:
     for m in rep["machines"]:
         bars = "".join(
             f'<span class="b{"" if s["member"] else " g"}" style="left:{(s["start"] - t0) / span * 100:.3f}%;width:{max(0.15, (s["end"] - s["start"]) / span * 100):.3f}%" '
-            f'title="{e(names.get(s["member"], "Guest"))} · {s["reps"]} reps · {clock(s["start"])}–{clock(s["end"])}"></span>'
+            f'title="{e(s.get("who_name") or names.get(s["member"], "Guest"))} · {s["reps"]} reps · {clock(s["start"])}–{clock(s["end"])}"></span>'
             for s in rep["sets"] if s["machine"] == m["machine"])
         lanes.append(f'<div class="lane"><div class="ln">{e(m["name"])}<small>{m["sets"]} sets · {dur(m["busy_s"])} under load · {m["utilisation"]:.0%}</small></div><div class="track">{bars}</div></div>')
     ticks = "".join(f'<span style="left:{k * 10}%;{"transform:translateX(-100%)" if k == 10 else "transform:none" if k == 0 else ""}">{clock(t0 + span * k / 10)}</span>' for k in range(11))
@@ -159,8 +238,18 @@ def report_html(rep: dict) -> str:
         f'<td class=n>{dur(m["resting_s"]) if m["member"] != "guest" else "–"}</td><td class=n>{dur(m["avg_rest_s"]) if m["avg_rest_s"] else "–"}</td><td>{e(", ".join(mnames.get(x, x) for x in m["machines"]))}</td></tr>'
         for m in rep["members"])
     set_rows = "".join(
-        f'<tr><td>{clock(s["start"])}</td><td>{e(names.get(s["member"], "Guest"))}</td><td>{e(next((m["name"] for m in rep["machines"] if m["machine"] == s["machine"]), s["machine"]))}</td>'
+        f'<tr><td>{clock(s["start"])}</td><td>{e(s.get("who_name") or names.get(s["member"], "Guest"))}</td><td>{e(next((m["name"] for m in rep["machines"] if m["machine"] == s["machine"]), s["machine"]))}</td>'
         f'<td class=n>{s["reps"]}</td><td class=n>{dur(s["end"] - s["start"])}</td></tr>' for s in rep["sets"])
+    P = rep.get("people")
+    people_html = ""
+    if P:
+        prow = "".join(
+            f'<tr><td>{e(p["name"])}</td><td class=n>{dur(p["seen_s"])}</td><td class=n>{p["sets"]}</td>'
+            f'<td>{e(" · ".join(f"{mnames.get(z, z)} {dur(v)}" for z, v in list(p["zones"].items())[:3]) or "–")}</td></tr>' for p in P["rows"])
+        heat = (f'<div class="panel"><h2>Where people spent time</h2><img alt="Heatmap of time spent on the floor" style="width:100%;max-width:960px;border-radius:8px;display:block" '
+                f'src="data:image/jpeg;base64,{rep["heatmap_jpg_b64"]}"><p class="mut" style="font-size:12.5px;margin:8px 0 0">Brighter = more person-time standing there.</p></div>') if rep.get("heatmap_jpg_b64") else ""
+        people_html = heat + (f'<div class="panel"><h2>People tracked</h2><p class="mut" style="font-size:12.5px;margin:-6px 0 10px">{P["tracked"]} people tracked; {P["shown"]} on camera for 20 s or more. '
+                              f'Without a member tag a person stays anonymous (Person N).</p><table><thead><tr><th>Person</th><th class=n>On camera</th><th class=n>Sets</th><th>Most time in</th></tr></thead><tbody>{prow}</tbody></table></div>')
     T = rep["totals"]
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GymTrack recording report</title>
@@ -189,5 +278,5 @@ td{{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular
 <div class="panel"><h2>Machine timeline</h2><div class="mut" style="margin-bottom:8px;font-size:12.5px"><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--lift)"></span> member set &nbsp; <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--guest)"></span> guest (no tag) set · hover a bar for details</div>
 {"".join(lanes) or '<p class="mut">No sets detected.</p>'}<div class="axis">{ticks}</div></div>
 <div class="panel"><h2>Members</h2><table><thead><tr><th>Member</th><th class=n>Sets</th><th class=n>Reps</th><th class=n>Lifting</th><th class=n>Resting</th><th class=n>Avg rest</th><th>Machines</th></tr></thead><tbody>{mem_rows or '<tr><td colspan=7 class=mut>No sets.</td></tr>'}</tbody></table></div>
-<div class="panel"><h2>Every set</h2><table><thead><tr><th>Start</th><th>Who</th><th>Machine</th><th class=n>Reps</th><th class=n>Time</th></tr></thead><tbody>{set_rows or '<tr><td colspan=5 class=mut>No sets.</td></tr>'}</tbody></table></div>
+{people_html}<div class="panel"><h2>Every set</h2><table><thead><tr><th>Start</th><th>Who</th><th>Machine</th><th class=n>Reps</th><th class=n>Time</th></tr></thead><tbody>{set_rows or '<tr><td colspan=5 class=mut>No sets.</td></tr>'}</tbody></table></div>
 </main></body></html>"""

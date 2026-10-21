@@ -46,7 +46,7 @@ class Thresholds:
     lift_on: float = 0.02       # fraction of zone pixels moving to count as lifting
     lift_off: float = 0.008     # below this the lifter is considered resting
     on_hold_s: float = 1.0      # motion must persist this long to start a set
-    off_hold_s: float = 2.0     # stillness must persist this long to end a set
+    off_hold_s: float = 6.0     # stillness must persist this long to end a set (pauses to brace or re-rack stay in the set)
     min_set_s: float = 4.0      # shorter bursts are discarded (walk-throughs, bumps)
     tag_hold_s: float = 8.0     # keep a member on a machine this long after the tag was last seen
     max_rest_s: float = 300.0   # gaps longer than this are not counted as rest

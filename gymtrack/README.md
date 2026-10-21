@@ -25,6 +25,31 @@ cameras (RTSP / NVR / USB / file) -> vision.py (tags + zone motion) -> engine.py
                                        index.html dashboard <- api.py (FastAPI) <-> store.py (SQLite)
 ```
 
+## People tracking (new)
+
+GymTrack also detects and tracks every person in view (YOLOX-S via OpenCV, Apache-2.0; `python -m gymtrack models`
+downloads it). Each person keeps an ID while moving across the floor; members are named by their tag, everyone else
+is `#ID`. This gives:
+
+- **time per person in every zone**, and a heatmap of where people spend time
+- **sets credited to the person standing in the zone**, even without a tag
+- the **"planted person" rule**: a set only counts if someone stands upright and in place in the zone for most of it.
+  On real garage-gym footage this cut false sets from about 45 to 0 in 12 minutes while keeping all 3 real sets.
+
+`python -m gymtrack analyse video.mp4 --config gym.json --video-out tracked.mp4` writes a video with the tracking drawn on.
+
+## Member app
+
+`member.html` (served at `/member` by the server) is what members see on their phone: no video, only their own data.
+Today (live status: lifting with rep count, or resting with a rest timer against their usual rest), **Time** (where
+their time went: per machine/area, lifting vs resting, today / 7 days / 30 days), Progress and History.
+
+## Real footage
+
+Tested on real recorded gym footage from public Twitch streams (a CrossFit box's fixed wall camera, 8-15 people, and a
+garage gym's fixed camera). This footage is not in the repo: the people in it never agreed to be filmed, so use it for
+internal testing only.
+
 ## Run it
 
 ```bash

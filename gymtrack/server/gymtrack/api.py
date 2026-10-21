@@ -94,6 +94,11 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
     def index():
         return FileResponse(DASHBOARD)
 
+    @app.get("/member", include_in_schema=False)
+    @app.get("/member.html", include_in_schema=False)
+    def member_app():
+        return FileResponse(DASHBOARD.parent / "member.html")
+
     app.mount("/assets", StaticFiles(directory=DASHBOARD.parent / "assets"), name="assets")
 
     # -- read --------------------------------------------------------------
@@ -187,6 +192,8 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
         if unknown:
             raise HTTPException(400, f"unknown machines: {unknown}")
         w.analyzer.set_zones([Zone(z.machine, z.polygon) for z in zones])
+        if w.tracker:
+            w.tracker.set_zones(w.cam.zones)
         cfg.save()
         return w.info()
 

@@ -74,6 +74,15 @@ class CameraWorker(threading.Thread):
         super().__init__(daemon=True, name=f"cam-{cam.id}")
         self.cam, self.cfg, self.engine = cam, cfg, engine
         self.analyzer = FrameAnalyzer(cam)
+        self.tracker = None
+        if getattr(cam, "people", True) and not cam.source.startswith("sim:"):
+            try:
+                from .tracking import DEFAULT_MODEL, PeopleTracker, PersonDetector
+                if DEFAULT_MODEL.exists():
+                    self.tracker = PeopleTracker(cam.zones, PersonDetector())
+            except Exception as exc:  # no model / no DNN support: zone tracking still works
+                self.error = f"people tracking off: {exc}"
+        self._tracks = []
         self.stop_evt = threading.Event()
         self.status = "starting"
         self.error: str | None = None
@@ -114,6 +123,10 @@ class CameraWorker(threading.Thread):
                         h = int(frame.shape[0] * self.cam.width / frame.shape[1])
                         frame = cv2.resize(frame, (self.cam.width, h), interpolation=cv2.INTER_AREA)
                     reading = self.analyzer.analyze(frame, now)
+                    if self.tracker:
+                        self._tracks = self.tracker.update(frame, now, reading.tags, self.cfg.member_by_tag)
+                        reading.people = [(tr.id, tr.member, tr.zone, tr.planted) for tr in self._tracks]
+                        reading.tracking = True
                     self.engine.ingest(reading)
                     with self._lock:
                         self._frame, self._reading, self._mask = frame, reading, self.analyzer.last_motion_mask
@@ -138,7 +151,10 @@ class CameraWorker(threading.Thread):
             snap = self.engine.snapshot()
             states = {m["id"]: m for m in snap["machines"]}
             names = {m.tag: m.name for m in self.cfg.members}
-            frame = annotate(frame, self.cam, reading, states, mask, names)
+            frame = annotate(frame, self.cam, reading, states, None, names)
+            if self.tracker:
+                from .tracking import draw_people
+                draw_people(frame, list(self._tracks), {m.id: m.name for m in self.cfg.members})
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
         return buf.tobytes() if ok else None
 

@@ -103,8 +103,32 @@ class Store:
             if s["weight_kg"]:
                 h[-1]["top_kg"] = max(h[-1]["top_kg"] or 0, s["weight_kg"])
         recent = self._all("SELECT id,machine,start,end,reps,weight_kg FROM sets WHERE member=? ORDER BY start DESC LIMIT 30", (member,))
+        # time spent per machine/area: occupancy (incl. rests there) and time under load
+        usage = self._all("SELECT machine, start, end FROM usage WHERE member=? AND start>=?", (member, since))
+        areas: dict[str, dict] = {}
+        for s_ in sets:
+            a = areas.setdefault(s_["machine"], {"lifting_s": 0.0, "time_s": 0.0, "by_day": {}, "lift_by_day": {}})
+            a["lifting_s"] += s_["end"] - s_["start"]
+            d = _day(s_["start"])
+            a["lift_by_day"][d] = a["lift_by_day"].get(d, 0) + s_["end"] - s_["start"]
+        for u in usage:
+            a = areas.setdefault(u["machine"], {"lifting_s": 0.0, "time_s": 0.0, "by_day": {}, "lift_by_day": {}})
+            a["time_s"] += u["end"] - u["start"]
+            d = _day(u["start"])
+            a["by_day"][d] = a["by_day"].get(d, 0) + u["end"] - u["start"]
+        for m, a in areas.items():  # no occupancy recorded (e.g. sets from footage without tags): at least the lifting time
+            a["time_s"] = max(a["time_s"], a["lifting_s"])
+            for d, v in a["lift_by_day"].items():
+                a["by_day"][d] = max(a["by_day"].get(d, 0), v)
+            a["lifting_s"], a["time_s"] = round(a["lifting_s"]), round(a["time_s"])
+        sess_list = []
+        for s_ in reversed(sessions[-30:]):
+            tot = json.loads(s_["totals"]) if s_["totals"] else {}
+            ss = [x for x in sets if x["start"] >= s_["start"] and x["start"] <= (s_["end"] or 9e18)]
+            sess_list.append({"start": s_["start"], "end": s_["end"], **tot, "sets": len(ss), "reps": sum(x["reps"] or 0 for x in ss),
+                              "machines": sorted({x["machine"] for x in ss})})
         return {"days": sorted(by_day.values(), key=lambda d: d["day"]), "machines": dict(per_machine),
-                "recent_sets": recent, "sessions": len(sessions)}
+                "recent_sets": recent, "sessions": len(sessions), "areas": areas, "session_list": sess_list}
 
     def machine_utilisation(self, since: float) -> list[dict]:
         rows = self._all("""SELECT machine, COUNT(*) n, SUM(end-start) busy, COUNT(DISTINCT member) members
@@ -146,6 +170,7 @@ class Store:
                     lift = rest = 0.0
                     sid = self._exec("INSERT INTO sessions(member,start) VALUES(?,?)", (mem.id, start))
                     for mach in rng.sample(machines, k=min(len(machines), rng.randint(3, 5))):
+                        block_start = t
                         kg = round(base_kg[mach] * (1 + 0.18 * progress) / 2.5) * 2.5
                         for _ in range(rng.randint(3, 4)):
                             dur = rng.uniform(25, 50)
@@ -156,6 +181,7 @@ class Store:
                             t += dur + gap
                             lift += dur
                             rest += gap
+                        self._exec("INSERT INTO usage(machine,member,start,end) VALUES(?,?,?,?)", (mach, mem.id, block_start, t))
                         t += rng.uniform(60, 180)
                     totals = {"elapsed_s": round(t - start), "lifting_s": round(lift), "resting_s": round(rest),
                               "other_s": round(t - start - lift - rest)}

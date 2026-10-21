@@ -120,7 +120,7 @@ def test_brief_motion_is_not_a_set():
 def test_fusion_motion_from_one_camera_identity_from_another():
     e = Engine(demo_cfg())
     t = 0.0
-    while t < 20:
+    while t < 25:
         lifting = 3 <= t < 15
         e.ingest(reading("front", t, motion=0.06 if lifting else 0.0))   # sees the bar move, tag hidden
         e.ingest(reading("side", t + 0.05, motion=0.0, tags=[3]))       # sees Jordan's wristband
@@ -133,7 +133,7 @@ def test_fusion_motion_from_one_camera_identity_from_another():
 def test_untagged_lifter_is_a_guest():
     e = Engine(demo_cfg())
     feed(e, 0, 12, motion=0.05)
-    feed(e, 12, 16, motion=0.0)
+    feed(e, 12, 22, motion=0.0)
     assert e.recent_sets and e.recent_sets[0].member is None
 
 
@@ -202,7 +202,7 @@ def test_guest_after_member_leaves_is_not_credited_to_member():
     feed(e, 0, 10, tags=[4])                      # Priya rests at the machine
     feed(e, 10, 12)                               # she leaves; her tag is still "recent"
     feed(e, 12, 25, motion=0.05)                  # an untagged guest lifts
-    feed(e, 25, 30)
+    feed(e, 25, 35)
     assert e.recent_sets and e.recent_sets[-1].member is None
 
 
@@ -248,3 +248,45 @@ def test_upload_recording_runs_in_background(client, tmp_path):
     assert info["report"]["totals"]["sets"] >= 1
     assert "Machine timeline" in c.get(f"/api/recordings/{jid}/report.html").text
     assert c.get("/api/members/alex/progress").json()["recent_sets"]  # results land in members' history
+
+
+# --- people tracking -------------------------------------------------------------
+
+class _ScriptedDetector:
+    """Stands in for the neural detector: returns pre-written boxes per call."""
+    def __init__(self, frames):
+        self.frames = iter(frames)
+
+    def detect(self, img):
+        return next(self.frames, [])
+
+
+def test_tracker_keeps_ids_through_motion_and_a_short_dropout():
+    import numpy as np
+    from gymtrack.config import Zone
+    from gymtrack.tracking import PeopleTracker
+    zones = [Zone("bench", [[0, 0], [200, 0], [200, 360], [0, 360]]), Zone("squat", [[200, 0], [640, 0], [640, 360], [200, 360]])]
+    frames = []
+    for k in range(60):  # A walks right across both zones; B stands still; B is missed for 4 detections
+        a = (20 + k * 6, 100, 40, 120, .9)
+        b = (500, 120, 40, 120, .9)
+        frames.append([a] if 30 <= k < 34 else [a, b])
+    tr = PeopleTracker(zones, _ScriptedDetector(frames), detect_every_s=0.0, min_hits=2)
+    img = np.zeros((360, 640, 3), np.uint8)
+    for k in range(60):
+        tr.update(img, k * 0.34)
+    tracks = tr.all_tracks()
+    assert len(tracks) == 2, [(t.id, t.first, t.last) for t in tracks]
+    walker = min(tracks, key=lambda t: t.dwell.get("squat", 0) - t.dwell.get("bench", 0))
+    assert walker.dwell.get("bench", 0) > 3 and walker.dwell.get("squat", 0) > 3
+
+
+def test_untagged_set_is_credited_to_the_tracked_person():
+    e = Engine(demo_cfg())
+    t = 0.0
+    while t < 25:
+        r = reading("a", t, motion=0.05 if 3 <= t < 15 else 0.0)
+        r.people = [(7, None, "bench")]
+        e.ingest(r)
+        t = round(t + 0.1, 1)
+    assert e.recent_sets and e.recent_sets[0].person == 7 and e.recent_sets[0].member is None

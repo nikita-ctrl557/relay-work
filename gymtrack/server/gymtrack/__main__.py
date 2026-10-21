@@ -33,6 +33,10 @@ def main(argv=None):
     an.add_argument("--start", help='when the recording started, e.g. "2026-10-20 07:30" (default: file time)')
     an.add_argument("--db", help="also store the results in this database (shows up in members' history)")
     an.add_argument("--report", default="report.html", help="HTML report to write (JSON alongside)")
+    an.add_argument("--video-out", help="also write an MP4 showing the tracking (zones, people, live sets)")
+    an.add_argument("--no-people", action="store_true", help="skip person detection/tracking (faster)")
+
+    sub.add_parser("models", help="download the person-detection model (YOLOX-S, Apache-2.0, 35 MB)")
 
     f = sub.add_parser("fetch", help="download a video (e.g. YouTube) and trim it, for testing; needs yt-dlp")
     f.add_argument("url")
@@ -56,6 +60,15 @@ def main(argv=None):
 
     if a.cmd in ("analyse", "analyze"):
         _analyse(a)
+        return
+
+    if a.cmd == "models":
+        import urllib.request
+        from .tracking import DEFAULT_MODEL, MODEL_URL
+        DEFAULT_MODEL.parent.mkdir(parents=True, exist_ok=True)
+        print(f"downloading {MODEL_URL}")
+        urllib.request.urlretrieve(MODEL_URL, DEFAULT_MODEL)
+        print(f"saved {DEFAULT_MODEL} ({DEFAULT_MODEL.stat().st_size / 1e6:.0f} MB)")
         return
 
     if a.cmd == "fetch":
@@ -137,12 +150,17 @@ def _analyse(a):
         print(f"\r  {frac:6.1%}  {int(t // 60):3d} min of video  ({speed:.0f}x real time)", end="", flush=True)
 
     t0 = time.time()
-    rep = analyse(a.video, cfg, cam, store, start_ts=start, on_progress=progress)
+    rep = analyse(a.video, cfg, cam, store, start_ts=start, on_progress=progress,
+                  people=False if a.no_people else None, video_out=a.video_out)
     print(f"\rDone: {rep['video_s'] / 60:.1f} min of video in {time.time() - t0:.0f}s ({rep['speed_x']}x real time)          ")
     print(f"  {rep['totals']['sets']} sets, {rep['totals']['reps']} reps, {rep['totals']['lifting_s'] // 60} min under load, "
           f"{len(rep['machines'])} machines, {len(rep['members'])} people/groups")
     Path(a.report).write_text(report_html(rep))
-    Path(a.report).with_suffix(".json").write_text(json.dumps(rep, indent=1, default=list))
+    Path(a.report).with_suffix(".json").write_text(json.dumps({k: v for k, v in rep.items() if k != "heatmap_jpg_b64"}, indent=1, default=list))
+    if rep.get("people"):
+        print(f"  people: {rep['people']['tracked']} tracked, {rep['people']['shown']} on camera 20 s or more")
+    if a.video_out:
+        print(f"  tracking video: {a.video_out}")
     print(f"  report: {a.report}")
 
 

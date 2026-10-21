@@ -19,6 +19,7 @@ VISIT_GAP_S = 1.5    # a tag unseen this long starts a new visit
 DWELL_S = 2.0        # a tag must stay this long in a zone to occupy the machine...
 DWELL_RADIUS_PX = 60 # ...without moving further than this (walking past doesn't count)
 SET_PRESENCE = 0.3   # share of a set's frames a tag must appear in to be credited
+PLANTED_SHARE = 0.4  # with people tracking, share of a set's frames someone must stand planted in the zone
 LIVE_REPS_EVERY_S = 1.0
 MAX_SET_FRAMES = 3000  # per camera; ~5 minutes at 10 fps
 
@@ -32,6 +33,7 @@ class SetRecord:
     reps: int
     cameras: list[str]
     id: int | None = None
+    person: int | None = None   # people-tracker ID of who did it (anonymous if no tag)
 
     @property
     def duration(self) -> float:
@@ -54,6 +56,8 @@ class MachineTracker:
         self.tag_seen: dict[int, float] = {}   # tag -> last time seen in this zone
         self.tag_since: dict[int, float] = {}  # tag -> since when it has stayed (roughly) in place
         self.tag_anchor: dict[int, tuple[float, float]] = {}
+        self.set_people: Counter = Counter()
+        self.set_tracked_frames = self.set_planted = 0
         self.set_frames = 0
         self.ema = 0.0
         self.last_t: float | None = None
@@ -67,7 +71,8 @@ class MachineTracker:
         self.occupied_since: float | None = None
 
     # -- signal fusion -----------------------------------------------------
-    def ingest(self, cam: str, t: float, motion: float, thumb, tags: list[int], positions: dict | None = None):
+    def ingest(self, cam: str, t: float, motion: float, thumb, tags: list[int], positions: dict | None = None,
+               people: list | None = None, tracking: bool = False):
         th = self.e.cfg.thresholds
         self.cams[cam] = _CamZone(t, motion)
         for tag in tags:
@@ -86,6 +91,14 @@ class MachineTracker:
         if self.state == "lifting":
             self.set_cams.add(cam)
             self.set_frames += 1
+            if tracking:
+                self.set_tracked_frames += 1
+            for pid, member, zone, *rest in people or []:
+                if zone == self.id:
+                    self.set_people[(pid, member)] += 1
+                    if rest and rest[0]:
+                        self.set_planted += 1
+                        break
         if thumb is not None:
             self.thumbs.setdefault(cam, deque(maxlen=MAX_SET_FRAMES)).append((t, thumb))
 
@@ -125,7 +138,9 @@ class MachineTracker:
                     self.state = "lifting"
                     self.set_start = self.above_since
                     self.set_tags = Counter()
+                    self.set_people = Counter()
                     self.set_frames = 0
+                    self.set_tracked_frames = self.set_planted = 0
                     self.set_cams = {c for c, z in self.cams.items() if t - z.t <= FUSE_WINDOW_S}
                     self._live_reps, self._live_at = 0, -1e9
                     self.below_since = None
@@ -146,10 +161,19 @@ class MachineTracker:
         self.state, self.above_since, self.below_since, self.set_start = "idle", None, None, None
         if end - start < th.min_set_s:
             return
+        # with people tracking: someone must stand planted in the zone for a good part of the set,
+        # otherwise it was walking past, kids playing, stretching on the floor...
+        if self.set_tracked_frames >= 10 and self.set_people and self.set_planted < PLANTED_SHARE * self.set_tracked_frames:
+            return
         member = self._set_member() or self._occupant_if_seen()
+        person = None
+        if self.set_people:  # the tracked person who stood in this zone for most of the set
+            (pid, pmember), n = self.set_people.most_common(1)[0]  # noqa
+            if n >= SET_PRESENCE * self.set_frames:
+                person, member = pid, member or pmember
         reps = max(1, self._count(start, end))  # too short to see a repeat, but a set is at least one rep
         self._trim(end)
-        self.e._record_set(SetRecord(member, self.id, start, end, reps, sorted(self.set_cams)))
+        self.e._record_set(SetRecord(member, self.id, start, end, reps, sorted(self.set_cams), person=person))
 
     def _trim(self, before: float):
         for q in self.thumbs.values():
@@ -256,7 +280,7 @@ class Engine:
                 mt = self.machines.get(z.machine)
                 if mt is None:
                     mt = self.machines[z.machine] = MachineTracker(z.machine, self)
-                mt.ingest(r.camera, r.t, z.motion, z.thumb, z.tags, r.tags)
+                mt.ingest(r.camera, r.t, z.motion, z.thumb, z.tags, r.tags, r.people, r.tracking)
             for s in self.sessions.values():
                 s.location = next((mid for mid, mt in self.machines.items() if mt.occupant == s.member), None)
             self._expire(r.t)

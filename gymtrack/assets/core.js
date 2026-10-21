@@ -40,7 +40,7 @@ function nearPoly(x, y, poly) { if (pointInPoly(x, y, poly)) return true; const 
 /* ================================================================
    Tracking engine: a port of server/gymtrack/engine.py
    ================================================================ */
-const TH = {lift_on: .02, lift_off: .008, on_hold_s: 1, off_hold_s: 2, min_set_s: 4, tag_hold_s: 8, max_rest_s: 300, checkout_s: 600};
+const TH = {lift_on: .02, lift_off: .008, on_hold_s: 1, off_hold_s: 6, min_set_s: 4, tag_hold_s: 8, max_rest_s: 300, checkout_s: 600};
 const FUSE_WINDOW_S = 1, VISIT_GAP_S = 1.5, DWELL_S = 2, DWELL_RADIUS_PX = 60, SET_PRESENCE = .3;
 
 /* Rep counting from how often the zone repeats: a port of server/gymtrack/reps.py */
@@ -250,7 +250,15 @@ class MemoryStore {
       let h = pm.history[pm.history.length - 1]; if (!h || h.day !== day) pm.history.push(h = {day, sets: 0, reps: 0, top_kg: null});
       h.sets++; h.reps += s.reps; if (s.weight_kg) h.top_kg = Math.max(h.top_kg || 0, s.weight_kg);
     }
-    return {days: Object.values(days).sort((a, b) => a.day < b.day ? -1 : 1), machines, sessions: sessions.length,
+    const areas = {};
+    for (const s of sets) { const a = areas[s.machine] ||= {lifting_s: 0, time_s: 0, by_day: {}, lift_by_day: {}}; a.lifting_s += s.end - s.start; const d = dayKey(s.start); a.lift_by_day[d] = (a.lift_by_day[d] || 0) + s.end - s.start; }
+    for (const u of this.usage) if (u.member === member) { const a = areas[u.machine] ||= {lifting_s: 0, time_s: 0, by_day: {}, lift_by_day: {}}; a.time_s += u.end - u.start; const d = dayKey(u.start); a.by_day[d] = (a.by_day[d] || 0) + u.end - u.start; }
+    for (const a of Object.values(areas)) { a.time_s = Math.max(a.time_s, a.lifting_s); for (const [d, v] of Object.entries(a.lift_by_day)) a.by_day[d] = Math.max(a.by_day[d] || 0, v); }
+    const session_list = sessions.slice(-30).reverse().map(s => {
+      const ss = sets.filter(x => x.start >= s.start && x.start <= (s.end ?? 9e18));
+      return {start: s.start, end: s.end, ...(s.totals || {}), sets: ss.length, reps: ss.reduce((a, x) => a + x.reps, 0), machines: [...new Set(ss.map(x => x.machine))].sort()};
+    });
+    return {days: Object.values(days).sort((a, b) => a.day < b.day ? -1 : 1), machines, sessions: sessions.length, areas, session_list,
       recent_sets: sets.slice(-30).reverse().map(s => ({id: s.id, machine: s.machine, start: s.start, end: s.end, reps: s.reps, weight_kg: s.weight_kg}))};
   }
   utilisation(since) {
@@ -278,12 +286,14 @@ class MemoryStore {
           let lift = 0, rest = 0; const sid = this.openSession(mem.id, start);
           const chosen = [...machines].sort(() => rng() - .5).slice(0, 3 + Math.floor(rng() * 3));
           for (const mach of chosen) {
+            const blockStart = t;
             const kg = Math.round(base[mach] * (1 + .18 * prog) / 2.5) * 2.5, n = 3 + Math.floor(rng() * 2);
             for (let k = 0; k < n; k++) {
               const dur = uni(25, 50), reps = Math.max(4, Math.round(8 + 3 * prog + (rng() - .5) * 2.4));
               const id = this.addSet({member: mem.id, machine: mach, start: t, end: t + dur, reps}, sid); this.sets[id - 1].weight_kg = kg;
               const gap = uni(70, 150) * (1 - .15 * prog); t += dur + gap; lift += dur; rest += gap;
             }
+            this.usage.push({machine: mach, member: mem.id, start: blockStart, end: t});
             t += uni(60, 180);
           }
           this.closeSession(sid, t, {elapsed_s: t - start, lifting_s: lift, resting_s: rest, other_s: t - start - lift - rest});
@@ -568,3 +578,108 @@ class ServerSource {
   async addCamera(spec) { if (spec.source === "webcam") throw new Error("Pick 'USB camera on the server' for a camera plugged into the server."); const c = await this.j("api/cameras", {method: "POST", body: JSON.stringify(spec)}); await this.config(); return c; }
 }
 
+
+/* ================================================================
+   ReplaySource: real recorded footage + GymTrack's tracking of it, played back in sync.
+   assets/replay/manifest.json lists cameras; each has an annotated video and a per-second log.
+   ================================================================ */
+class ReplaySource {
+  constructor(manifest, base) {
+    this.mode = "replay"; this.base = base; this.speed = 1; this.weights = {};
+    this.cams = manifest.cameras;
+    this.cfg = {gym: manifest.gym, members: [], machines: [], cameras: []};
+    for (const c of this.cams) {
+      c.data.timeline.sort((a, b) => a.t - b.t);
+      this.cfg.machines.push(...c.machines);
+      this.cfg.cameras.push({id: c.id, name: c.name, source: c.source, fps: 10, zones: c.zones});
+      for (const p of c.data.people.rows.filter(p => p.seen_s >= 45)) this.cfg.members.push({id: `${c.id}-${p.id}`, name: `${c.short} #${p.id}`, tag: p.id, cam: c.id, pid: p.id});
+      const v = document.createElement("video");
+      Object.assign(v, {muted: true, loop: true, playsInline: true, autoplay: true, preload: "auto"});
+      for (const [f, type] of [[c.video, "video/mp4"], [c.video_webm, "video/webm"]]) if (f) v.append(Object.assign(document.createElement("source"), {src: base + f, type}));
+      v.setAttribute("muted", ""); v.setAttribute("playsinline", "");
+      v.addEventListener("canplay", () => v.play().catch(() => {}), {once: true});
+      c.el = v;
+    }
+    const kick = () => this.cams.forEach(c => c.el.play().catch(() => {}));
+    addEventListener("pointerdown", kick, {once: true});
+  }
+  set speed(v) { this._speed = v; this.cams?.forEach(c => c.el.playbackRate = v); }
+  get speed() { return this._speed; }
+  ct(c) { return c.el.currentTime || 0; }
+  at(c, ct) { const tl = c.data.timeline; let lo = 0, hi = tl.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (tl[m].t <= ct) lo = m; else hi = m - 1; } return tl[lo]; }
+  abs(c, x) { return Date.now() / 1000 - this.ct(c) + x; }   // video seconds -> wall clock for display
+  personStats(c, pid, ct) {
+    const done = c.data.sets.filter(s => s.pid === pid && s.t1 <= ct), seen = c.data.timeline.filter(e => e.t <= ct && e.p.some(p => p[0] === pid));
+    if (!seen.length) return null;
+    const first = seen[0].t, rests = [];
+    for (let i = 1; i < done.length; i++) { const g = done[i].t0 - done[i - 1].t1; if (g > 0 && g <= 300) rests.push(g); }
+    const lift = done.reduce((a, s) => a + s.t1 - s.t0, 0), rest = rests.reduce((a, b) => a + b, 0), el = ct - first;
+    return {first, done, lift, rest, rests, el, visible: (this.at(c, ct).p.find(p => p[0] === pid) || null)};
+  }
+  async config() { return this.cfg; }
+  async live() {
+    const machines = [], members = [], recent = [];
+    for (const c of this.cams) {
+      const ct = this.ct(c), e = this.at(c, ct), names = {};
+      for (const m of this.cfg.members.filter(m => m.cam === c.id)) names[m.pid] = m.name;
+      for (const [id, lifting, reps, el] of e.m) {
+        const mach = c.machines.find(m => m.id === id) || {id, name: id, kind: ""};
+        const cur = c.data.sets.find(s => s.m === id && s.t0 <= ct && ct <= s.t1 + 1);
+        const who = e.p.find(p => p[2] === id && p[3]) || e.p.find(p => p[2] === id);
+        const pid = cur?.pid ?? (who ? who[0] : null), mem = pid != null ? this.cfg.members.find(m => m.cam === c.id && m.pid === pid) : null;
+        machines.push({id, name: mach.name, kind: mach.kind, state: lifting ? "lifting" : "idle", motion: 0, member: !lifting && who && who[3] && mem ? mem.id : lifting && mem ? mem.id : null,
+          member_name: lifting ? (mem?.name || (pid != null ? `#${pid}` : null)) : mem?.name || null, guest: lifting && !mem, reps, set_elapsed: el, cameras: [c.id]});
+      }
+      for (const s of c.data.sets.filter(s => s.t1 <= ct)) {
+        const mem = this.cfg.members.find(m => m.cam === c.id && m.pid === s.pid);
+        recent.push({member: mem?.id || null, machine: s.m, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, duration: s.t1 - s.t0, cameras: [c.id]});
+      }
+      for (const m of this.cfg.members.filter(m => m.cam === c.id)) {
+        const st = this.personStats(c, m.pid, ct), row = {id: m.id, name: m.name, tag: m.pid, status: "away"};
+        if (st) {
+          const lifting = machines.some(x => x.state === "lifting" && x.member === m.id), vis = st.visible;
+          row.status = lifting ? "lifting" : vis && vis[2] && vis[3] ? "resting" : vis ? "on floor" : "away";
+          const last = st.done[st.done.length - 1], curRest = row.status !== "lifting" && last ? ct - last.t1 : null;
+          Object.assign(row, {elapsed_s: st.el, lifting_s: st.lift, resting_s: st.rest + (row.status === "resting" && curRest && curRest <= 300 ? curRest : 0), other_s: Math.max(0, st.el - st.lift - st.rest),
+            sets: st.done.length, reps: st.done.reduce((a, s) => a + s.reps, 0), location: vis ? vis[2] : null, camera: c.id,
+            avg_rest_s: st.rests.length ? st.rest / st.rests.length : null, session_start: this.abs(c, st.first), current_rest_s: row.status === "resting" && curRest != null ? curRest : undefined,
+            timeline: st.done.map(s => [this.abs(c, s.t0), this.abs(c, s.t1), s.m, s.reps]), machines: {}});
+          if (row.status === "away") delete row.current_rest_s;
+        }
+        members.push(row);
+      }
+    }
+    recent.sort((a, b) => b.end - a.end);
+    return {t: Date.now() / 1000, machines, members, recent_sets: recent.slice(0, 25),
+      camera_status: this.cams.map(c => ({id: c.id, name: c.name, source: c.source, status: c.el.readyState >= 2 ? "live" : "reconnecting", fps: c.el.readyState >= 2 ? 10 * (this.speed || 1) : 0, zones: c.zones}))};
+  }
+  async progress(id) {
+    const m = this.cfg.members.find(x => x.id === id), c = this.cams.find(x => x.id === m?.cam);
+    if (!m || !c) return {days: [], machines: {}, sessions: 0, areas: {}, session_list: [], recent_sets: []};
+    const ct = this.ct(c), st = this.personStats(c, m.pid, ct), day = dayKey(Date.now() / 1000), machines = {}, areas = {};
+    for (const [i, s] of (st?.done || []).entries()) {
+      const pm = machines[s.m] ||= {sets: 0, reps: 0, best_reps: 0, best_kg: null, time_s: 0, history: [{day, sets: 0, reps: 0, top_kg: null}]};
+      const kg = this.weights[`${id}:${i}`]; pm.sets++; pm.reps += s.reps; pm.best_reps = Math.max(pm.best_reps, s.reps); pm.time_s += s.t1 - s.t0;
+      pm.history[0].sets++; pm.history[0].reps += s.reps; if (kg) { pm.best_kg = Math.max(pm.best_kg || 0, kg); pm.history[0].top_kg = Math.max(pm.history[0].top_kg || 0, kg); }
+    }
+    const row = c.data.people.rows.find(p => p.id === m.pid);
+    for (const [zone, secs] of Object.entries(row?.zones || {})) { const frac = Math.min(1, ct / Math.max(1, c.data.duration)); areas[zone] = {time_s: secs * frac, lifting_s: 0, by_day: {[day]: secs * frac}, lift_by_day: {}}; }
+    for (const s of st?.done || []) { const a = areas[s.m] ||= {time_s: 0, lifting_s: 0, by_day: {}, lift_by_day: {}}; a.lifting_s += s.t1 - s.t0; a.lift_by_day[day] = (a.lift_by_day[day] || 0) + s.t1 - s.t0; a.by_day[day] = Math.max(a.by_day[day] || 0, a.lift_by_day[day]); a.time_s = Math.max(a.time_s, a.lifting_s); }
+    return {days: st ? [{day, lifting_s: 0, resting_s: 0, elapsed_s: 0, sets: st.done.length, reps: st.done.reduce((a, s) => a + s.reps, 0), volume_kg: 0}] : [], machines, sessions: st ? 1 : 0, areas, session_list: [],
+      recent_sets: (st?.done || []).map((s, i) => ({id: `${id}:${i}`, machine: s.m, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, weight_kg: this.weights[`${id}:${i}`] ?? null})).reverse()};
+  }
+  async utilisation() {
+    const out = {};
+    for (const c of this.cams) { const ct = this.ct(c); for (const s of c.data.sets.filter(s => s.t1 <= ct)) { const r = out[s.m] ||= {machine: s.m, n: 0, busy: 0, members: new Set()}; r.n++; r.busy += s.t1 - s.t0; if (s.pid != null) r.members.add(s.pid); } }
+    return Object.values(out).map(r => ({...r, members: r.members.size}));
+  }
+  async hourly() { const h = new Date().getHours(), out = {}; for (const u of await this.utilisation()) { out[u.machine] = Array(24).fill(0); out[u.machine][h] = u.n; } return out; }
+  async setWeight(id, kg) { this.weights[id] = kg; }
+  async recordings() { return this.cams.map(c => ({id: c.id, status: "done", progress: 1, start_ts: Date.now() / 1000 - 3600, video_s: c.data.duration, speed: c.speed_x || 0, totals: {sets: c.data.sets.length, reps: c.data.sets.reduce((a, s) => a + s.reps, 0)}, report_url: this.base + c.report, name: `${c.name} · real footage`})); }
+  view(cam) { return this.cams.find(c => c.id === cam.id).el; }
+  async frame(cam) { return this.cams.find(c => c.id === cam.id).el; }
+  async setZones() { throw new Error("This demo replays recorded footage. Run the GymTrack server to connect cameras and edit their zones."); }
+  async addCamera() { throw new Error("This demo replays recorded footage. Run the GymTrack server to connect your own cameras."); }
+  async removeCamera() { throw new Error("The recorded demo cameras can't be removed."); }
+  async addMember() { throw new Error("People in the recorded footage are anonymous. Run the GymTrack server to add members with tags."); }
+}

@@ -36,6 +36,8 @@ class FrameReading:
     t: float
     zones: list[ZoneReading]
     tags: dict[int, tuple[float, float]]  # every tag seen in frame -> centre (x, y)
+    people: list = field(default_factory=list)  # (track id, member id or None, zone or None, planted) when people tracking is on
+    tracking: bool = False                       # True when a people tracker produced `people` for this frame
 
 
 class FrameAnalyzer:
