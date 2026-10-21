@@ -9,7 +9,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d5bd8'/%3E%3Crect x='7' y='9' width='4' height='14' rx='1.5' fill='white'/%3E%3Crect x='21' y='9' width='4' height='14' rx='1.5' fill='white'/%3E%3Crect x='11' y='14.5' width='10' height='3' fill='white'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
 <link rel="stylesheet" href="assets/app.css">
 </head>
 <body>
@@ -19,17 +19,11 @@
       <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--brand)"/><rect x="7" y="9" width="4" height="14" rx="1.5" fill="#fff"/><rect x="21" y="9" width="4" height="14" rx="1.5" fill="#fff"/><rect x="11" y="14.5" width="10" height="3" fill="#fff"/></svg>
       <span class="brand-name">Gym<span>Track</span></span>
     </a>
-    <div class="gym-card"><span class="gi" id="gymInitial">G</span><div><b id="gymName">Loading…</b><small id="gymMeta"></small></div></div>
+    <button class="site-btn" id="siteBtn" aria-haspopup="menu" aria-expanded="false"><span class="gi" id="gymInitial">G</span><span class="st"><b id="gymName">Loading…</b><small id="gymMeta"></small></span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10l4-4 4 4M8 14l4 4 4-4"/></svg></button>
     <nav class="nav" id="sideNav"></nav>
     <div class="side-foot">
-      <a class="btn secondary" href="member.html" target="_blank" rel="noopener" style="justify-content:flex-start">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>Member app preview</a>
       <div class="sys" id="sysBox">Starting…</div>
-      <div class="theme-switch" role="group" aria-label="Theme">
-        <button data-theme-set="light" aria-pressed="false">Light</button>
-        <button data-theme-set="auto" aria-pressed="true">Auto</button>
-        <button data-theme-set="dark" aria-pressed="false">Dark</button>
-      </div>
+      <a class="side-link" href="member.html" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>Member app preview<svg class="ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
     </div>
   </aside>
 
@@ -41,8 +35,16 @@
       </a>
       <span class="sysdot" id="sysDot"></span>
     </header>
+    <div class="gbar" id="gbar">
+      <div class="gsearch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg><input id="gsearch" type="search" placeholder="Search members, equipment, pages…" aria-label="Search" autocomplete="off"><kbd>/</kbd><div class="gres" id="gres" role="listbox" hidden></div></div>
+      <div class="gright">
+        <span class="gstatus" id="gstatus"></span>
+        <button class="gicon" id="bellBtn" aria-label="Notifications" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg><span class="badge" id="bellN" hidden></span></button>
+        <button class="user-btn" id="userBtn" aria-haspopup="menu" aria-expanded="false"><span class="uav" id="userAv">GO</span><span class="un"><b id="userName">Gym owner</b><small id="userRole">Owner</small></span></button>
+      </div>
+    </div>
     <div class="topbar" id="topbar">
-      <div><h1 id="pageTitle">Floor</h1><div class="sub" id="pageSub"></div></div>
+      <div><div class="crumb" id="pageCrumb"></div><h1 id="pageTitle">Floor</h1><div class="sub" id="pageSub"></div></div>
       <div class="actions" id="pageActions"></div>
     </div>
     <main class="content" id="view" tabindex="-1"></main>
@@ -51,6 +53,7 @@
 <nav class="tabbar" id="tabNav" aria-label="Main navigation"></nav>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <div id="tip" role="tooltip"></div>
+<div class="pop" id="pop" hidden></div>
 <script type="importmap">{"imports": {"three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/", "@sparkjsdev/spark": "https://cdn.jsdelivr.net/npm/@sparkjsdev/spark@2.2.0/dist/spark.module.js"}}</script>
 <script src="assets/core.js"></script>
 <script src="assets/ui.js"></script>

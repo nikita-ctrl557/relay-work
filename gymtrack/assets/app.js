@@ -4,35 +4,59 @@
 /* ---------------- app state + router ---------------- */
 let src, cfg, live = null, util = {}, utilAt = 0, page = null;
 const PAGES = [
-  {id: "floor", label: "Floor", icon: "floor", sub: () => `Live from ${cfg.cameras.length} cameras`},
-  {id: "members", label: "Members", icon: "members", sub: () => `${cfg.members.length} members · ${live ? live.members.filter(m => m.status !== "away").length : 0} in the gym`},
-  {id: "map", label: "Floor map", icon: "map", sub: () => "Bird's-eye view from the cameras"},
-  {id: "machines", label: "Machines", icon: "machines", sub: () => `${cfg.machines.length} tracked machines`},
-  {id: "insights", label: "Insights", icon: "insights", sub: () => "Traffic, usage and what to change"},
-  {id: "recordings", label: "Recordings", icon: "recordings", sub: () => "Analyse footage exported from your cameras"},
-  {id: "cameras", label: "Cameras", icon: "cameras", sub: () => `${cfg.cameras.length} connected · zones tell GymTrack where each machine is`},
+  {id: "floor", label: "Live floor", group: "Operations", icon: "floor", sub: () => `Live from ${cfg.cameras.length} cameras`},
+  {id: "map", label: "Floor map", group: "Operations", icon: "map", sub: () => "The gym rebuilt in 3D from the cameras"},
+  {id: "machines", label: "Equipment", group: "Operations", icon: "machines", sub: () => `${cfg.machines.length} tracked stations`},
+  {id: "members", label: "Members", group: "Members", icon: "members", sub: () => `${cfg.members.length} members · ${live ? live.members.filter(m => m.status !== "away").length : 0} in the gym`},
+  {id: "insights", label: "Insights", group: "Analytics", icon: "insights", sub: () => "Traffic, usage and what to change"},
+  {id: "recordings", label: "Recordings", group: "Analytics", icon: "recordings", sub: () => "Analyse footage exported from your cameras"},
+  {id: "cameras", label: "Cameras", group: "Administration", icon: "cameras", sub: () => `${cfg.cameras.length} connected · zones tell GymTrack where each machine is`},
+  {id: "settings", label: "Settings", group: "Administration", icon: "settings", sub: () => "Organisation, users, privacy and integrations"},
 ];
+/* role-based access: which pages each role sees (enforced in the nav and the router) */
+const ROLES = {
+  owner: {label: "Owner", desc: "Everything, including users, billing and data settings", pages: PAGES.map(p => p.id)},
+  manager: {label: "Manager", desc: "Operations, members, analytics and cameras", pages: ["floor", "map", "machines", "members", "insights", "recordings", "cameras"]},
+  coach: {label: "Coach", desc: "Members' training data and the live floor", pages: ["floor", "map", "machines", "members", "insights"]},
+  frontdesk: {label: "Front desk", desc: "Who is in the gym right now", pages: ["floor", "members"]},
+};
+const role = () => ROLES[store.get("role", "owner")] ? store.get("role", "owner") : "owner";
+const canSee = id => ROLES[role()].pages.includes(id === "member" ? "members" : id);
+function audit(action, detail = "") { const log = store.get("audit", []); log.unshift({t: Date.now(), who: ROLES[role()].label, action, detail}); store.set("audit", log.slice(0, 300)); }
+function downloadCSV(name, rows) {
+  const csv = rows.map(r => r.map(v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(",")).join("\n");
+  const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([csv], {type: "text/csv"})), download: name});
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  audit("Exported data", name); toast(`Exported ${rows.length - 1} rows to ${name}`);
+}
 function parseRoute() {
   const h = decodeURIComponent(location.hash.slice(1)) || "floor";
   if (h.startsWith("member-")) return {id: "member", arg: h.slice(7)};
   return {id: PAGES.some(p => p.id === h) ? h : "floor"};
 }
-function navHTML() {
+function navHTML(grouped) {
   const counts = {members: live ? live.members.filter(m => m.status !== "away").length : "", cameras: cfg.cameras.length};
   const cur = parseRoute().id === "member" ? "members" : parseRoute().id;
-  return PAGES.map(p => `<a href="#${p.id}" ${p.id === cur ? 'aria-current="page"' : ""}>${IC[p.icon]}<span>${p.label}</span>${counts[p.id] !== undefined && counts[p.id] !== "" ? `<span class="count">${counts[p.id]}</span>` : ""}</a>`).join("");
+  let html = "", g = null;
+  for (const p of PAGES.filter(p => canSee(p.id))) {
+    if (grouped && p.group !== g) { g = p.group; html += `<div class="nav-label">${g}</div>`; }
+    html += `<a href="#${p.id}" ${p.id === cur ? 'aria-current="page"' : ""}>${IC[p.icon]}<span>${p.label}</span>${counts[p.id] !== undefined && counts[p.id] !== "" ? `<span class="count">${counts[p.id]}</span>` : ""}</a>`;
+  }
+  return html;
 }
-function renderNav() { $("#sideNav").innerHTML = `<div class="nav-label">Workspace</div>` + navHTML(); $("#tabNav").innerHTML = navHTML(); }
+function renderNav() { $("#sideNav").innerHTML = navHTML(true); $("#tabNav").innerHTML = navHTML(false); }
 
 function go() {
   const r = parseRoute();
   page?.unmount?.();
   const view = $("#view"); view.innerHTML = "";
-  page = r.id === "member" ? MemberPage(r.arg) : ({floor: FloorPage, members: MembersPage, map: MapPage, machines: MachinesPage, insights: InsightsPage, recordings: RecordingsPage, cameras: CamerasPage})[r.id]();
+  page = !canSee(r.id) ? NoAccessPage(r.id) : r.id === "member" ? MemberPage(r.arg) : ({floor: FloorPage, members: MembersPage, map: MapPage, machines: MachinesPage, insights: InsightsPage, recordings: RecordingsPage, cameras: CamerasPage, settings: SettingsPage})[r.id]();
+  const pg = PAGES.find(p => p.id === (r.id === "member" ? "members" : r.id));
+  $("#pageCrumb").innerHTML = pg ? `${esc(pg.group)} <span>/</span> ${r.id === "member" ? `<a href="#members">Members</a> <span>/</span> Profile` : esc(pg.label)}` : "";
   $("#pageTitle").textContent = page.title;
   $("#pageSub").textContent = page.sub?.() || "";
   $("#pageActions").innerHTML = ""; page.actions?.($("#pageActions"));
-  document.title = page.title === "Floor" ? "GymTrack" : `${page.title} · GymTrack`;
+  document.title = `${page.title} · GymTrack`;
   page.mount(view); renderNav(); page.update?.();
   scrollTo(0, 0);
 }
@@ -44,7 +68,7 @@ function FloorPage() {
   let focus = null, feedKeys = new Set(), wall;
   const clock = el(`<span class="clock num"></span>`);
   return {
-    title: "Floor", sub: () => `Live from ${cfg.cameras.length} cameras · ${cfg.machines.length} machines`,
+    title: "Live floor", sub: () => `Live from ${cfg.cameras.length} cameras · ${cfg.machines.length} stations`,
     actions(a) {
       a.append(clock);
       if (src.mode !== "server") a.append(el(`<select class="input" id="speed" aria-label="Playback speed" style="width:auto"><option value="1">Real time</option><option value="3">3× speed</option></select>`));
@@ -170,6 +194,7 @@ function MembersPage() {
   return {
     title: "Members", sub: PAGES.find(p => p.id === "members").sub,
     actions(a) {
+      a.append(el(`<button class="btn secondary">${IC.download}Export CSV</button>`)); a.lastChild.onclick = () => downloadCSV("members.csv", [["Member", "Tag", "Status", "Sets today", "Reps today", "Lifting (s)", "Avg rest (s)"], ...(live?.members || []).map(m => [m.name, m.tag ?? "", m.status, m.sets || 0, m.reps || 0, Math.round(m.lifting_s || 0), m.avg_rest_s != null ? Math.round(m.avg_rest_s) : ""])]);
       a.append(el(`<button class="btn secondary">${IC.print}Print tags</button>`)); a.lastChild.onclick = printTags;
       a.append(el(`<button class="btn">${IC.plus}Add member</button>`)); a.lastChild.onclick = addMember;
     },
@@ -201,7 +226,7 @@ function MembersPage() {
 function MemberPage(id) {
   let prog = null, trendM = null, metric = "reps", built = false;
   return {
-    title: "Members", sub: () => `Profile · ${memberOf(id)?.name || ""}`,
+    title: "Member profile", sub: () => memberOf(id)?.name || "",
     actions(a) {
       a.append(el(`<a class="btn secondary" href="#members">← All members</a>`));
       a.append(el(`<button class="btn secondary">${IC.print}Tag</button>`)); a.lastChild.onclick = () => printTags(id);
@@ -283,7 +308,8 @@ function printTags(only) {
 function MachinesPage() {
   let hourly = {};
   return {
-    title: "Machines", sub: PAGES.find(p => p.id === "machines").sub,
+    title: "Equipment", sub: PAGES.find(p => p.id === "machines").sub,
+    actions(a) { a.append(el(`<button class="btn secondary">${IC.download}Export CSV</button>`)); a.lastChild.onclick = () => downloadCSV("equipment-usage.csv", [["Station", "Type", "Sets (24 h)", "Time under load (s)", "People"], ...cfg.machines.map(m => [m.name, m.kind || "", util[m.id]?.n || 0, Math.round(util[m.id]?.busy || 0), util[m.id]?.members || 0])]); },
     mount(v) {
       v.append(el(`<div class="mgrid" id="mg"></div>`));
       src.hourly().then(h => { hourly = h; this.update(); }).catch(() => {});
@@ -716,6 +742,141 @@ function calibEditor(cam) {
   draw();
 }
 
+/* ---------------- access + settings (administration) ---------------- */
+function NoAccessPage(id) {
+  return {title: PAGES.find(p => p.id === id)?.label || "No access", sub: () => "",
+    mount(v) { v.append(el(`<div class="card empty">${IC.lock || ""}<b>Your role can't open this page</b>You're signed in as <b>${ROLES[role()].label}</b> (${esc(ROLES[role()].desc.toLowerCase())}). Ask an owner for access, or switch role from the account menu in this demo.</div>`)); }};
+}
+function SettingsPage() {
+  const TABS = [["general", "General"], ["users", "Users & roles"], ["privacy", "Privacy & data"], ["integrations", "Integrations"], ["api", "API & webhooks"], ["audit", "Audit log"]];
+  let tab = store.get("settab", "general");
+  const S = (k, d) => store.get("set:" + k, d), set = (k, v, label) => { store.set("set:" + k, v); audit("Changed setting", `${label}: ${v}`); toast("Saved"); };
+  const field = (k, label, help, ctl) => `<div class="sfield"><div><label for="s-${k}">${label}</label>${help ? `<small>${help}</small>` : ""}</div><div>${ctl}</div></div>`;
+  const sel = (k, opts, d) => `<select class="input" id="s-${k}" data-set="${k}">${opts.map(([v, l]) => `<option value="${v}" ${String(S(k, d)) === String(v) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  const tog = (k, d) => `<label class="switch"><input type="checkbox" id="s-${k}" data-set="${k}" ${S(k, d) ? "checked" : ""}><span></span></label>`;
+  const users = () => store.get("users", [{name: "You", email: "you@your-gym.com", role: "owner", status: "Active"}]);
+  const views = {
+    general: () => `<section class="card"><div class="card-h"><h2>Organisation</h2></div><div class="card-b sform">
+      ${field("org", "Organisation name", "Shown in the member app and reports", `<input class="input" id="s-org" data-set="org" value="${esc(S("org", cfg.gym))}">`)}
+      ${field("tz", "Time zone", "Used for opening hours, reports and the audit log", sel("tz", ["Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Australia/Brisbane", "Asia/Singapore"].map(z => [z, z.replace("_", " ")]), Intl.DateTimeFormat().resolvedOptions().timeZone))}
+      ${field("units", "Weight units", "", sel("units", [["kg", "Kilograms"], ["lb", "Pounds"]], "kg"))}
+      ${field("week", "Week starts on", "For weekly goals and reports", sel("week", [["mon", "Monday"], ["sun", "Sunday"]], "mon"))}
+    </div></section>
+    <section class="card"><div class="card-h"><h2>Sites</h2><span class="hint">each site is a GymTrack server on that gym's network</span></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>Site</th><th>Cameras</th><th>Stations</th><th>Status</th></tr></thead><tbody>
+      <tr><td><b>${esc(cfg.gym)}</b></td><td class="num">${cfg.cameras.length}</td><td class="num">${cfg.machines.length}</td><td>${(live?.camera_status || []).every(c => c.status === "live") ? '<span class="pill good"><i></i>Online</span>' : '<span class="pill warn"><i></i>Degraded</span>'}</td></tr></tbody></table></div>
+      <p class="muted small">Add a site by installing GymTrack on a mini-PC at that location and connecting it to this organisation with an API key.</p></div></section>`,
+    users: () => `<section class="card"><div class="card-h"><h2>Users</h2><span class="right"><button class="btn sm" id="invite">${IC.plus}Invite user</button></span></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
+      ${users().map((u, i) => `<tr><td><b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${i === 0 ? ROLES[u.role].label : `<select class="input sm" data-urole="${i}">${Object.entries(ROLES).map(([k, r]) => `<option value="${k}" ${k === u.role ? "selected" : ""}>${r.label}</option>`).join("")}</select>`}</td><td><span class="pill ${u.status === "Active" ? "good" : "warn"}"><i></i>${u.status}</span></td><td>${i ? `<button class="btn ghost sm" data-urm="${i}">Remove</button>` : ""}</td></tr>`).join("")}
+      </tbody></table></div><p class="muted small">Single sign-on (SAML / OIDC) is on the integrations roadmap.</p></div></section>
+      <section class="card"><div class="card-h"><h2>Roles and permissions</h2></div><div class="card-b"><div class="tbl-wrap"><table class="perm"><thead><tr><th>Page</th>${Object.values(ROLES).map(r => `<th>${r.label}</th>`).join("")}</tr></thead><tbody>
+      ${PAGES.map(p => `<tr><td>${p.label}</td>${Object.values(ROLES).map(r => `<td>${r.pages.includes(p.id) ? '<span class="ok">✓</span>' : '<span class="no">–</span>'}</td>`).join("")}</tr>`).join("")}
+      </tbody></table></div></div></section>`,
+    privacy: () => `<section class="card"><div class="card-h"><h2>Video</h2></div><div class="card-b sform">
+      <div class="note">${IC.lock || ""}<span>Camera video is analysed in memory on the gym's own server and is never recorded or uploaded. GymTrack stores sets, reps, times, positions on the floor plan and body-joint positions, not images.</span></div>
+      ${field("preview", "Live camera previews in the dashboard", "Turn off to show only the floor map and stats to staff", tog("preview", true))}
+    </div></section>
+    <section class="card"><div class="card-h"><h2>Members</h2></div><div class="card-b sform">
+      ${field("consent", "Member tracking", "Who gets a personal profile", sel("consent", [["optin", "Only members who opt in (tag on their bag or keys)"], ["all", "All members, with opt-out"]], "optin"))}
+      ${field("anon", "People without a tag", "Untagged people still count in traffic and equipment stats", sel("anon", [["anon", "Anonymous: no profile, no history"], ["session", "Temporary ID for the visit only"]], "anon"))}
+      ${field("ret", "Keep training history for", "How long sets and floor positions are kept on the site server", sel("ret", [["6", "6 months"], ["12", "12 months"], ["24", "24 months"], ["0", "Until the member leaves"]], "24"))}
+    </div></section>`,
+    integrations: () => `<div class="igrid">${[["Mindbody", "Sync members and check-ins", "members"], ["Glofox", "Sync members and class bookings", "members"], ["ABC Ignite", "Member records and access control", "members"], ["Zapier", "Send sets and alerts to 6,000 apps", "zap"], ["Slack", "Equipment and camera alerts to a channel", "alert"], ["Okta / Azure AD", "Single sign-on for staff (SAML, OIDC)", "lock"], ["Google Workspace", "Single sign-on for staff", "lock"], ["Power BI / Tableau", "Usage data through the reporting API", "insights"]].map(([n, d]) => `<section class="card icard"><div><b>${n}</b><small>${d}</small></div><button class="btn secondary sm" data-int="${esc(n)}">${S("int:" + n, false) ? "Requested" : "Request"}</button></section>`).join("")}</div>
+      <p class="muted small">These are planned integrations, not live connections yet. Requesting one records it in the audit log so it can be prioritised; today, data leaves GymTrack through the REST API and webhooks.</p>`,
+    api: () => `<section class="card"><div class="card-h"><h2>REST API</h2></div><div class="card-b sform">
+      <p class="muted" style="margin:0">Every number in this dashboard is available over the site server's REST API: <code>/api/members</code>, <code>/api/members/{id}/progress</code>, <code>/api/machines/utilisation</code>, <code>/api/floor</code>, <code>/api/cameras/{id}/people</code>. Requests need the site's API token in the <code>X-Token</code> header (set with <code>GYMTRACK_TOKEN</code> when the server starts).</p>
+      ${field("hook", "Webhook URL", "GymTrack POSTs finished sets and camera alerts here as JSON", `<input class="input" id="s-hook" data-set="hook" placeholder="https://example.com/gymtrack" value="${esc(S("hook", ""))}">`)}
+      ${field("hookev", "Events", "", sel("hookev", [["sets", "Finished sets"], ["alerts", "Camera and equipment alerts"], ["all", "Everything"]], "all"))}
+    </div></section>`,
+    audit: () => { const log = store.get("audit", []); return `<section class="card"><div class="card-h"><h2>Audit log</h2><span class="hint">who changed what, in this browser</span><span class="right"><button class="btn secondary sm" id="auditcsv">${IC.download}Export</button></span></div><div class="card-b"><div class="tbl-wrap" style="max-height:520px;overflow:auto"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody>
+      ${log.map(e => `<tr><td class="num">${new Date(e.t).toLocaleString()}</td><td>${esc(e.who)}</td><td>${esc(e.action)}</td><td class="muted">${esc(e.detail)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Nothing yet. Settings changes, exports, role changes and invites appear here.</td></tr>`}
+      </tbody></table></div></div></section>`; },
+  };
+  let root;
+  const draw = () => {
+    root.innerHTML = `${src.mode !== "server" ? `<div class="note demo">${IC.lock}<span>Demo workspace: changes here are saved in this browser only. On a real deployment they're stored on the site server and apply to all staff.</span></div>` : ""}<div class="stabs" role="tablist">${TABS.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div><div class="spane">${views[tab]()}</div>`;
+  };
+  return {title: "Settings", sub: () => PAGES.find(p => p.id === "settings").sub(),
+    mount(v) {
+      root = el(`<div class="settings"></div>`); v.append(root); draw();
+      root.onclick = e => {
+        const t = e.target.closest("[data-tab]"); if (t) { tab = t.dataset.tab; store.set("settab", tab); return draw(); }
+        if (e.target.closest("#invite")) {
+          const md = modal({title: "Invite user", body: `<div class="sform">${field("iname", "Name", "", `<input class="input" id="s-iname">`)}${field("iemail", "Work email", "", `<input class="input" id="s-iemail" type="email">`)}${field("irole", "Role", "", `<select class="input" id="s-irole">${Object.entries(ROLES).map(([k, r]) => `<option value="${k}">${r.label} — ${r.desc}</option>`).join("")}</select>`)}</div>`, foot: `<button class="btn" id="isend">Send invite</button>`});
+          md.root.querySelector("#isend").onclick = () => { const name = md.root.querySelector("#s-iname").value.trim(), email = md.root.querySelector("#s-iemail").value.trim(), r = md.root.querySelector("#s-irole").value; if (!name || !/@/.test(email)) return toast("Enter a name and a work email.", true); store.set("users", [...users(), {name, email, role: r, status: "Invited"}]); audit("Invited user", `${name} <${email}> as ${ROLES[r].label}`); md.close(); toast(`Invite recorded for ${email}`); draw(); };
+          return;
+        }
+        const rm = e.target.closest("[data-urm]"); if (rm) { const u = users(), [x] = u.splice(+rm.dataset.urm, 1); store.set("users", u); audit("Removed user", x.email); return draw(); }
+        const ig = e.target.closest("[data-int]"); if (ig) { store.set("set:int:" + ig.dataset.int, true); audit("Requested integration", ig.dataset.int); ig.textContent = "Requested"; toast(`Request for ${ig.dataset.int} recorded`); return; }
+        if (e.target.closest("#auditcsv")) downloadCSV("audit-log.csv", [["When", "Who", "Action", "Details"], ...store.get("audit", []).map(x => [new Date(x.t).toISOString(), x.who, x.action, x.detail])]);
+      };
+      root.onchange = e => {
+        const k = e.target.dataset.set; if (k) { const lab = e.target.closest(".sfield")?.querySelector("label")?.textContent || k; set(k, e.target.type === "checkbox" ? e.target.checked : e.target.value, lab); if (k === "org") $("#gymName").textContent = e.target.value; if (k === "preview") document.documentElement.classList.toggle("no-preview", !e.target.checked); }
+        const ur = e.target.dataset.urole; if (ur != null) { const u = users(); u[+ur].role = e.target.value; store.set("users", u); audit("Changed role", `${u[+ur].email} → ${ROLES[e.target.value].label}`); toast("Role updated"); }
+      };
+    }};
+}
+
+/* ---------------- global bar: search, notifications, account and site menus ---------------- */
+function popover(anchor, html, onClick) {
+  const pop = $("#pop"), r = anchor.getBoundingClientRect();
+  if (!pop.hidden && pop.dataset.for === anchor.id) { pop.hidden = true; return null; }
+  pop.innerHTML = html; pop.dataset.for = anchor.id; pop.hidden = false;
+  const w = pop.offsetWidth; pop.style.top = `${r.bottom + 6}px`; pop.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w > 8 && anchor.id !== "siteBtn" ? r.right - w : r.left))}px`;
+  pop.onclick = e => onClick?.(e);
+  return pop;
+}
+document.addEventListener("click", e => { const pop = $("#pop"); if (!pop.hidden && !pop.contains(e.target) && !e.target.closest("#" + pop.dataset.for)) pop.hidden = true; });
+function alerts() {
+  const out = [];
+  for (const c of live?.camera_status || []) if (c.status !== "live") out.push({level: "bad", title: `${c.name || c.id} is ${c.status}`, detail: "Check power and the network connection to the camera.", href: "#cameras"});
+  const obs = Object.values(util).reduce((a, u) => Math.max(a, u.busy), 0);
+  for (const u of Object.values(util)) if (obs > 0 && u.n >= 3 && u.busy >= obs && cfg.machines.length > 2) out.push({level: "warn", title: `${machineName(u.machine)} is the busiest station`, detail: `${u.n} sets, ${fmtDur(u.busy)} under load today. See Insights for layout suggestions.`, href: "#insights"});
+  const inGym = live?.members.filter(m => m.status !== "away").length || 0;
+  out.push({level: "info", title: `${inGym} member${inGym === 1 ? "" : "s"} in the gym`, detail: `${(live?.machines || []).filter(m => m.state === "lifting").length} stations under load right now`, href: "#floor"});
+  return out;
+}
+function renderChrome() {
+  const a = alerts(), n = a.filter(x => x.level !== "info").length, b = $("#bellN");
+  b.hidden = !n; b.textContent = n;
+  const liveCams = (live?.camera_status || []).filter(c => c.status === "live").length, total = cfg.cameras.length;
+  $("#gstatus").innerHTML = `<i class="${liveCams === total ? "ok" : "warn"}"></i>${liveCams === total ? "All systems operational" : `${total - liveCams} camera${total - liveCams === 1 ? "" : "s"} offline`}`;
+  const r = ROLES[role()], name = store.get("set:org", null) ? "Gym owner" : "Gym owner";
+  $("#userRole").textContent = r.label; $("#userName").textContent = role() === "owner" ? name : `${r.label} (demo)`; $("#userAv").textContent = initials(r.label === "Owner" ? "Gym Owner" : r.label);
+}
+$("#bellBtn").onclick = () => popover($("#bellBtn"), `<div class="pop-h">Notifications</div>${alerts().map(x => `<a class="pop-i" href="${x.href}"><i class="lv ${x.level}"></i><span><b>${esc(x.title)}</b><small>${esc(x.detail)}</small></span></a>`).join("")}`, e => { if (e.target.closest("a")) $("#pop").hidden = true; });
+$("#userBtn").onclick = () => popover($("#userBtn"), `<div class="pop-h">Signed in as <b>${ROLES[role()].label}</b></div>
+  <div class="pop-sec">View as role <small>(demo)</small></div>${Object.entries(ROLES).map(([k, r]) => `<button class="pop-i" data-role="${k}" aria-pressed="${k === role()}"><i class="radio"></i><span><b>${r.label}</b><small>${esc(r.desc)}</small></span></button>`).join("")}
+  <div class="pop-sec">Theme</div><div class="theme-switch" role="group" aria-label="Theme">${["light", "auto", "dark"].map(t => `<button data-theme-set="${t}" aria-pressed="${store.get("theme", "auto") === t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join("")}</div>
+  <div class="pop-sep"></div><a class="pop-i" href="#settings"><span><b>Settings</b></span></a><a class="pop-i" href="member.html" target="_blank" rel="noopener"><span><b>Member app preview</b></span></a><button class="pop-i" data-signout><span><b>Sign out</b></span></button>`, e => {
+  const r = e.target.closest("[data-role]"); if (r) { store.set("role", r.dataset.role); audit("Switched role", ROLES[r.dataset.role].label); $("#pop").hidden = true; renderChrome(); renderNav(); go(); toast(`Viewing as ${ROLES[r.dataset.role].label}`); return; }
+  const t = e.target.closest("[data-theme-set]"); if (t) { applyTheme(t.dataset.themeSet); return; }
+  if (e.target.closest("[data-signout]")) { $("#pop").hidden = true; toast("Sign-in is handled by your organisation's single sign-on; this demo has no accounts."); }
+  if (e.target.closest("a")) $("#pop").hidden = true;
+});
+$("#siteBtn").onclick = () => popover($("#siteBtn"), `<div class="pop-h">Sites</div><button class="pop-i" aria-pressed="true"><i class="radio"></i><span><b>${esc(cfg.gym)}</b><small>${cfg.cameras.length} cameras · ${cfg.machines.length} stations</small></span></button><div class="pop-sep"></div><a class="pop-i" href="#settings"><span><b>Manage sites</b><small>Add a location in Settings → General</small></span></a>`, e => { if (e.target.closest("a")) { store.set("settab", "general"); $("#pop").hidden = true; } });
+/* global search: members, equipment, pages */
+(() => {
+  const inp = $("#gsearch"), res = $("#gres"); let items = [], sel = 0;
+  const run = () => {
+    const q = inp.value.trim().toLowerCase(); if (!q) { res.hidden = true; return; }
+    items = [...PAGES.filter(p => canSee(p.id)).map(p => ({k: "Page", label: p.label, href: "#" + p.id})),
+      ...(canSee("members") ? cfg.members.map(m => ({k: "Member", label: m.name, href: "#member-" + m.id})) : []),
+      ...cfg.machines.map(m => ({k: "Equipment", label: m.name, href: "#machines"})), ...cfg.cameras.filter(() => canSee("cameras")).map(c => ({k: "Camera", label: c.name, href: "#cameras"}))]
+      .filter(x => x.label.toLowerCase().includes(q)).slice(0, 8);
+    sel = 0; res.hidden = false;
+    res.innerHTML = items.map((x, i) => `<a href="${x.href}" role="option" aria-selected="${i === sel}"><span>${esc(x.label)}</span><small>${x.k}</small></a>`).join("") || `<div class="none">No matches</div>`;
+  };
+  inp.oninput = run; inp.onfocus = run;
+  inp.onkeydown = e => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); sel = (sel + (e.key === "ArrowDown" ? 1 : -1) + items.length) % Math.max(1, items.length); res.querySelectorAll("a").forEach((a, i) => a.setAttribute("aria-selected", i === sel)); }
+    if (e.key === "Enter" && items[sel]) { location.hash = items[sel].href.slice(1); inp.value = ""; res.hidden = true; inp.blur(); }
+    if (e.key === "Escape") { inp.value = ""; res.hidden = true; inp.blur(); }
+  };
+  res.onclick = () => { inp.value = ""; res.hidden = true; };
+  inp.onblur = () => setTimeout(() => res.hidden = true, 150);
+  addEventListener("keydown", e => { if (e.key === "/" && !/input|select|textarea/i.test(document.activeElement.tagName)) { e.preventDefault(); inp.focus(); } });
+})();
+
 /* ---------------- system box, theme, refresh loop ---------------- */
 function renderSys() {
   const liveCams = (live?.camera_status || []).filter(c => c.status === "live").length, total = cfg.cameras.length;
@@ -728,13 +889,13 @@ function applyTheme(t) {
   document.querySelectorAll("[data-theme-set]").forEach(b => b.setAttribute("aria-pressed", b.dataset.themeSet === t));
   store.set("theme", t);
 }
-document.querySelectorAll("[data-theme-set]").forEach(b => b.onclick = () => applyTheme(b.dataset.themeSet));
+
 
 let failures = 0;
 async function refresh() {
   try { live = await src.live(); failures = 0; }
   catch { if (++failures === 3) toast("Lost connection to the GymTrack server. Retrying…", true); return; }
-  renderSys();
+  renderSys(); renderChrome();
   if (document.querySelector(".scrim")) return; // don't move things under an open dialog
   page?.update?.();
   $("#pageSub").textContent = page?.sub?.() || "";
@@ -748,8 +909,10 @@ async function refresh() {
   src = await pickSource(params, base);
   cfg = await src.config();
   $("#gymName").textContent = cfg.gym; $("#gymInitial").textContent = initials(cfg.gym)[0];
-  $("#gymMeta").textContent = src.mode === "replay" ? "2 gyms · recorded footage" : src.mode === "demo" ? "Simulation" : `${cfg.cameras.length} cameras · ${cfg.members.length} members`;
+  $("#gymMeta").textContent = src.mode === "replay" ? `${cfg.cameras.length} cameras · recorded footage` : src.mode === "demo" ? "Simulation" : `${cfg.cameras.length} cameras · ${cfg.members.length} members`;
   live = await src.live().catch(() => null);
-  go(); renderSys();
+  if (store.get("set:org", null)) $("#gymName").textContent = store.get("set:org");
+  if (store.get("set:preview", true) === false) document.documentElement.classList.add("no-preview");
+  go(); renderSys(); renderChrome();
   setInterval(refresh, 1000);
 })();
