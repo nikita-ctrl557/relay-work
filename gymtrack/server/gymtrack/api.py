@@ -171,6 +171,18 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
             raise HTTPException(404, "unknown camera")
         return w
 
+    @app.get("/api/cameras/{cid}/people")
+    def camera_people(cid: str):
+        """People this camera sees now, with boxes as fractions of the frame (for hover/click on the video)."""
+        w = workers.get(cid)
+        if not w or not w.tracker or w._frame is None:
+            return []
+        H, W = w._frame.shape[:2]
+        names = {m.id: m.name for m in cfg.members}
+        return [{"pid": t.id, "member": t.member, "label": names.get(t.member) or f"#{t.id}", "zone": t.zone,
+                 "activity": t.activity, "planted": t.planted,
+                 "box": [t.box[0] / W, t.box[1] / H, t.box[2] / W, t.box[3] / H]} for t in w.tracker.visible(time.time())]
+
     @app.get("/api/cameras/{cid}/frame.jpg")
     def frame(cid: str, overlay: bool = True):
         jpg = worker(cid).jpeg(overlay)

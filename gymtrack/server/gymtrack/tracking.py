@@ -102,6 +102,7 @@ class Track:
     kps: list = field(default_factory=list)          # [(t, (33,3) keypoints)] for the last ~8 s
     activity: str | None = None                      # what they're doing right now (see activity.py)
     act_conf: float = 0.0
+    act_raw: list = field(default_factory=list)      # last few raw classifier outputs, before gating
     act_at: float = -1e9
     activities: dict[str, float] = field(default_factory=dict)  # activity -> seconds spent doing it
 
@@ -120,6 +121,15 @@ class Track:
         return max(max(xs) - min(xs), max(ys) - min(ys)) < 0.25 * h
 
     @property
+    def stationary(self) -> bool:
+        """Staying in one spot for the last ~2 s, in any posture (lying exercises included)."""
+        x, y, w, h = self.box
+        if len(self.feet_hist) < 3 or self.feet_hist[-1][0] - self.feet_hist[0][0] < 1.5:
+            return False
+        xs, ys = [p[1] for p in self.feet_hist], [p[2] for p in self.feet_hist]
+        return max(max(xs) - min(xs), max(ys) - min(ys)) < 0.3 * max(w, h)
+
+    @property
     def feet(self) -> tuple[float, float]:
         x, y, w, h = self.box
         return x + w / 2, y + h
@@ -129,6 +139,30 @@ class Track:
 
     def short(self, names: dict[str, str]) -> str:
         return names.get(self.member, self.member) if self.member else f"#{self.id}"
+
+
+EXERCISE_MIN_CONF = 0.7
+
+
+def gate_activity(raw: list[tuple[str | None, float]], stationary: bool) -> tuple[str | None, float]:
+    """Decide what to report from the last few raw classifier outputs.
+
+    The classifier is trained on close, front-facing clips; on far or fisheye cameras it guesses.
+    So an exercise is only reported when it won at least 2 of the last 3 checks with high
+    confidence and the person is standing in one spot (not walking between stations).
+    Anything less is reported as unknown (None) rather than a wrong exercise.
+    """
+    if not raw:
+        return None, 0.0
+    last, conf = raw[-1]
+    if last == "standing":
+        return "standing", conf
+    if last is None or not stationary:
+        return None, 0.0
+    agree = [c for lab, c in raw if lab == last and c >= EXERCISE_MIN_CONF]
+    if len(agree) >= 2:
+        return last, round(sum(agree) / len(agree), 2)
+    return None, 0.0
 
 
 class PeopleTracker:
@@ -218,6 +252,8 @@ class PeopleTracker:
         for tr in self.tracks.values():
             if tr.last != t:
                 continue  # not detected this round
+            if tr.box[3] < 0.12 * frame.shape[0]:
+                continue  # too small/far for a reliable pose
             kp = self.pose.estimate(frame, tr.box)
             tr.pose_tries += 1
             if kp is None:
@@ -226,7 +262,9 @@ class PeopleTracker:
             tr.kps = [k for k in tr.kps if t - k[0] <= 8.0] + [(t, kp)]
             if t - tr.act_at >= 1.0 and len(tr.kps) >= 6:
                 tr.act_at = t
-                tr.activity, tr.act_conf, _ = classify([k for _, k in tr.kps[-18:]])
+                raw, conf, _ = classify([k for _, k in tr.kps[-18:]])
+                tr.act_raw = (tr.act_raw + [(raw, conf)])[-3:]
+                tr.activity, tr.act_conf = gate_activity(tr.act_raw, tr.stationary)
 
     def _associate(self, dets, t: float):
         """Match detections to tracks: overlap first, then distance (gated by size and time since seen)."""

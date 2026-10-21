@@ -24,12 +24,16 @@ LABEL = {"squat": "squat", "pull_up": "pull_up", "push_up": "push_up", "bench_pr
 
 
 def windows(kps: np.ndarray):
-    for s in range(0, max(1, len(kps) - WINDOW + 1), WINDOW // 3):
-        w = kps[s:s + WINDOW]
-        if len(w) >= WINDOW // 2:
-            v = window_vector(list(w))
-            if v is not None:
-                yield v
+    """6 s windows at the extracted 5 poses/s and also at 2.5 poses/s, so the model doesn't depend on the sampling rate."""
+    for step in (1, 2):
+        k = kps[::step]
+        n = WINDOW // step
+        for s in range(0, max(1, len(k) - n + 1), max(1, n // 3)):
+            w = k[s:s + n]
+            if len(w) >= n // 2:
+                v = window_vector(list(w))
+                if v is not None:
+                    yield v
 
 
 def main():

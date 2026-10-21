@@ -290,3 +290,12 @@ def test_untagged_set_is_credited_to_the_tracked_person():
         e.ingest(r)
         t = round(t + 0.1, 1)
     assert e.recent_sets and e.recent_sets[0].person == 7 and e.recent_sets[0].member is None
+
+
+def test_exercise_label_needs_confidence_agreement_and_stillness():
+    from gymtrack.tracking import gate_activity
+    assert gate_activity([("squat", 0.9), ("squat", 0.8)], True) == ("squat", 0.85)
+    assert gate_activity([("squat", 0.9), ("squat", 0.8)], False) == (None, 0.0)       # walking
+    assert gate_activity([("pull_up", 0.9), ("squat", 0.9)], True) == (None, 0.0)      # disagrees with itself
+    assert gate_activity([("squat", 0.6), ("squat", 0.6)], True) == (None, 0.0)       # not confident
+    assert gate_activity([("squat", 0.9), ("standing", 0.6)], False)[0] == "standing"

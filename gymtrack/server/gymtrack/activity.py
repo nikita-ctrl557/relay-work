@@ -95,7 +95,7 @@ def window_vector(window: list[np.ndarray]) -> np.ndarray | None:
     torso = np.median(np.linalg.norm(sh - hip, axis=1)) + 1e-6
     rel = (P - hip[:, None, :]) / torso                       # (n, 13, 2)
     stats = [rel.mean(0), rel.std(0), np.percentile(rel, 90, axis=0) - np.percentile(rel, 10, axis=0)]
-    vel = np.abs(np.diff(rel, axis=0)).mean(0) if len(rel) > 1 else np.zeros_like(rel[0])
+    vel = np.abs(np.diff(rel, axis=0)).sum(0) / max(1, len(rel) - 1) * (len(rel) / 6.0) if len(rel) > 1 else np.zeros_like(rel[0])  # ~per second over a 6 s window
     vis = K[:, _JOINTS, 2].mean(0)
     return np.concatenate([np.concatenate([x.ravel() for x in stats]), vel.ravel(), vis, np.array(list(f.values()), np.float32)]).astype(np.float32)
 

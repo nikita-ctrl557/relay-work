@@ -38,6 +38,58 @@ is `#ID`. This gives:
 
 `python -m gymtrack analyse video.mp4 --config gym.json --video-out tracked.mp4` writes a video with the tracking drawn on.
 
+## Exercise recognition
+
+Each tracked person gets a body pose (BlazePose via the OpenCV model zoo). A classifier trained on pose sequences from
+real labelled videos (RepCount-A) names the exercise. Held-out real clips (people and videos not used for training):
+
+| Exercise | Correct |
+|---|---|
+| Jumping (jacks) | 40/41 (98%) |
+| Squat | 27/29 (93%) |
+| Push-up | 31/34 (91%) |
+| Pull-up | 28/33 (85%) |
+| Bench press | 20/29 (69%) |
+| Front raise | 25/37 (68%) |
+| Battle ropes | 2/3 |
+| Sit-up | 22/36 (61%) |
+| **All** | **195/242 (81%)** |
+
+Hand-written rules alone scored 8% on the same kind of clips, so they are only a fallback for movements the model
+wasn't trained on (hinge, lunge, overhead press, row, curl, burpee). Train it yourself:
+
+```bash
+python bench/fetch_repcount.py data/repcount && python bench/extract_poses.py data/repcount labels_all.json
+python bench/train_activity.py data/repcount --labels labels_all.json      # -> models/exercise.joblib
+```
+
+**Far cameras.** These clips are close and front-facing. On a far, wide-angle wall camera the raw guesses are often
+wrong (people walking get called "pull-up"), so the tracker only reports an exercise when the model is confident
+(≥ 0.7), agrees with itself on at least 2 of the last 3 checks, and the person is staying in one spot. Otherwise it
+reports nothing rather than a wrong exercise. Sets and reps don't depend on this: they come from motion in each zone.
+
+RepCount-A is for research use, so the trained model isn't committed. For a commercial launch, retrain on labelled
+footage from the gym's own cameras (the same scripts work on any folder of labelled clips).
+
+## 3D floor overview
+
+The Floor map page shows each calibrated camera as a 3D Gaussian splat with the tracked people standing in it,
+zones and the traffic heatmap drawn on its floor. You can orbit it, switch to top-down, hover a person to highlight
+them and click to open their profile. A plain 2D plan is one click away.
+
+How it's built (`bench/make_scene.py`):
+
+1. A people-free background frame: the median of 60 frames, so no members end up in the model.
+2. A splat from that frame. The demo uses Apple's SHARP (single image to metric 3D Gaussians). **Its licence is
+   research-only**, so it's fine for trials but not for a paid product. For production, scan the gym once with a
+   phone (Polycam, Luma, Scaniverse, Postshot) and export a `.ply`: that gives a better model from all sides.
+3. `make_scene.py pack` fits the floor plane (RANSAC on splats inside the calibrated floor area), prunes and
+   compresses to SPZ (~8 MB for 600k splats).
+
+In the browser (`assets/scene3d.js`, three.js + Spark), each person's feet pixel is cast as a ray from the camera
+onto that floor plane, so they stand where they really are. The scale comes from the floor calibration's known size.
+A single-camera splat looks best near the camera's own angle; from above you see gaps where the camera couldn't see.
+
 ## Member app
 
 `member.html` (served at `/member` by the server) is what members see on their phone: no video, only their own data.
@@ -76,7 +128,8 @@ Built = in this repo now. Next = designed from the same data, not built yet.
 
 | Feature | What it gives them | Status |
 |---|---|---|
-| Live floor | Every camera with tracking, equipment status, live set timers, activity feed | Built |
+| Live floor | Every camera with tracking, equipment status, live set timers, activity feed; hover a person on the video to see who it is, click to open their profile | Built |
+| 3D floor overview | Gaussian-splat model of the gym with people standing in it, zones and heatmap on the floor | Built (single-camera splat) |
 | Bird's-eye floor map | Everyone placed on a floor plan (per-camera calibration), trails | Built |
 | Traffic heatmap | Where person-time goes; hotspots; share of time between stations | Built |
 | Equipment ranking | Time under load, sets and people per station; busiest hours | Built |

@@ -598,6 +598,11 @@ class ServerSource {
       zones: cams.flatMap(c => { const H = homography(c.calib.image, c.calib.plan); return c.zones.map(z => ({machine: z.machine, poly: projectZone(z.polygon, c.calib, H)})); })}];
   }
   async setCalibration(camId, calib, size) { await this.j("api/cameras/" + encodeURIComponent(camId) + "/calibration", {method: "PUT", body: JSON.stringify({...calib, ...(size || {})})}); await this.config(); }
+  peopleNow(camId) { // cached; refreshed in the background at ~4/s so the overlay stays smooth
+    const c = (this._ppl ||= {})[camId] ||= {at: 0, list: []};
+    if (Date.now() - c.at > 250 && !c.busy) { c.busy = true; this.j("api/cameras/" + encodeURIComponent(camId) + "/people").then(l => { c.list = l; }).catch(() => {}).finally(() => { c.at = Date.now(); c.busy = false; }); }
+    return c.list;
+  }
   async floor() { const f = await this.j("api/floor"); for (const p of f) if (p.heat) { p.heat.grid = Float32Array.from(p.heat.grid); p.heat.peak = Math.max(p.heat.peak || 0, p.headcount); } return f; }
   upload(file, camera, startTs, onProgress) {
     return new Promise((ok, bad) => {
@@ -628,7 +633,7 @@ class ReplaySource {
       c.data.timeline.sort((a, b) => a.t - b.t);
       this.cfg.machines.push(...c.machines);
       this.cfg.cameras.push({id: c.id, name: c.name, source: c.source, fps: 10, zones: c.zones});
-      for (const p of c.data.people.rows.filter(p => p.seen_s >= 45)) this.cfg.members.push({id: `${c.id}-${p.id}`, name: `${c.short} #${p.id}`, tag: p.id, cam: c.id, pid: p.id});
+      for (const p of c.data.people.rows.filter(p => p.seen_s >= 20)) this.cfg.members.push({id: `${c.id}-${p.id}`, name: `${c.short} #${p.id}`, tag: p.id, cam: c.id, pid: p.id});
       const v = document.createElement("video");
       Object.assign(v, {muted: true, loop: true, playsInline: true, autoplay: true, preload: "auto"});
       for (const [f, type] of [[c.video, "video/mp4"], [c.video_webm, "video/webm"]]) if (f) v.append(Object.assign(document.createElement("source"), {src: base + f, type}));
@@ -664,11 +669,12 @@ class ReplaySource {
         const who = e.p.find(p => p[2] === id && p[3]) || e.p.find(p => p[2] === id);
         const pid = cur?.pid ?? (who ? who[0] : null), mem = pid != null ? this.cfg.members.find(m => m.cam === c.id && m.pid === pid) : null;
         machines.push({id, name: mach.name, kind: mach.kind, state: lifting ? "lifting" : "idle", motion: 0, member: !lifting && who && who[3] && mem ? mem.id : lifting && mem ? mem.id : null,
-          member_name: lifting ? (mem?.name || (pid != null ? `#${pid}` : null)) : mem?.name || null, guest: lifting && !mem, reps, set_elapsed: el, cameras: [c.id]});
+          member_name: lifting ? (mem?.name || (pid != null ? `#${pid}` : null)) : mem?.name || null, guest: lifting && !mem, reps, set_elapsed: el, cameras: [c.id],
+          activity: (who && who[8] && who[8] !== "standing") ? who[8] : null});
       }
       for (const s of c.data.sets.filter(s => s.t1 <= ct)) {
         const mem = this.cfg.members.find(m => m.cam === c.id && m.pid === s.pid);
-        recent.push({member: mem?.id || null, machine: s.m, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, duration: s.t1 - s.t0, cameras: [c.id]});
+        recent.push({member: mem?.id || null, who: mem ? null : (s.pid != null ? `${c.short} #${s.pid}` : null), exercise: s.ex || null, machine: s.m, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, duration: s.t1 - s.t0, cameras: [c.id]});
       }
       for (const m of this.cfg.members.filter(m => m.cam === c.id)) {
         const st = this.personStats(c, m.pid, ct), row = {id: m.id, name: m.name, tag: m.pid, status: "away"};
@@ -727,8 +733,20 @@ class ReplaySource {
       let x = px, y = py;
       if ((x == null || y == null) && H) [x, y] = applyH(H, (bx + bw / 2) * 640, (by + bh) * 360);
       const mem = this.cfg.members.find(m => m.cam === c.id && m.pid === pid);
-      return {id: mem?.id || `${c.id}-${pid}`, pid, label: mem?.name || `${c.short} #${pid}`, plan: c.id, camera: c.id, x, y, zone, activity: act || null, planted: !!planted};
+      return {id: mem?.id || `${c.id}-${pid}`, pid, label: mem?.name || `${c.short} #${pid}`, member: mem?.id || null, plan: c.id, camera: c.id, x, y, zone, activity: act || null, planted: !!planted, box: [bx, by, bw, bh]};
     });
+  }
+  sceneFor(planId) { // 3D splat of this camera's view, if one was built (bench/make_scene.py)
+    const c = this.cams.find(x => x.id === planId); if (!c?.scene) return null;
+    return {base: this.base + c.scene.replace(/[^/]*$/, ""), cam: {zones: c.zones, calib: c.calib}, meta: () => (c._scene ||= fetch(this.base + c.scene).then(r => r.json()))};
+  }
+  peopleNow(camId) { // who is on this camera at the current playback time, with boxes (0..1 of the frame)
+    const c = this.cams.find(x => x.id === camId); if (!c) return [];
+    const ct = this.ct(c), tl = c.data.timeline, i = tl.indexOf(this.at(c, ct)), a = tl[i], b = tl[i + 1];
+    const now = this.peopleAt(c, a);
+    if (!b || b.t - a.t > 2) return now;
+    const k = Math.max(0, Math.min(1, (ct - a.t) / (b.t - a.t))), next = Object.fromEntries(this.peopleAt(c, b).map(q => [q.pid, q]));
+    return now.map(q => { const n = next[q.pid]; return n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k)} : q; });
   }
   trails(c, ct, secs = 10) {
     const out = {}, H = this.H(c);

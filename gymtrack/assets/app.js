@@ -50,7 +50,34 @@ function FloorPage() {
       if (src.mode !== "server") a.append(el(`<select class="input" id="speed" aria-label="Playback speed" style="width:auto"><option value="1">Real time</option><option value="3">3× speed</option></select>`));
       a.querySelector("#speed") && (a.querySelector("#speed").value = String(src.speed), a.querySelector("#speed").onchange = e => src.speed = +e.target.value);
     },
+    unmount() { cancelAnimationFrame(this.raf); },
+    drawHits() { // clickable boxes over each camera, following the tracked people
+      this.raf = requestAnimationFrame(() => this.drawHits());
+      if (!src.peopleNow || !wall) return;
+      for (const t of wall.querySelectorAll(".tile")) {
+        const layer = t.querySelector(".hits"), seen = new Set();
+        for (const q of src.peopleNow(t.dataset.cam)) {
+          if (!q.box || q.box[2] <= 0) continue;
+          const key = String(q.pid); seen.add(key);
+          let h = layer.querySelector(`[data-pid="${key}"]`);
+          if (!h) {
+            h = el(`<button class="hit" data-pid="${key}"><span></span></button>`); layer.append(h);
+          }
+          if (h.dataset.label !== q.label || h.dataset.act !== (q.activity || "")) {
+            h.dataset.label = q.label; h.dataset.act = q.activity || "";
+            h.querySelector("span").textContent = q.label + (q.activity && q.activity !== "standing" ? " · " + actName(q.activity) : "") + (q.member ? "  →" : "");
+            h.setAttribute("aria-label", q.member ? `Open ${q.label}'s profile` : `${q.label} (no profile)`);
+          }
+          if (q.member) h.dataset.member = q.member; else delete h.dataset.member;
+          h.classList.toggle("lifting", !!(q.activity && q.activity !== "standing"));
+          const [x, y, w, hh] = q.box;
+          h.style.cssText = `left:${(x * 100).toFixed(2)}%;top:${(y * 100).toFixed(2)}%;width:${(w * 100).toFixed(2)}%;height:${(hh * 100).toFixed(2)}%`;
+        }
+        for (const h of layer.querySelectorAll(".hit")) if (!seen.has(h.dataset.pid)) h.remove();
+      }
+    },
     mount(v) {
+      cancelAnimationFrame(this.raf); this.drawHits();
       if (src.mode !== "server" && !store.get("banner-off-" + src.mode)) {
         const msg = src.mode === "replay" ? `<b>Real footage.</b> Recorded video from a CrossFit gym's wall camera and a garage gym, run through GymTrack: people tracking, sets, reps and rest, played back in sync. People without a member tag show as #ID.` : `<b>Simulation.</b> Synthetic cameras for testing. Remove ?sim from the address to see real footage.`;
         v.append(el(`<div class="banner"><span>${msg}</span><a class="btn sm" href="#cameras">Connect your cameras</a><button class="x" aria-label="Dismiss">${IC.x.replace("<svg", '<svg style="width:16px;height:16px"')}</button></div>`));
@@ -61,6 +88,10 @@ function FloorPage() {
         <section class="card"><div class="card-h"><h2>Equipment</h2><span class="right hint" id="eqHint"></span></div><div class="equip" id="equip" style="margin-top:8px"></div></section>
         <section class="card"><div class="card-h"><h2>Activity</h2><span class="right hint">Sets as they finish</span></div><div class="feed" id="feed" style="margin-top:8px"><div class="empty" style="padding:24px">${IC.machines}<b>Waiting for the first set</b>Finished sets appear here.</div></div></section></div></div>`);
       v.append(fl); wall = fl.querySelector("#wall"); this.buildWall();
+      const eq = fl.querySelector("#equip"), mark = id => wall.querySelectorAll(".hit").forEach(h => h.classList.toggle("hl", !!id && h.dataset.member === id));
+      eq.onmouseover = e => mark(e.target.closest("[data-member]")?.dataset.member);
+      eq.onmouseleave = () => mark(null);
+      eq.onclick = e => { const r = e.target.closest("[data-member]"); if (r && cfg.members.some(m => m.id === r.dataset.member)) location.hash = "member-" + r.dataset.member; };
     },
     buildWall() {
       wall.innerHTML = `<div class="wall-h"><b>Cameras</b><span>${cfg.cameras.length} feeds</span><span class="right">${focus ? '<button data-unfocus>Show all</button>' : ""}</span></div>`;
@@ -69,11 +100,13 @@ function FloorPage() {
       const list = cams.filter(Boolean);
       list.forEach((cam, i) => {
         const hero = cam.id === focus || (!focus && list.length % 2 === 1 && i === 0);
-        const t = el(`<div class="tile ${hero ? "main" : ""}" data-cam="${esc(cam.id)}" role="button" tabindex="0" aria-label="${esc(cam.name)} camera"><div class="ov"><div class="t"><span class="rec"><i></i>LIVE</span><span>${esc(cam.name)}</span><span class="fps"></span></div><div class="b"></div></div></div>`);
+        const t = el(`<div class="tile ${hero ? "main" : ""}" data-cam="${esc(cam.id)}" role="button" tabindex="0" aria-label="${esc(cam.name)} camera"><div class="ov"><div class="t"><span class="rec"><i></i>LIVE</span><span>${esc(cam.name)}</span><span class="fps"></span></div><div class="b"></div></div><div class="hits" aria-label="People on camera"></div></div>`);
         t.prepend(src.view(cam)); wall.append(t);
       });
       wall.onclick = e => {
         if (e.target.closest("[data-unfocus]")) { focus = null; return this.buildWall(); }
+        const h = e.target.closest(".hit");
+        if (h) { e.stopPropagation(); if (h.dataset.member) location.hash = "member-" + h.dataset.member; else toast(`${h.dataset.label} was only on camera briefly, so there's no profile yet.`); return; }
         const t = e.target.closest(".tile"); if (!t) return;
         focus = focus === t.dataset.cam ? null : t.dataset.cam; this.buildWall();
       };
@@ -103,10 +136,10 @@ function FloorPage() {
       $("#equip").innerHTML = ms.map(m => {
         const mach = cfg.machines.find(x => x.id === m.id) || m, st = m.state === "lifting" ? "lifting" : m.member ? "resting" : "free";
         const mem = byMember[m.member], rest = mem?.current_rest_s;
-        const who = st === "lifting" ? `${mem ? avatar(mem, "sm") : ""}<span>${esc(m.member_name || "Guest (no tag)")}</span>` : st === "resting" ? `${avatar(mem || {id: m.member, name: m.member_name}, "sm")}<span>${esc(m.member_name)} · between sets</span>` : `<span>Free</span>`;
+        const who = st === "lifting" ? `${mem ? avatar(mem, "sm") : ""}<span>${esc(m.member_name || "Guest (no tag)")}${m.activity ? " · " + esc(actName(m.activity)) : ""}</span>` : st === "resting" ? `${avatar(mem || {id: m.member, name: m.member_name}, "sm")}<span>${esc(m.member_name)} · between sets</span>` : `<span>Free</span>`;
         const meta = st === "lifting" ? `<div class="timer num">${m.reps}<span style="font-size:14px;color:var(--muted);margin-left:2px">reps</span></div><div class="timer-l num">set ${clockFmt(m.set_elapsed)}</div>`
           : st === "resting" ? `<div class="timer num">${rest != null ? clockFmt(rest) : "–"}</div><div class="timer-l">rest</div>` : `<div class="timer-l">${m.cameras.length} cam${m.cameras.length === 1 ? "" : "s"}</div>`;
-        return `<div class="eq ${st}"><span class="ico">${machineIcon(mach)}</span><div style="min-width:0"><div class="nm">${esc(m.name)}</div><div class="who">${who}</div></div><div class="meta">${meta}</div></div>`;
+        return `<div class="eq ${st}${m.member && st !== "free" ? " link" : ""}" ${m.member && st !== "free" ? `data-member="${esc(m.member)}"` : ""}><span class="ico">${machineIcon(mach)}</span><div style="min-width:0"><div class="nm">${esc(m.name)}</div><div class="who">${who}</div></div><div class="meta">${meta}</div></div>`;
       }).join("");
       const feed = $("#feed");
       if (live.recent_sets.length) {
@@ -114,7 +147,7 @@ function FloorPage() {
         for (const r of [...live.recent_sets].reverse()) {
           const key = r.machine + ":" + r.start.toFixed(1); if (feedKeys.has(key)) continue; feedKeys.add(key);
           const mem = memberOf(r.member);
-          feed.prepend(el(`<div class="fi ${feedKeys.size > live.recent_sets.length ? "new" : ""}">${mem ? avatar(mem, "sm") : `<span class="avatar sm" style="--a:var(--other)">G</span>`}<span class="w"><b>${esc(mem?.name || "Guest")}</b> · ${r.reps} reps on ${esc(machineName(r.machine))}<span class="tagx">${fmtDur(r.duration)}${r.cameras.length > 1 ? ` · ${r.cameras.length} cams` : ""}</span></span><time>${hm(r.end)}</time></div>`));
+          feed.prepend(el(`<div class="fi ${feedKeys.size > live.recent_sets.length ? "new" : ""}">${mem ? avatar(mem, "sm") : `<span class="avatar sm" style="--a:var(--other)">G</span>`}<span class="w"><b>${esc(mem?.name || r.who || "Guest")}</b> · ${r.reps} reps${r.exercise ? " · " + esc(exName(ACT_EX[r.exercise] !== undefined ? ACT_EX[r.exercise] || r.exercise : r.exercise)) : ""} ${r.exercise ? "in" : "on"} ${esc(machineName(r.machine))}<span class="tagx">${fmtDur(r.duration)}${r.cameras.length > 1 ? ` · ${r.cameras.length} cams` : ""}</span></span><time>${hm(r.end)}</time></div>`));
         }
         while (feed.children.length > 30) feed.lastChild.remove();
       }
@@ -259,7 +292,7 @@ function MachinesPage() {
 }
 
 /* ---------------- FLOOR MAP (bird's-eye) ---------------- */
-function planSVG(plan, fl, layer, states) {
+function planSVG(plan, fl, layer, states, hl = null) {
   const S = 100, W = plan.width * S, D = plan.depth * S, inb = (x, y) => x != null && y != null && x > -1 && y > -1 && x < plan.width + 1 && y < plan.depth + 1;
   let g = `<svg class="plan" viewBox="-60 -60 ${W + 120} ${D + 150}" role="img" aria-label="Floor plan of ${esc(plan.name)}">`;
   const cid = "pc" + hash(plan.id);
@@ -289,7 +322,7 @@ function planSVG(plan, fl, layer, states) {
     if (tr.length > 1) g += `<polyline points="${tr.map(([x, y]) => `${(x * S).toFixed(0)},${(y * S).toFixed(0)}`).join(" ")}" fill="none" stroke="var(--ink-2)" stroke-width="4" opacity=".35" stroke-linejoin="round"/>`;
     const act = q.activity && q.activity !== "standing", col = act ? "var(--lift)" : q.planted && q.zone ? "var(--rest)" : "var(--ink-2)";
     const x = Math.max(0, Math.min(W, q.x * S)), y = Math.max(0, Math.min(D, q.y * S));
-    g += `<g data-tip="${esc(q.label)}${q.activity ? "\n" + esc(actName(q.activity)) : ""}${q.zone ? "\nat " + esc(machineName(q.zone)) : ""}"><circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="30" fill="${col}" stroke="var(--surface)" stroke-width="7"/>
+    g += `<g class="pdot${q.member ? " link" : ""}${hl === q.pid ? " hl" : ""}" data-pid="${q.pid}" ${q.member ? `data-member="${esc(q.member)}" role="link" tabindex="0"` : ""} data-tip="${esc(q.label)}${q.activity ? "\n" + esc(actName(q.activity)) : ""}${q.zone ? "\nat " + esc(machineName(q.zone)) : ""}${q.member ? "\nClick to open profile" : ""}"><circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="30" fill="${col}" stroke="var(--surface)" stroke-width="7"/>
       <text class="lbl" x="${x.toFixed(0)}" y="${(y - 44).toFixed(0)}" text-anchor="middle">${esc(q.label.replace(/^\w+ /, ""))}${act ? " · " + esc(actName(q.activity)) : ""}</text></g>`;
   }
   g += `<g transform="translate(0 ${D + 50})"><line x1="0" y1="0" x2="${S}" y2="0" stroke="var(--ink-2)" stroke-width="5"/><text x="${S + 14}" y="8">1 m</text>
@@ -321,9 +354,30 @@ function hotspots(plan, heat, n = 3) {
 }
 
 function MapPage() {
-  let layer = store.get("maplayer", "both");
+  let layer = store.get("maplayer", "both"), hover = null;
+  let mode = store.get("mapmode", "3d");
+  const scenes = {};
+  const setHover = pid => { hover = pid; document.querySelectorAll(".mapgrid [data-pid]").forEach(e => e.classList.toggle("hl", pid != null && +e.dataset.pid === pid)); Object.values(scenes).forEach(s => s?.highlight?.(pid)); };
+  const showMode = async (box, p) => {
+    const sc = src.sceneFor?.(p.id), use3d = mode === "3d" && sc;
+    box.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === (use3d ? "3d" : "plan")));
+    box.querySelector(".pv").hidden = !!use3d; box.querySelector(".p3").hidden = !use3d;
+    box.querySelector(".legend").hidden = !!use3d;
+    if (!use3d) { scenes[p.id]?.destroy(); delete scenes[p.id]; return; }
+    if (scenes[p.id]) return;
+    scenes[p.id] = "loading";
+    try {
+      const [{mountScene}, meta] = await Promise.all([import("./scene3d.js"), sc.meta()]);
+      if (scenes[p.id] !== "loading") return;
+      scenes[p.id] = mountScene(box.querySelector(".p3"), {meta, base: sc.base, cam: sc.cam, plan: p,
+        peopleNow: () => src.peopleNow(p.id), heat: () => src.heat(p.id),
+        labelOf: q => q.label + (q.activity && q.activity !== "standing" ? " · " + actName(q.activity) : ""),
+        onHover: pid => { hover = pid; document.querySelectorAll(".mapgrid [data-pid]").forEach(e => e.classList.toggle("hl", pid != null && +e.dataset.pid === pid)); },
+        onOpen: q => { if (q?.member) location.hash = "member-" + q.member; else if (q) toast(`${q.label} was only on camera briefly, so there's no profile yet.`); }});
+    } catch (e) { console.error(e); delete scenes[p.id]; box.querySelector(".p3").innerHTML = `<div class="empty" style="padding:24px">3D view needs WebGL2. Showing the floor plan instead.</div>`; mode = "plan"; showMode(box, p); }
+  };
   return {
-    title: "Floor map", sub: () => "Bird's-eye view: everyone the cameras see, placed on the floor plan",
+    title: "Floor map", sub: () => "Everyone the cameras see, placed in a 3D model of the gym or on the floor plan",
     actions(a) {
       const c = el(`<div class="chips" role="group" aria-label="Layers">${[["both", "People + traffic"], ["people", "People"], ["heat", "Traffic heatmap"]].map(([k, l]) => `<button class="chip" data-l="${k}" aria-pressed="${k === layer}">${l}</button>`).join("")}</div>`);
       c.onclick = e => { const b = e.target.closest("[data-l]"); if (!b) return; layer = b.dataset.l; store.set("maplayer", layer); c.querySelectorAll("[data-l]").forEach(x => x.setAttribute("aria-pressed", x.dataset.l === layer)); this.update(); };
@@ -332,21 +386,28 @@ function MapPage() {
     mount(v) {
       const plans = src.plans();
       if (!plans.length) { v.append(el(`<div class="card empty">${IC.map}<b>No calibrated cameras yet</b>Calibrate a camera (4 points on the floor and their distances) and GymTrack places everyone it sees on a floor plan.${src.mode === "demo" ? " The simulation has no floor plan; open the real-footage demo." : ""}</div>`)); return; }
-      for (const p of plans) v.append(el(`<section class="mapgrid" data-plan="${esc(p.id)}"><div class="card card-b"><div class="card-h" style="padding:0 0 10px"><h2>${esc(p.name)}</h2><span class="right legend"><span><i style="background:var(--lift)"></i>Exercising</span><span><i style="background:var(--rest)"></i>At a station</span><span><i style="background:var(--ink-2)"></i>Moving / other</span><span><i style="background:var(--rest);opacity:.5"></i>Traffic</span></span></div><div class="pv"></div></div>
+      for (const p of plans) v.append(el(`<section class="mapgrid" data-plan="${esc(p.id)}"><div class="card card-b"><div class="card-h" style="padding:0 0 10px"><h2>${esc(p.name)}</h2>${src.sceneFor?.(p.id) ? `<div class="seg" role="group" aria-label="View"><button data-mode="3d">3D scene</button><button data-mode="plan">Plan</button></div>` : ""}<span class="right legend"><span><i style="background:var(--lift)"></i>Exercising</span><span><i style="background:var(--rest)"></i>At a station</span><span><i style="background:var(--ink-2)"></i>Moving / other</span><span><i style="background:var(--rest);opacity:.5"></i>Traffic</span></span></div><div class="pv"></div><div class="p3" hidden></div></div>
         <div style="display:flex;flex-direction:column;gap:20px;min-width:0"><section class="card kpi"><span class="eyebrow">On camera now</span><div class="row"><span class="big pc">–</span><span class="delta pk"></span></div></section>
         <section class="card"><div class="card-h"><h2>Right now</h2></div><div class="plist pl" style="margin-top:6px"></div></section>
         <section class="card"><div class="card-h"><h2>Hotspots</h2><span class="right hint">most person-time</span></div><div class="plist hs" style="margin-top:6px"></div></section></div></section>`));
+      for (const p of plans) { const box = v.querySelector(`.mapgrid[data-plan="${CSS.escape(p.id)}"]`); showMode(box, p);
+        box.querySelector(".seg")?.addEventListener("click", e => { const b = e.target.closest("[data-mode]"); if (!b) return; mode = b.dataset.mode; store.set("mapmode", mode); for (const q of plans) showMode(document.querySelector(`.mapgrid[data-plan="${CSS.escape(q.id)}"]`), q); }); }
+      v.onmouseover = e => { const t = e.target.closest("[data-pid]"); setHover(t ? +t.dataset.pid : null); };
+      v.onmouseleave = () => setHover(null);
+      const open = e => { const t = e.target.closest("[data-member]"); if (t) location.hash = "member-" + t.dataset.member; };
+      v.onclick = open; v.onkeydown = e => { if (e.key === "Enter") open(e); };
     },
+    unmount() { for (const k of Object.keys(scenes)) { scenes[k]?.destroy?.(); delete scenes[k]; } },
     async update() {
       const plans = src.plans(); if (!plans.length || !live) return;
       const fl = await src.floor(), states = Object.fromEntries(live.machines.map(m => [m.id, m]));
       for (const p of plans) {
         const box = document.querySelector(`.mapgrid[data-plan="${CSS.escape(p.id)}"]`); if (!box) continue;
         const f = fl.find(x => x.plan === p.id) || {};
-        box.querySelector(".pv").innerHTML = planSVG(p, f, layer, states);
+        box.querySelector(".pv").innerHTML = planSVG(p, f, layer, states, hover);
         box.querySelector(".pc").textContent = f.headcount ?? "–";
         box.querySelector(".pk").textContent = f.heat?.peak ? `peak ${f.heat.peak} so far` : "";
-        box.querySelector(".pl").innerHTML = (f.people || []).map(q => `<div class="r"><span class="avatar sm" style="--a:${q.activity && q.activity !== "standing" ? "var(--lift)" : "var(--other)"}">${esc(initials(q.label))}</span><span>${esc(q.label)}<span class="muted"> · ${q.activity ? esc(actName(q.activity)) : "–"}</span></span><span class="muted">${q.zone ? esc(machineName(q.zone)) : "floor"}</span></div>`).join("") || `<div class="empty" style="padding:16px">Nobody on camera.</div>`;
+        box.querySelector(".pl").innerHTML = (f.people || []).map(q => `<div class="r${q.member ? " link" : ""}${hover === q.pid ? " hl" : ""}" data-pid="${q.pid}" ${q.member ? `data-member="${esc(q.member)}" role="link" tabindex="0"` : ""}><span class="avatar sm" style="--a:${q.activity && q.activity !== "standing" ? "var(--lift)" : "var(--other)"}">${esc(initials(q.label))}</span><span>${esc(q.label)}<span class="muted"> · ${q.activity ? esc(actName(q.activity)) : "–"}</span></span><span class="muted">${q.zone ? esc(machineName(q.zone)) : "floor"}</span></div>`).join("") || `<div class="empty" style="padding:16px">Nobody on camera.</div>`;
         box.querySelector(".hs").innerHTML = hotspots(p, f.heat).map((h, i) => `<div class="r"><span class="avatar sm" style="--a:var(--rest)">${i + 1}</span><span>${esc(h.where)}</span><span class="muted">${fmtDur(h.v)}</span></div>`).join("") || `<div class="empty" style="padding:16px">Building up…</div>`;
       }
     },

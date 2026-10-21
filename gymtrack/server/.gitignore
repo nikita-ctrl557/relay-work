@@ -8,3 +8,4 @@ recordings/
 report.html
 report.json
 models/*.onnx
+models/*.joblib

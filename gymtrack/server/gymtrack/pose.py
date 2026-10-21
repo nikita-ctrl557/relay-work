@@ -45,6 +45,8 @@ class PoseEstimator:
         rots = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE] if w > 1.15 * h else [None]
         best, best_conf = None, self.conf
         for rot in rots:
+            if best is not None and rot is not None and best_conf > 0.8:
+                break  # upright pose already confident: skip the rotated tries
             img_r = crop if rot is None else cv2.rotate(crop, rot)
             blob = cv2.cvtColor(cv2.resize(img_r, (256, 256), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
             self.net.setInput(blob[None])
