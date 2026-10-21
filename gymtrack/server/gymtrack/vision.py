@@ -97,32 +97,53 @@ class FrameAnalyzer:
         return FrameReading(self.cam.id, t, zones, tags)
 
 
+LIFT_BGR, REST_BGR, FREE_BGR, TAG_BGR = (240, 124, 61), (53, 122, 239), (200, 200, 200), (255, 224, 0)
+
+
+def _chip(img, x: int, y: int, text: str, bg, fg=(255, 255, 255)) -> int:
+    (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+    x2, y2 = x + w + 12, y + 18
+    cv2.rectangle(img, (x + 4, y), (x2 - 4, y2), bg, -1)
+    cv2.circle(img, (x + 9, y + 9), 9, bg, -1)
+    cv2.circle(img, (x2 - 9, y + 9), 9, bg, -1)
+    cv2.putText(img, text, (x + 6, y + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.42, fg, 1, cv2.LINE_AA)
+    return x2 - x
+
+
+def _dashed(img, pts: np.ndarray, color, dash: int = 6):
+    for i in range(len(pts)):
+        p, q = pts[i].astype(float), pts[(i + 1) % len(pts)].astype(float)
+        n = max(1, int(np.hypot(*(q - p)) // dash))
+        for k in range(0, n, 2):
+            a, b = p + (q - p) * k / n, p + (q - p) * min(k + 1, n) / n
+            cv2.line(img, tuple(map(int, a)), tuple(map(int, b)), color, 1, cv2.LINE_AA)
+
+
 def annotate(frame: np.ndarray, cam: Camera, reading: FrameReading | None, states: dict,
              motion_mask: np.ndarray | None = None, names: dict[int, str] | None = None) -> np.ndarray:
-    """Draw zones, live machine state and detected tags onto a copy of the frame."""
+    """Draw machine zones, live state and member tags onto a copy of the frame (dashboard style)."""
     out = frame.copy()
-    if motion_mask is not None and motion_mask.shape == out.shape[:2]:
-        out[motion_mask] = (0.5 * out[motion_mask] + np.array([0, 110, 255]) * 0.5).astype(np.uint8)
     for z in cam.zones:
         st = states.get(z.machine, {})
-        lifting = st.get("state") == "lifting"
-        occupied = bool(st.get("member"))
-        color = (60, 220, 90) if lifting else (255, 200, 0) if occupied else (150, 150, 150)
+        lifting, occupied = st.get("state") == "lifting", bool(st.get("member"))
         pts = np.array(z.polygon, dtype=np.int32)
-        cv2.polylines(out, [pts], True, color, 2)
-        x, y = pts[:, 0].min(), pts[:, 1].min()
-        label = st.get("name", z.machine)
-        if st.get("member_name"):
-            label += f" | {st['member_name']}"
         if lifting:
-            label += f" | LIFT {st.get('reps', 0)}r"
+            layer = out.copy()
+            cv2.fillPoly(layer, [pts], LIFT_BGR)
+            out = cv2.addWeighted(layer, 0.14, out, 0.86, 0)
+            cv2.polylines(out, [pts], True, LIFT_BGR, 2, cv2.LINE_AA)
         elif occupied:
-            label += " | rest"
-        cv2.rectangle(out, (x, y - 16), (x + 8 * len(label) + 6, y), color, -1)
-        cv2.putText(out, label, (x + 3, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (10, 10, 10), 1, cv2.LINE_AA)
+            cv2.polylines(out, [pts], True, REST_BGR, 2, cv2.LINE_AA)
+        else:
+            _dashed(out, pts, FREE_BGR)
+        x, y = int(pts[:, 0].min()) + 6, int(pts[:, 1].min()) + 6
+        x += _chip(out, x, y, st.get("name", z.machine), (12, 10, 8)) + 4
+        if lifting:
+            _chip(out, x, y, f"{st.get('member_name') or 'Guest'} - {st.get('reps', 0)} reps", LIFT_BGR)
+        elif occupied:
+            _chip(out, x, y, f"{st.get('member_name')} - resting", REST_BGR, (4, 13, 26))
     if reading:
         for tid, (tx, ty) in reading.tags.items():
-            cv2.circle(out, (int(tx), int(ty)), 4, (0, 224, 255), -1)
-            nm = (names or {}).get(tid, f"tag {tid}")
-            cv2.putText(out, nm, (int(tx) + 8, int(ty) + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 224, 255), 1, cv2.LINE_AA)
+            cv2.circle(out, (int(tx), int(ty)), 4, TAG_BGR, -1, cv2.LINE_AA)
+            _chip(out, int(tx) + 22, int(ty) - 40, (names or {}).get(tid, f"tag {tid}"), TAG_BGR, (28, 22, 0))
     return out

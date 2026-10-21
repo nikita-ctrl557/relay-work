@@ -163,22 +163,25 @@ def report_html(rep: dict) -> str:
         f'<td class=n>{s["reps"]}</td><td class=n>{dur(s["end"] - s["start"])}</td></tr>' for s in rep["sets"])
     T = rep["totals"]
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GymTrack recording report</title><style>
-:root{{--bg:#f6f7f8;--panel:#fff;--ink:#14181d;--mut:#5f6b77;--line:#dde1e5;--lift:#2a78d6;--guest:#a9b1b9}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#14181d;--panel:#1a1f26;--ink:#e8eef4;--mut:#96a2ae;--line:#2c343e;--lift:#3987e5;--guest:#5b6570}}}}
-body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,-apple-system,Segoe UI,Helvetica,Arial,sans-serif}}
-main{{max-width:1100px;margin:0 auto;padding:24px 16px 60px}} h1{{font-size:22px;margin:0 0 4px}} h2{{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);font-weight:500;margin:0 0 12px}}
-.mut{{color:var(--mut)}} .tiles{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:18px 0}}
-.tile,.panel{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}} .panel{{margin-top:16px;overflow-x:auto}}
-.tile b{{display:block;font-size:22px;font-variant-numeric:tabular-nums}} .tile span{{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}}
-.lane{{display:grid;grid-template-columns:200px 1fr;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}} .ln small{{display:block;color:var(--mut);font-size:11.5px}}
-.track{{position:relative;height:22px;background:var(--bg);border-radius:4px}} .b{{position:absolute;top:3px;bottom:3px;background:var(--lift);border-radius:3px}} .b.g{{background:var(--guest)}}
-.axis{{position:relative;height:18px;margin-left:210px;font-size:11px;color:var(--mut)}} .axis span{{position:absolute;transform:translateX(-50%)}}
-table{{width:100%;border-collapse:collapse;font-size:13px}} th{{text-align:left;font-weight:500;color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--line);padding:6px}}
-td{{padding:6px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}} .n{{text-align:right}}
+<title>GymTrack recording report</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap"><style>
+:root{{--bg:#eceef1;--panel:#fff;--ink:#0f1318;--mut:#687482;--line:#dadee4;--lift:#1d5bd8;--guest:#b7bec8;--track:#f5f6f8;
+--fd:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;--fb:"Hanken Grotesk",ui-sans-serif,system-ui,sans-serif;--fm:"IBM Plex Mono",ui-monospace,monospace}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#0c0e11;--panel:#14171c;--ink:#eef1f5;--mut:#8b95a2;--line:#252a32;--lift:#3d7cf0;--guest:#4a525e;--track:#1a1e24;color-scheme:dark}}}}
+body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--fb);-webkit-font-smoothing:antialiased}}
+main{{max-width:1100px;margin:0 auto;padding:28px 16px 60px}} h1{{font:700 32px/1.05 var(--fd);text-transform:uppercase;letter-spacing:.01em;margin:0 0 6px}}
+h2{{font-size:13px;font-weight:650;margin:0 0 12px}} .mut{{color:var(--mut)}}
+.tiles{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:20px 0}}
+.tile,.panel{{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}} .panel{{margin-top:16px;overflow-x:auto}}
+.tile b{{display:block;font:700 30px/1.1 var(--fd);font-variant-numeric:tabular-nums;margin-top:6px}} .tile span{{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);font-weight:600}}
+.lane{{display:grid;grid-template-columns:210px 1fr;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}} .ln{{font-weight:600}} .ln small{{display:block;color:var(--mut);font-size:11.5px;font-weight:400}}
+.track{{position:relative;height:26px;background:var(--track);border-radius:6px}} .b{{position:absolute;top:4px;bottom:4px;background:var(--lift);border-radius:3px}} .b.g{{background:var(--guest)}}
+.axis{{position:relative;height:18px;margin-left:222px;font:500 10.5px var(--fm);color:var(--mut);margin-top:6px}} .axis span{{position:absolute;transform:translateX(-50%)}}
+table{{width:100%;border-collapse:collapse;font-size:13px}} th{{text-align:left;font-weight:600;color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--line);padding:8px}}
+td{{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}} .n{{text-align:right}}
 @media(max-width:640px){{.lane{{grid-template-columns:1fr}} .axis{{margin-left:0}}}}
 </style></head><body><main>
-<h1>{e(rep["gym"])}: recording report</h1>
+<div class="mut" style="font:600 11px var(--fm);letter-spacing:.14em;text-transform:uppercase">GymTrack · recording report</div><h1>{e(rep["gym"])}</h1>
 <div class="mut">{e(datetime.fromtimestamp(t0).strftime("%a %d %b %Y, %H:%M"))}–{clock(t1)} · {dur(rep.get("video_s", t1 - t0))} of video from camera “{e(rep.get("camera", ""))}” · analysed in {dur(rep.get("processing_s", 0))} ({rep.get("speed_x", 0)}× real time)</div>
 <div class="tiles"><div class="tile"><span>Sets</span><b>{T["sets"]}</b></div><div class="tile"><span>Reps</span><b>{T["reps"]}</b></div>
 <div class="tile"><span>Time under load</span><b>{dur(T["lifting_s"])}</b></div><div class="tile"><span>Sets by tagged members</span><b>{T["tagged_sets"]}</b></div>

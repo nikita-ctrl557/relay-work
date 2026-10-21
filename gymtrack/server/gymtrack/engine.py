@@ -338,6 +338,7 @@ class Engine:
                         "avg_rest_s": round(sum(s.rests) / len(s.rests)) if s.rests else None,
                         "machines": dict(Counter(x.machine for x in s.sets)),
                         "session_start": s.start,
+                        "timeline": [[x.start, x.end, x.machine, x.reps] for x in s.sets],
                     })
                 members.append(row)
             return {

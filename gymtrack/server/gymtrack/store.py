@@ -116,6 +116,13 @@ class Store:
             r["busy"] = round(r["busy"] or 0)
         return rows
 
+    def machine_hourly(self, since: float) -> dict[str, list[int]]:
+        """Sets per machine for each hour of the day (local time) since `since`."""
+        out: dict[str, list[int]] = {}
+        for r in self._all("SELECT machine, start FROM sets WHERE start>=?", (since,)):
+            out.setdefault(r["machine"], [0] * 24)[datetime.fromtimestamp(r["start"]).hour] += 1
+        return out
+
     # -- demo data -----------------------------------------------------------
     def seed_history(self, cfg, weeks: int = 6, seed: int = 7) -> None:
         """Fill past weeks with plausible training so progress charts have something to show.

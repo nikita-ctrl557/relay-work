@@ -10,6 +10,7 @@ from pathlib import Path
 import cv2
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .cameras import CameraWorker, redact
@@ -93,6 +94,8 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
     def index():
         return FileResponse(DASHBOARD)
 
+    app.mount("/assets", StaticFiles(directory=DASHBOARD.parent / "assets"), name="assets")
+
     # -- read --------------------------------------------------------------
     @app.get("/api/config")
     def get_config():
@@ -114,6 +117,10 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
         if not any(m.id == member_id for m in cfg.members):
             raise HTTPException(404, "unknown member")
         return store.member_progress(member_id, days)
+
+    @app.get("/api/machines/hourly")
+    def hourly(days: float = 7):
+        return store.machine_hourly(time.time() - days * 86400)
 
     @app.get("/api/machines/utilisation")
     def utilisation(hours: float = 24):
