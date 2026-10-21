@@ -12,7 +12,7 @@ import {SparkRenderer, SplatMesh} from "@sparkjsdev/spark";
 
 const CAL_W = 640, CAL_H = 360; // zones and calibration points are stored at this frame size
 
-export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, states, onOpen, onHover, labelOf}) {
+export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer = () => "both", onOpen, onHover, labelOf}) {
   const [f, cx, cy, W, H] = meta.intrinsics, [nx, ny, nz, nd] = meta.floor, N = new THREE.Vector3(nx, ny, nz);
   const wrap = document.createElement("div"); wrap.className = "s3d";
   wrap.innerHTML = `<div class="s3d-load">Loading 3D scene…</div><div class="s3d-labels"></div>
@@ -156,13 +156,15 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, states
     if (ts - heatAt > 3000) { heatAt = ts; drawHeat(heat()); }
     if (anim) { anim.t = Math.min(1, anim.t + 0.04); const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.l0, anim.l1, e); if (anim.t >= 1) anim = null; }
     controls.update();
-    const rect = renderer.domElement.getBoundingClientRect();
+    const rect = renderer.domElement.getBoundingClientRect(), L = layer(), showPeople = L !== "heat";
+    if (heatMesh) heatMesh.visible = L !== "people";
     for (const [pid, p] of people) {
       if (p.target) p.pos.lerp(p.target, 0.18);
       p.mesh.position.copy(p.pos).addScaledVector(N, M(0.87)); p.ring.position.copy(lift(p.pos));
       const hl = hoverPid === pid; p.ring.material.opacity = hl ? 0.95 : 0; p.mesh.material.opacity = hl ? 1 : 0.85; p.mesh.scale.setScalar(hl ? 1.12 : 1);
       tmp.copy(p.pos).addScaledVector(N, M(1.95)).applyQuaternion(world.quaternion).project(camera);
-      const vis = tmp.z < 1 && Math.abs(tmp.x) < 1.1 && Math.abs(tmp.y) < 1.1;
+      p.mesh.visible = p.ring.visible = showPeople;
+      const vis = showPeople && tmp.z < 1 && Math.abs(tmp.x) < 1.1 && Math.abs(tmp.y) < 1.1;
       p.tag.style.display = vis ? "" : "none";
       if (vis) p.tag.style.transform = `translate(${((tmp.x + 1) / 2 * rect.width).toFixed(1)}px, ${((1 - tmp.y) / 2 * rect.height).toFixed(1)}px) translate(-50%, -100%)`;
       p.tag.classList.toggle("hl", hl);

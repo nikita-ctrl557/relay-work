@@ -20,6 +20,8 @@ DWELL_S = 2.0        # a tag must stay this long in a zone to occupy the machine
 DWELL_RADIUS_PX = 60 # ...without moving further than this (walking past doesn't count)
 SET_PRESENCE = 0.3   # share of a set's frames a tag must appear in to be credited
 PLANTED_SHARE = 0.4  # with people tracking, share of a set's frames someone must stand planted in the zone
+UNPLANTED_END_S = 5.0  # with people tracking, a set ends once nobody has stood planted in the zone this long
+PLANTED_LEAD_S = 2.0   # a set starts at most this long before someone first stands planted in the zone
 LIVE_REPS_EVERY_S = 1.0
 MAX_SET_FRAMES = 3000  # per camera; ~5 minutes at 10 fps
 
@@ -71,6 +73,9 @@ class MachineTracker:
         self.set_cams: set[str] = set()
         self.occupant: str | None = None
         self.occupied_since: float | None = None
+        self.planted_at: float | None = None       # last time someone stood planted in this zone
+        self.tracked_at: float | None = None       # last reading that came with people tracking
+        self.set_first_planted: float | None = None
 
     # -- signal fusion -----------------------------------------------------
     def ingest(self, cam: str, t: float, motion: float, thumb, tags: list[int], positions: dict | None = None,
@@ -90,6 +95,12 @@ class MachineTracker:
             self.tag_seen[tag] = t
             if self.state == "lifting":
                 self.set_tags[tag] += 1
+        if tracking:
+            self.tracked_at = t
+            if any(zone == self.id and rest and rest[0] for _pid, _m, zone, *rest in people or []):
+                self.planted_at = t
+                if self.state == "lifting" and self.set_first_planted is None:
+                    self.set_first_planted = t
         if self.state == "lifting":
             self.set_cams.add(cam)
             self.set_frames += 1
@@ -146,6 +157,7 @@ class MachineTracker:
                     self.set_acts = Counter()
                     self.set_frames = 0
                     self.set_tracked_frames = self.set_planted = 0
+                    self.set_first_planted = self.planted_at if self.planted_at is not None and t - self.planted_at <= th.on_hold_s + 1 else None
                     self.set_cams = {c for c, z in self.cams.items() if t - z.t <= FUSE_WINDOW_S}
                     self._live_reps, self._live_at = 0, -1e9
                     self.below_since = None
@@ -153,6 +165,12 @@ class MachineTracker:
                 self.above_since = None
                 self._trim(t - th.on_hold_s - 1.0)  # keep only a short pre-roll while idle
         else:
+            # people tracking: motion alone doesn't keep a set going (pacing, kids, plate changes);
+            # once nobody has stood planted in the zone for a while, the set ended when they left
+            if (self.tracked_at is not None and t - self.tracked_at <= 2.0 and self.set_people and self.set_tracked_frames >= 10):
+                last = self.planted_at if self.planted_at is not None and self.planted_at >= (self.set_start or t) else None
+                if t - (last if last is not None else self.set_start) > UNPLANTED_END_S:
+                    return self._finish_set(last if last is not None else t)
             if self.ema < th.lift_off:
                 self.below_since = self.below_since if self.below_since is not None else t
                 if t - self.below_since >= th.off_hold_s:
@@ -163,6 +181,8 @@ class MachineTracker:
     def _finish_set(self, end: float):
         th = self.e.cfg.thresholds
         start = self.set_start or end
+        if self.set_first_planted is not None and self.set_tracked_frames >= 10:
+            start = max(start, self.set_first_planted - PLANTED_LEAD_S)  # drop the walking-around before the set
         self.state, self.above_since, self.below_since, self.set_start = "idle", None, None, None
         if end - start < th.min_set_s:
             return
@@ -170,6 +190,8 @@ class MachineTracker:
         # otherwise it was walking past, kids playing, stretching on the floor...
         if self.set_tracked_frames >= 10 and self.set_people and self.set_planted < PLANTED_SHARE * self.set_tracked_frames:
             return
+        if self.set_tracked_frames >= 10 and self.set_planted == 0 and self.e.people_seen_recently(end):
+            return  # people are being tracked fine, yet nobody ever stood in this zone: not a set
         member = self._set_member() or self._occupant_if_seen()
         person = None
         if self.set_people:  # the tracked person who stood in this zone for most of the set
@@ -272,6 +294,7 @@ class Engine:
         self.recent_sets: list[SetRecord] = []
         self.now = 0.0
         self.camera_stats: dict[str, dict] = {}
+        self.people_at: float | None = None   # last reading in which the tracker saw anyone at all
 
     # -- input -------------------------------------------------------------
     def ingest(self, r: FrameReading):
@@ -280,6 +303,8 @@ class Engine:
             st = self.camera_stats.setdefault(r.camera, {"frames": 0, "last_t": r.t})
             st["frames"] += 1
             st["last_t"] = r.t
+            if r.tracking and r.people:
+                self.people_at = r.t
             for tag, _ in r.tags.items():
                 m = self.cfg.member_by_tag(tag)
                 if m:
@@ -294,6 +319,10 @@ class Engine:
             for s in self.sessions.values():
                 s.location = next((mid for mid, mt in self.machines.items() if mt.occupant == s.member), None)
             self._expire(r.t)
+
+    def people_seen_recently(self, t: float, within: float = 30.0) -> bool:
+        """The detector is working on this footage (it found someone lately), so an empty zone really is empty."""
+        return self.people_at is not None and t - self.people_at <= within
 
     def tick(self, t: float):
         with self.lock:

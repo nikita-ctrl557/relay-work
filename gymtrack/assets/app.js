@@ -370,7 +370,7 @@ function MapPage() {
       const [{mountScene}, meta] = await Promise.all([import("./scene3d.js"), sc.meta()]);
       if (scenes[p.id] !== "loading") return;
       scenes[p.id] = mountScene(box.querySelector(".p3"), {meta, base: sc.base, cam: sc.cam, plan: p,
-        peopleNow: () => src.peopleNow(p.id), heat: () => src.heat(p.id),
+        peopleNow: () => src.peopleNow(p.id), heat: () => src.heat(p.id), layer: () => layer,
         labelOf: q => q.label + (q.activity && q.activity !== "standing" ? " · " + actName(q.activity) : ""),
         onHover: pid => { hover = pid; document.querySelectorAll(".mapgrid [data-pid]").forEach(e => e.classList.toggle("hl", pid != null && +e.dataset.pid === pid)); },
         onOpen: q => { if (q?.member) location.hash = "member-" + q.member; else if (q) toast(`${q.label} was only on camera briefly, so there's no profile yet.`); }});
