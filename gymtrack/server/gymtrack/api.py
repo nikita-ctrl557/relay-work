@@ -123,6 +123,40 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
             raise HTTPException(404, "unknown member")
         return store.member_progress(member_id, days)
 
+    @app.get("/api/floor")
+    def floor():
+        """Bird's-eye view: everyone on the floor plan right now, plus where people spent time."""
+        people, heat, count = [], None, 0
+        names = {m.id: m.name for m in cfg.members}
+        for w in workers.values():
+            tr = w.tracker
+            if not tr:
+                continue
+            vis = tr.visible(time.time())
+            count += len(vis)
+            for t in vis:
+                pp = tr.to_plan(*t.feet)
+                people.append({"id": t.member or f"{w.cam.id}-{t.id}", "pid": t.id, "label": names.get(t.member) or f"#{t.id}",
+                               "camera": w.cam.id, "plan": "gym", "x": pp[0] if pp else None, "y": pp[1] if pp else None,
+                               "zone": t.zone, "activity": t.activity, "planted": t.planted,
+                               "trail": [list(tr.to_plan(x, y) or (None, None)) for x, y in t.trail[-12:]]})
+            if tr.plan_size:
+                g = tr.plan_heat[: tr.plan_heat.shape[0] // 2 * 2, : tr.plan_heat.shape[1] // 2 * 2]
+                g = g.reshape(g.shape[0] // 2, 2, g.shape[1] // 2, 2).sum((1, 3))  # 25 cm -> 50 cm cells
+                heat = g if heat is None else heat + g
+        # the same person seen by two calibrated cameras lands in (almost) the same spot: keep one dot
+        merged = []
+        for q in sorted(people, key=lambda q: (q["activity"] is None, q["member"] is None if "member" in q else True)):
+            if q["x"] is not None and any(m["camera"] != q["camera"] and m["x"] is not None and
+                                          ((m["x"] - q["x"]) ** 2 + (m["y"] - q["y"]) ** 2) ** 0.5 < 0.9 for m in merged):
+                continue
+            merged.append(q)
+        people, count = merged, len(merged)
+        h = None
+        if heat is not None:
+            h = {"W": heat.shape[1], "D": heat.shape[0], "cell": 0.5, "grid": [round(float(v), 1) for v in heat.ravel()], "total": float(heat.sum())}
+        return [{"plan": "gym", "headcount": count, "people": people, "heat": h}] if cfg.plan else []
+
     @app.get("/api/machines/hourly")
     def hourly(days: float = 7):
         return store.machine_hourly(time.time() - days * 86400)
@@ -196,6 +230,29 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
             w.tracker.set_zones(w.cam.zones)
         cfg.save()
         return w.info()
+
+    class CalibIn(BaseModel):
+        image: list[list[float]]
+        plan: list[list[float]]
+        width: float | None = None
+        depth: float | None = None
+
+    @app.put("/api/cameras/{cid}/calibration", dependencies=[Depends(require_token)])
+    def set_calibration(cid: str, c: CalibIn):
+        """4 floor points in the camera image and where they are on the floor plan (metres)."""
+        w = worker(cid)
+        if len(c.image) != 4 or len(c.plan) != 4:
+            raise HTTPException(400, "need exactly 4 image points and 4 plan points")
+        w.cam.calib = {"image": c.image, "plan": c.plan}
+        if c.width and c.depth:
+            cfg.plan = {"width": c.width, "depth": c.depth}
+        elif not cfg.plan:
+            xs, ys = [p[0] for p in c.plan], [p[1] for p in c.plan]
+            cfg.plan = {"width": max(xs) + 1, "depth": max(ys) + 1}
+        if w.tracker:
+            w.tracker.H = w.cam.homography()
+        cfg.save()
+        return {"ok": True, "plan": cfg.plan}
 
     @app.post("/api/members", dependencies=[Depends(require_token)])
     def add_member(m: MemberIn):

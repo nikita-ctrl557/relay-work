@@ -79,7 +79,10 @@ class CameraWorker(threading.Thread):
             try:
                 from .tracking import DEFAULT_MODEL, PeopleTracker, PersonDetector
                 if DEFAULT_MODEL.exists():
-                    self.tracker = PeopleTracker(cam.zones, PersonDetector())
+                    from .pose import POSE_MODEL, PoseEstimator
+                    plan = (cfg.plan["width"], cfg.plan["depth"]) if cfg.plan else None
+                    self.tracker = PeopleTracker(cam.zones, PersonDetector(), pose=PoseEstimator() if POSE_MODEL.exists() else None,
+                                                 homography=cam.homography(), plan_size=plan)
             except Exception as exc:  # no model / no DNN support: zone tracking still works
                 self.error = f"people tracking off: {exc}"
         self._tracks = []
@@ -125,7 +128,7 @@ class CameraWorker(threading.Thread):
                     reading = self.analyzer.analyze(frame, now)
                     if self.tracker:
                         self._tracks = self.tracker.update(frame, now, reading.tags, self.cfg.member_by_tag)
-                        reading.people = [(tr.id, tr.member, tr.zone, tr.planted) for tr in self._tracks]
+                        reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity) for tr in self._tracks]
                         reading.tracking = True
                     self.engine.ingest(reading)
                     with self._lock:

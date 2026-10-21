@@ -5,11 +5,12 @@ const MIC = {
   today: SV('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
   time: SV('<path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5H12z"/><path d="M15 3.8A8.5 8.5 0 0 1 20.2 9H15z"/>'),
   progress: SV('<path d="M4 18l5-6 4 3 7-9"/><path d="M15 6h5v5"/>'),
+  body: SV('<circle cx="12" cy="4.5" r="2"/><path d="M8 8.5h8l-1 6h-6zM9.5 14.5l-1 7M14.5 14.5l1 7M8 8.5 5 13M16 8.5l3 4.5"/>'),
   history: SV('<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
   lock: SV('<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>'),
   spark: SV('<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>'),
 };
-const TABS = [{id: "today", label: "Today"}, {id: "time", label: "Time"}, {id: "progress", label: "Progress"}, {id: "history", label: "History"}];
+const TABS = [{id: "today", label: "Today"}, {id: "time", label: "Time"}, {id: "body", label: "Body"}, {id: "progress", label: "Progress"}, {id: "history", label: "History"}];
 let src, cfg, live, me, prog = null, progAt = 0, range = "7";
 
 const ring = (frac, color, value, label) => {
@@ -100,6 +101,13 @@ function timeView() {
     ${tip2 ? `<div class="insight">${MIC.spark}<span>${tip2}</span></div>` : ""}`;
 }
 
+/* ---------- BODY: muscles trained, training style, coaching ---------- */
+function bodyView() {
+  if (!prog) return `<div class="mcard2 empty">Loading…</div>`;
+  return `<div class="sec-h"><h2>Your body this week</h2><span class="r">last 7 days</span></div>
+    <div class="mcard2">${trainingProfileHTML(prog, {compact: false})}</div>`;
+}
+
 /* ---------- PROGRESS ---------- */
 function spark(vals) {
   if (vals.length < 2) return `<svg class="spark"></svg>`;
@@ -133,7 +141,7 @@ function historyView() {
 
 /* ---------- shell ---------- */
 function render() {
-  const view = {today: todayView, time: timeView, progress: progressView, history: historyView}[route()];
+  const view = {today: todayView, time: timeView, body: bodyView, progress: progressView, history: historyView}[route()];
   const focused = document.activeElement?.dataset?.set;
   if (focused) return; // don't redraw under someone typing a weight
   $("#mapp").innerHTML = header() + view() + `<p class="privacy">${MIC.lock}Only you see this. Cameras never record you; GymTrack keeps sets, reps and times.</p>`;

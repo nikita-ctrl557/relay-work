@@ -84,7 +84,7 @@ body.member { background: var(--bg); }
 .prow .up { color: var(--good); font-size: 11.5px; font-weight: 600; text-align: right; display: block; }
 .spark { width: 110px; height: 34px; }
 
-.mtabs { position: fixed; left: 50%; transform: translateX(-50%); bottom: 0; width: min(480px, 100%); z-index: 40; display: grid; grid-template-columns: repeat(4, 1fr);
+.mtabs { position: fixed; left: 50%; transform: translateX(-50%); bottom: 0; width: min(480px, 100%); z-index: 40; display: grid; grid-template-columns: repeat(5, 1fr);
   background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(12px); border-top: 1px solid var(--line); padding: 6px 8px calc(8px + env(safe-area-inset-bottom, 0px)); }
 .mtabs a { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; font-weight: 600; color: var(--muted); text-decoration: none; padding: 5px 0; }
 .mtabs a svg { width: 23px; height: 23px; }
@@ -92,3 +92,6 @@ body.member { background: var(--bg); }
 .privacy { font-size: 12px; color: var(--muted); text-align: center; padding: 4px 12px; }
 .privacy svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
 @media (min-width: 700px) { .mapp { padding-top: 12px; } }
+
+.mapp .tprof { grid-template-columns: minmax(0, 1fr); }
+.mapp .tp-map { max-width: 360px; margin: 0 auto; width: 100%; }

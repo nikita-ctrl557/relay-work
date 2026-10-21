@@ -36,7 +36,7 @@ def main(argv=None):
     an.add_argument("--video-out", help="also write an MP4 showing the tracking (zones, people, live sets)")
     an.add_argument("--no-people", action="store_true", help="skip person detection/tracking (faster)")
 
-    sub.add_parser("models", help="download the person-detection model (YOLOX-S, Apache-2.0, 35 MB)")
+    sub.add_parser("models", help="download the person-detection (YOLOX-S) and pose (BlazePose) models, Apache-2.0, ~41 MB")
 
     f = sub.add_parser("fetch", help="download a video (e.g. YouTube) and trim it, for testing; needs yt-dlp")
     f.add_argument("url")
@@ -69,6 +69,10 @@ def main(argv=None):
         print(f"downloading {MODEL_URL}")
         urllib.request.urlretrieve(MODEL_URL, DEFAULT_MODEL)
         print(f"saved {DEFAULT_MODEL} ({DEFAULT_MODEL.stat().st_size / 1e6:.0f} MB)")
+        from .pose import POSE_MODEL, POSE_URL
+        print(f"downloading {POSE_URL}")
+        urllib.request.urlretrieve(POSE_URL, POSE_MODEL)
+        print(f"saved {POSE_MODEL} ({POSE_MODEL.stat().st_size / 1e6:.0f} MB)")
         return
 
     if a.cmd == "fetch":

@@ -6,7 +6,9 @@ let src, cfg, live = null, util = {}, utilAt = 0, page = null;
 const PAGES = [
   {id: "floor", label: "Floor", icon: "floor", sub: () => `Live from ${cfg.cameras.length} cameras`},
   {id: "members", label: "Members", icon: "members", sub: () => `${cfg.members.length} members · ${live ? live.members.filter(m => m.status !== "away").length : 0} in the gym`},
+  {id: "map", label: "Floor map", icon: "map", sub: () => "Bird's-eye view from the cameras"},
   {id: "machines", label: "Machines", icon: "machines", sub: () => `${cfg.machines.length} tracked machines`},
+  {id: "insights", label: "Insights", icon: "insights", sub: () => "Traffic, usage and what to change"},
   {id: "recordings", label: "Recordings", icon: "recordings", sub: () => "Analyse footage exported from your cameras"},
   {id: "cameras", label: "Cameras", icon: "cameras", sub: () => `${cfg.cameras.length} connected · zones tell GymTrack where each machine is`},
 ];
@@ -26,7 +28,7 @@ function go() {
   const r = parseRoute();
   page?.unmount?.();
   const view = $("#view"); view.innerHTML = "";
-  page = r.id === "member" ? MemberPage(r.arg) : ({floor: FloorPage, members: MembersPage, machines: MachinesPage, recordings: RecordingsPage, cameras: CamerasPage})[r.id]();
+  page = r.id === "member" ? MemberPage(r.arg) : ({floor: FloorPage, members: MembersPage, map: MapPage, machines: MachinesPage, insights: InsightsPage, recordings: RecordingsPage, cameras: CamerasPage})[r.id]();
   $("#pageTitle").textContent = page.title;
   $("#pageSub").textContent = page.sub?.() || "";
   $("#pageActions").innerHTML = ""; page.actions?.($("#pageActions"));
@@ -178,6 +180,7 @@ function MemberPage(id) {
       const pts = (prog.machines[trendM]?.history || []).map(h => ({day: h.day, sets: h.sets, v: metric === "kg" ? h.top_kg : h.reps / h.sets})).filter(x => x.v != null);
       const weeks = weeksFrom(prog, m);
       $("#phist").innerHTML = `<div style="display:flex;flex-direction:column;gap:20px">
+        <section class="card"><div class="card-h"><h2>Training profile</h2><span class="hint">muscles trained in the last 7 days · style · coaching</span></div><div class="card-b">${trainingProfileHTML(prog)}</div></section>
         <div class="grid2">
           <section class="card"><div class="card-h"><h2>Weekly training time</h2><span class="hint">minutes</span><span class="right legend"><span><i style="background:var(--lift)"></i>Lifting</span><span><i style="background:var(--rest)"></i>Resting</span></span></div><div class="card-b">${weeklyChart(weeks)}</div></section>
           <section class="card"><div class="card-h"><h2>Progress</h2><span class="right"><select class="input" id="tm" aria-label="Machine" style="height:30px">${machines.map(x => `<option value="${esc(x)}" ${x === trendM ? "selected" : ""}>${esc(machineName(x))}</option>`).join("")}</select><select class="input" id="tk" aria-label="Measure" style="height:30px"><option value="reps" ${metric === "reps" ? "selected" : ""}>Reps per set</option><option value="kg" ${metric === "kg" ? "selected" : ""}>Top weight</option></select></span></div><div class="card-b">${trendChart(pts, metric === "kg" ? "Top weight" : "Reps per set", metric === "kg" ? " kg" : "")}</div></section>
@@ -255,6 +258,170 @@ function MachinesPage() {
   };
 }
 
+/* ---------------- FLOOR MAP (bird's-eye) ---------------- */
+function planSVG(plan, fl, layer, states) {
+  const S = 100, W = plan.width * S, D = plan.depth * S, inb = (x, y) => x != null && y != null && x > -1 && y > -1 && x < plan.width + 1 && y < plan.depth + 1;
+  let g = `<svg class="plan" viewBox="-60 -60 ${W + 120} ${D + 150}" role="img" aria-label="Floor plan of ${esc(plan.name)}">`;
+  const cid = "pc" + hash(plan.id);
+  g += `<defs><clipPath id="${cid}"><rect x="0" y="0" width="${W}" height="${D}" rx="12"/></clipPath></defs>`;
+  g += `<rect x="0" y="0" width="${W}" height="${D}" rx="12" fill="var(--surface)" stroke="var(--line-2)" stroke-width="4"/><g clip-path="url(#${cid})">`;
+  for (let x = 1; x < plan.width; x++) g += `<line x1="${x * S}" y1="0" x2="${x * S}" y2="${D}" stroke="var(--line)" stroke-width="${x % 5 ? 1.5 : 3}"/>`;
+  for (let y = 1; y < plan.depth; y++) g += `<line x1="0" y1="${y * S}" x2="${W}" y2="${y * S}" stroke="var(--line)" stroke-width="${y % 5 ? 1.5 : 3}"/>`;
+  const h = fl?.heat;
+  if (h && layer !== "people") {
+    let max = 0; for (const v of h.grid) max = Math.max(max, v);
+    for (let i = 0; i < h.grid.length; i++) { const v = h.grid[i]; if (v <= 0) continue;
+      const gx = i % h.W, gy = Math.floor(i / h.W), a = 0.1 + 0.8 * Math.sqrt(v / max);
+      g += `<rect x="${gx * h.cell * S}" y="${gy * h.cell * S}" width="${h.cell * S}" height="${h.cell * S}" fill="var(--rest)" opacity="${a.toFixed(2)}" data-tip="${fmtDur(v)} of person-time here"/>`; }
+  }
+  for (const z of plan.zones) {
+    const st = states[z.machine] || {}, lifting = st.state === "lifting", busy = !!st.member;
+    const pts = z.poly.map(([x, y]) => `${(x * S).toFixed(0)},${(y * S).toFixed(0)}`).join(" ");
+    const cl = z.poly.map(([x, y]) => [Math.max(0, Math.min(plan.width, x)), Math.max(0, Math.min(plan.depth, y))]);
+    const cx = cl.reduce((a, p) => a + p[0], 0) / cl.length * S, cy = cl.reduce((a, p) => a + p[1], 0) / cl.length * S;
+    g += `<polygon points="${pts}" fill="${lifting ? "color-mix(in srgb, var(--lift) 26%, transparent)" : busy ? "color-mix(in srgb, var(--rest) 16%, transparent)" : "transparent"}" stroke="${lifting ? "var(--lift)" : "var(--ink-2)"}" stroke-width="${lifting ? 6 : 3}" ${lifting || busy ? "" : 'stroke-dasharray="14 10"'} data-tip="${esc(machineName(z.machine))}${lifting ? `\n${st.member_name || "Guest"} lifting · ${st.reps} reps` : ""}"/>`;
+    g += `<text class="lbl" x="${Math.max(40, Math.min(W - 40, cx)).toFixed(0)}" y="${Math.max(30, Math.min(D - 10, cy)).toFixed(0)}" text-anchor="middle">${esc(machineName(z.machine))}</text>`;
+  }
+  g += `</g>`;
+  if (layer !== "heat") for (const q of fl?.people || []) {
+    if (!inb(q.x, q.y)) continue;
+    const tr = (q.trail || []).filter(([x, y]) => inb(x, y));
+    if (tr.length > 1) g += `<polyline points="${tr.map(([x, y]) => `${(x * S).toFixed(0)},${(y * S).toFixed(0)}`).join(" ")}" fill="none" stroke="var(--ink-2)" stroke-width="4" opacity=".35" stroke-linejoin="round"/>`;
+    const act = q.activity && q.activity !== "standing", col = act ? "var(--lift)" : q.planted && q.zone ? "var(--rest)" : "var(--ink-2)";
+    const x = Math.max(0, Math.min(W, q.x * S)), y = Math.max(0, Math.min(D, q.y * S));
+    g += `<g data-tip="${esc(q.label)}${q.activity ? "\n" + esc(actName(q.activity)) : ""}${q.zone ? "\nat " + esc(machineName(q.zone)) : ""}"><circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="30" fill="${col}" stroke="var(--surface)" stroke-width="7"/>
+      <text class="lbl" x="${x.toFixed(0)}" y="${(y - 44).toFixed(0)}" text-anchor="middle">${esc(q.label.replace(/^\w+ /, ""))}${act ? " · " + esc(actName(q.activity)) : ""}</text></g>`;
+  }
+  g += `<g transform="translate(0 ${D + 50})"><line x1="0" y1="0" x2="${S}" y2="0" stroke="var(--ink-2)" stroke-width="5"/><text x="${S + 14}" y="8">1 m</text>
+    <text x="${W}" y="8" text-anchor="end">${plan.width} × ${plan.depth} m${plan.approx ? " · approximate calibration" : ""}</text></g>`;
+  return g + `</svg>`;
+}
+function zoneTimes(plan, heat) {
+  const out = {}, cell = heat?.cell || 0.5; let outside = 0, total = 0;
+  if (!heat) return {zones: out, outside, total};
+  for (let i = 0; i < heat.grid.length; i++) {
+    const v = heat.grid[i]; if (!v) continue; total += v;
+    const x = (i % heat.W + .5) * cell, y = (Math.floor(i / heat.W) + .5) * cell;
+    const z = plan.zones.find(z => pointInPoly(x, y, z.poly));
+    if (z) out[z.machine] = (out[z.machine] || 0) + v; else outside += v;
+  }
+  return {zones: out, outside, total};
+}
+function hotspots(plan, heat, n = 3) {
+  if (!heat) return [];
+  const cells = [...heat.grid].map((v, i) => [v, i]).filter(c => c[0] > 0).sort((a, b) => b[0] - a[0]).slice(0, 40), out = [];
+  for (const [v, i] of cells) {
+    const x = (i % heat.W + .5) * heat.cell, y = (Math.floor(i / heat.W) + .5) * heat.cell;
+    if (out.some(o => Math.hypot(o.x - x, o.y - y) < 2)) continue;
+    const z = plan.zones.find(z => pointInPoly(x, y, z.poly));
+    out.push({x, y, v, where: z ? machineName(z.machine) : `Open floor (${x.toFixed(0)} m, ${y.toFixed(0)} m)`, zone: z?.machine || null});
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
+function MapPage() {
+  let layer = store.get("maplayer", "both");
+  return {
+    title: "Floor map", sub: () => "Bird's-eye view: everyone the cameras see, placed on the floor plan",
+    actions(a) {
+      const c = el(`<div class="chips" role="group" aria-label="Layers">${[["both", "People + traffic"], ["people", "People"], ["heat", "Traffic heatmap"]].map(([k, l]) => `<button class="chip" data-l="${k}" aria-pressed="${k === layer}">${l}</button>`).join("")}</div>`);
+      c.onclick = e => { const b = e.target.closest("[data-l]"); if (!b) return; layer = b.dataset.l; store.set("maplayer", layer); c.querySelectorAll("[data-l]").forEach(x => x.setAttribute("aria-pressed", x.dataset.l === layer)); this.update(); };
+      a.append(c);
+    },
+    mount(v) {
+      const plans = src.plans();
+      if (!plans.length) { v.append(el(`<div class="card empty">${IC.map}<b>No calibrated cameras yet</b>Calibrate a camera (4 points on the floor and their distances) and GymTrack places everyone it sees on a floor plan.${src.mode === "demo" ? " The simulation has no floor plan; open the real-footage demo." : ""}</div>`)); return; }
+      for (const p of plans) v.append(el(`<section class="mapgrid" data-plan="${esc(p.id)}"><div class="card card-b"><div class="card-h" style="padding:0 0 10px"><h2>${esc(p.name)}</h2><span class="right legend"><span><i style="background:var(--lift)"></i>Exercising</span><span><i style="background:var(--rest)"></i>At a station</span><span><i style="background:var(--ink-2)"></i>Moving / other</span><span><i style="background:var(--rest);opacity:.5"></i>Traffic</span></span></div><div class="pv"></div></div>
+        <div style="display:flex;flex-direction:column;gap:20px;min-width:0"><section class="card kpi"><span class="eyebrow">On camera now</span><div class="row"><span class="big pc">–</span><span class="delta pk"></span></div></section>
+        <section class="card"><div class="card-h"><h2>Right now</h2></div><div class="plist pl" style="margin-top:6px"></div></section>
+        <section class="card"><div class="card-h"><h2>Hotspots</h2><span class="right hint">most person-time</span></div><div class="plist hs" style="margin-top:6px"></div></section></div></section>`));
+    },
+    async update() {
+      const plans = src.plans(); if (!plans.length || !live) return;
+      const fl = await src.floor(), states = Object.fromEntries(live.machines.map(m => [m.id, m]));
+      for (const p of plans) {
+        const box = document.querySelector(`.mapgrid[data-plan="${CSS.escape(p.id)}"]`); if (!box) continue;
+        const f = fl.find(x => x.plan === p.id) || {};
+        box.querySelector(".pv").innerHTML = planSVG(p, f, layer, states);
+        box.querySelector(".pc").textContent = f.headcount ?? "–";
+        box.querySelector(".pk").textContent = f.heat?.peak ? `peak ${f.heat.peak} so far` : "";
+        box.querySelector(".pl").innerHTML = (f.people || []).map(q => `<div class="r"><span class="avatar sm" style="--a:${q.activity && q.activity !== "standing" ? "var(--lift)" : "var(--other)"}">${esc(initials(q.label))}</span><span>${esc(q.label)}<span class="muted"> · ${q.activity ? esc(actName(q.activity)) : "–"}</span></span><span class="muted">${q.zone ? esc(machineName(q.zone)) : "floor"}</span></div>`).join("") || `<div class="empty" style="padding:16px">Nobody on camera.</div>`;
+        box.querySelector(".hs").innerHTML = hotspots(p, f.heat).map((h, i) => `<div class="r"><span class="avatar sm" style="--a:var(--rest)">${i + 1}</span><span>${esc(h.where)}</span><span class="muted">${fmtDur(h.v)}</span></div>`).join("") || `<div class="empty" style="padding:16px">Building up…</div>`;
+      }
+    },
+  };
+}
+
+/* ---------------- INSIGHTS (gym owner) ---------------- */
+function ownerSuggestions({util, observed, plans, floors, zstats, archetypes}) {
+  const out = [], add = (level, title, detail) => out.push({level, title, detail});
+  const rows = Object.values(util).filter(u => cfg.machines.some(m => m.id === u.machine)).sort((a, b) => b.busy - a.busy);
+  if (rows.length && observed > 120) {
+    const top = rows[0], share = top.busy / observed;
+    if (share > 0.45) add("warn", `${machineName(top.machine)} is a bottleneck`, `In use ${Math.round(share * 100)}% of the time observed (${top.n} sets by ${top.members} people). Add a second one or move it next to an alternative.`);
+    const unused = cfg.machines.filter(m => !util[m.id] || util[m.id].busy < 0.05 * top.busy);
+    if (unused.length) add("tip", `Barely used: ${unused.slice(0, 3).map(m => m.name).join(", ")}`, `Less than 5% of the busiest station's time under load. Move it somewhere visible, add signage, or swap it for more of what's busy (${machineName(top.machine)}).`);
+  }
+  for (const [p, f] of plans.map((p, i) => [p, floors.find(x => x.plan === p.id)])) {
+    if (!f?.heat?.total) continue;
+    const zt = zoneTimes(p, f.heat), walk = zt.outside / zt.total;
+    if (walk > 0.3) { const hs = hotspots(p, f.heat, 6).find(h => !h.zone); add("tip", `${Math.round(walk * 100)}% of floor time is spent between stations`, `People stand or move outside equipment areas a lot${hs ? `; the busiest spot is ${hs.where}` : ""}. Keep that walkway clear and put water, chalk and plates where the traffic already goes.`); }
+    const zs = Object.entries(zt.zones).sort((a, b) => b[1] - a[1]);
+    if (zs.length >= 2 && zs[0][1] > 2.5 * (zs[zs.length - 1][1] || 1)) add("tip", `Traffic is uneven: ${machineName(zs[0][0])} gets ${Math.round(zs[0][1] / zt.total * 100)}% of floor time`, `${machineName(zs[zs.length - 1][0])} gets ${Math.round(zs[zs.length - 1][1] / zt.total * 100)}%. Spread popular equipment so people don't queue in one corner.`);
+    if (f.heat.peak) add("good", `Peak of ${f.heat.peak} people on camera in ${p.name}`, `Use this to plan staff cover and class sizes; the headcount is smoothed over a few seconds so it doesn't jump when people overlap.`);
+  }
+  for (const [z, st] of Object.entries(zstats || {})) if (st.max_people >= 3 && st.occupied_share > 0.2) add("warn", `Crowding at ${machineName(z)}`, `Up to ${st.max_people} people at once, occupied ${Math.round(st.occupied_share * 100)}% of the time. Split it into two stations or stagger class groups.`);
+  const tot = Object.values(archetypes).reduce((a, b) => a + b, 0);
+  if (tot) {
+    const [topA, n] = Object.entries(archetypes).sort((a, b) => b[1] - a[1])[0];
+    const hint = /Conditioning/.test(topA) ? "More open floor, rowers and bikes; fewer single-purpose machines." : /Strength/.test(topA) ? "More racks and platforms; protect them at peak times." : /Machine/.test(topA) ? "Run free 20-minute intro sessions on the barbell and dumbbell area." : /Hypertrophy/.test(topA) ? "Add cable stations and dumbbell space; these members do many isolation sets." : "Keep a balanced mix of racks, machines and open floor.";
+    add("tip", `Most members train as “${topA}” (${Math.round(n / tot * 100)}%)`, hint);
+  }
+  return out;
+}
+function InsightsPage() {
+  let archetypes = {}, archAt = 0, utilL = {};
+  return {
+    title: "Insights", sub: () => "For the owner: what's busy, what's not, and what to change",
+    mount(v) {
+      v.append(el(`<section class="kpis" id="ik"></section>`));
+      v.append(el(`<div class="grid2"><section class="card"><div class="card-h"><h2>Suggestions</h2><span class="right hint">from what the cameras saw</span></div><div class="card-b"><div class="sugg" id="isg"></div></div></section>
+        <section class="card"><div class="card-h"><h2>Equipment ranking</h2><span class="right hint">time under load</span></div><div class="card-b" id="irk"></div></section></div>`));
+      v.append(el(`<div class="grid2"><section class="card"><div class="card-h"><h2>Where floor time goes</h2></div><div class="card-b" id="izt"></div></section>
+        <section class="card"><div class="card-h"><h2>Training styles</h2><span class="right hint">members' archetypes</span></div><div class="card-b" id="iar"></div></section></div>`));
+    },
+    async update() {
+      if (!live) return;
+      utilL = Object.fromEntries((await src.utilisation()).map(u => [u.machine, u]));
+      const plans = src.plans(), floors = await src.floor();
+      const observed = src.mode === "replay" ? Math.max(...src.cams.map(c => src.ct(c))) : Math.max(60, (Date.now() - new Date().setHours(6, 0, 0, 0)) / 1000);
+      const zstats = src.zoneStats ? src.zoneStats() : null;
+      if (Date.now() - archAt > 30000 && typeof bmArchetype !== "undefined") {
+        archAt = Date.now(); const counts = {};
+        for (const m of cfg.members.slice(0, 40)) { try { const p = await src.progress(m.id); const a = bmArchetype(trainingHistory(p), {machines: cfg.machines}); if (a.id !== "new") counts[a.name] = (counts[a.name] || 0) + 1; } catch {} }
+        archetypes = counts;
+      }
+      const busyTot = Object.values(utilL).reduce((a, u) => a + u.busy, 0), peak = Math.max(0, ...floors.map(f => f.heat?.peak || 0)), nowC = floors.reduce((a, f) => a + (f.headcount || 0), 0);
+      $("#ik").innerHTML = `<div class="card kpi"><span class="eyebrow">On camera now</span><span class="big">${nowC}</span><span class="delta">peak ${peak}</span></div>
+        <div class="card kpi"><span class="eyebrow">Time under load</span><span class="big">${clockFmt(busyTot)}</span><span class="delta">all stations, observed period</span></div>
+        <div class="card kpi"><span class="eyebrow">Sets recorded</span><span class="big">${Object.values(utilL).reduce((a, u) => a + u.n, 0)}</span><span class="delta">${Object.keys(utilL).length} stations used</span></div>
+        <div class="card kpi"><span class="eyebrow">Observed</span><span class="big">${clockFmt(observed)}</span><span class="delta">${src.mode === "replay" ? "of recorded footage" : "today"}</span></div>`;
+      const sg = ownerSuggestions({util: utilL, observed, plans, floors, zstats, archetypes});
+      $("#isg").innerHTML = sg.map(x => `<div class="sg ${x.level}"><span class="i">${x.level === "warn" ? IC.info : x.level === "good" ? IC.check : IC.insights}</span><div><b>${esc(x.title)}</b><span>${esc(x.detail)}</span></div></div>`).join("") || `<div class="empty">Collecting data… suggestions appear after a few minutes of footage.</div>`;
+      const rows = cfg.machines.map(m => utilL[m.id] || {machine: m.id, n: 0, busy: 0, members: 0}).sort((a, b) => b.busy - a.busy), mx = Math.max(1, ...rows.map(r => r.busy));
+      $("#irk").innerHTML = rows.map(r => `<div class="rank"><span>${esc(machineName(r.machine))}</span><div class="b" style="width:${(r.busy / mx * 100).toFixed(1)}%" data-tip="${esc(machineName(r.machine))}\n${fmtDur(r.busy)} under load · ${r.n} sets · ${r.members} people"></div><span class="muted num" style="text-align:right">${fmtDur(r.busy)}</span></div>`).join("");
+      let zt = "";
+      for (const p of plans) { const f = floors.find(x => x.plan === p.id); const t = zoneTimes(p, f?.heat); if (!t.total) continue;
+        const parts = [...Object.entries(t.zones).map(([z, v]) => [machineName(z), v]), ["Between stations", t.outside]].sort((a, b) => b[1] - a[1]);
+        zt += `<div class="eyebrow" style="margin:4px 0 8px">${esc(p.name)}</div>` + parts.map(([n, v]) => `<div class="rank"><span>${esc(n)}</span><div class="b" style="width:${(v / t.total * 100).toFixed(1)}%;background:${n === "Between stations" ? "var(--other)" : "var(--rest)"}"></div><span class="muted num" style="text-align:right">${Math.round(v / t.total * 100)}%</span></div>`).join(""); }
+      $("#izt").innerHTML = zt || `<div class="empty">Needs a calibrated camera (Floor map).</div>`;
+      const at = Object.values(archetypes).reduce((a, b) => a + b, 0);
+      $("#iar").innerHTML = at ? Object.entries(archetypes).sort((a, b) => b[1] - a[1]).map(([n, c]) => `<div class="rank"><span>${esc(n)}</span><div class="b" style="width:${(c / at * 100).toFixed(1)}%"></div><span class="muted num" style="text-align:right">${c} · ${Math.round(c / at * 100)}%</span></div>`).join("") : `<div class="empty">Not enough sets per member yet to classify training styles.</div>`;
+    },
+  };
+}
+
 /* ---------------- RECORDINGS ---------------- */
 function RecordingsPage() {
   let jobs = [], file = null;
@@ -324,6 +491,7 @@ python -m gymtrack analyse cam1-export.mp4 --report report.html                 
         const b = e.target.closest("[data-act]"); if (!b) { if (e.target.closest(".add")) addCamera(); return; }
         const cam = cfg.cameras.find(c => c.id === b.dataset.cam);
         if (b.dataset.act === "zones") zoneEditor(cam);
+        if (b.dataset.act === "calib") calibEditor(cam);
         if (b.dataset.act === "remove") confirmRemove(cam, () => this.render());
       };
     },
@@ -331,7 +499,7 @@ python -m gymtrack analyse cam1-export.mp4 --report report.html                 
       $("#cg").innerHTML = "";
       for (const cam of cfg.cameras) {
         const card = el(`<article class="card ccard" data-cam="${esc(cam.id)}"><div class="thumb"></div><div class="body"><div class="row"><span class="nm">${esc(cam.name)}</span><span class="st" style="margin-left:auto"></span></div><div class="src">${esc(cam.source)}</div><div class="muted" style="font-size:12.5px">${cam.zones.length} machine zone${cam.zones.length === 1 ? "" : "s"}${cam.zones.length ? ": " + cam.zones.map(z => esc(machineName(z.machine))).join(", ") : ""}</div></div>
-          <div class="foot"><button class="btn secondary sm" data-act="zones" data-cam="${esc(cam.id)}">${IC.zones}Edit zones</button><button class="btn ghost sm" data-act="remove" data-cam="${esc(cam.id)}" style="margin-left:auto">${IC.trash}Remove</button></div></article>`);
+          <div class="foot"><button class="btn secondary sm" data-act="zones" data-cam="${esc(cam.id)}">${IC.zones}Edit zones</button><button class="btn secondary sm" data-act="calib" data-cam="${esc(cam.id)}">${IC.map}Floor map</button><button class="btn ghost sm" data-act="remove" data-cam="${esc(cam.id)}" style="margin-left:auto">${IC.trash}Remove</button></div></article>`);
         let t;
         if (src.mode !== "server") { t = document.createElement("canvas"); t.width = 320; t.height = 180; }
         else { t = document.createElement("img"); t.alt = cam.name; }
@@ -430,6 +598,33 @@ function zoneEditor(cam) {
   body.querySelector("#zf").onclick = () => { if (pts.length < 3) return toast("Click at least 3 points around the machine.", true); zones.push({machine: body.querySelector("#zm").value, polygon: pts}); pts = []; draw(); };
   body.querySelector("#zl").onclick = e => { const b = e.target.closest("[data-del]"); if (b) { zones.splice(+b.dataset.del, 1); draw(); } };
   md.root.querySelector("#zs").onclick = async () => { try { await src.setZones(cam.id, zones); cfg = await src.config(); md.close(); toast(`Zones saved for ${cam.name}`); if (parseRoute().id === "cameras") go(); } catch (e) { toast(e.message, true); } };
+  draw();
+}
+
+function calibEditor(cam) {
+  const existing = cam.calib || (src.cams?.find(c => c.id === cam.id)?.calib) || null;
+  const planNow = src.plans().find(p => p.id === cam.id || p.id === "gym");
+  let pts = existing ? existing.image.map(p => [...p]) : [], world = existing ? existing.plan.map(p => [...p]) : [[0, 0], [5, 0], [5, 5], [0, 5]], img = null;
+  const body = el(`<div class="zed"><div><div class="stage"><canvas width="640" height="360"></canvas></div><p class="note" style="margin-top:10px">${IC.info}Click 4 points on the floor that you can measure, like mat corners, the base of a rack, or tape marks. Go round in order (for example back-left, back-right, front-right, front-left), then enter where each point is on the floor plan, in metres from one corner of the gym.</p></div>
+    <div style="display:flex;flex-direction:column;gap:12px"><div class="form2"><label class="field"><span>Gym width (m)</span><input class="input" id="pw" type="number" step="0.5" value="${planNow?.width ?? 12}"></label><label class="field"><span>Gym depth (m)</span><input class="input" id="pd" type="number" step="0.5" value="${planNow?.depth ?? 9}"></label></div>
+    <div class="eyebrow">Floor points</div><div id="cl" class="zlist"></div><button class="btn secondary sm" id="cr">Start again</button></div></div>`);
+  const md = modal({title: `Floor map · ${cam.name}`, body, wide: true, foot: `<button class="btn secondary x">Cancel</button><button class="btn" id="cs">Save calibration</button>`});
+  const cv = body.querySelector("canvas"), g = cv.getContext("2d"), COL = ["#1d5bd8", "#c9352b", "#c99200", "#1f8a4c"];
+  const draw = () => {
+    if (img) { cv.width = img.width; cv.height = img.height; g.drawImage(img, 0, 0); } else { g.fillStyle = "#0b0d10"; g.fillRect(0, 0, cv.width, cv.height); }
+    if (pts.length > 1) { g.strokeStyle = "#00e0ff"; g.lineWidth = 2; g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); if (pts.length === 4) g.closePath(); g.stroke(); }
+    pts.forEach(([x, y], i) => { g.fillStyle = COL[i]; g.beginPath(); g.arc(x, y, 7, 0, 7); g.fill(); g.fillStyle = "#fff"; g.font = "bold 11px sans-serif"; g.fillText(i + 1, x - 3, y + 4); });
+    body.querySelector("#cl").innerHTML = [0, 1, 2, 3].map(i => `<div class="zitem"><i style="background:${COL[i]}"></i><span style="min-width:52px">Point ${i + 1}</span>${pts[i] ? `<input class="input" style="width:70px;height:30px" data-w="${i}" data-k="0" type="number" step="0.1" value="${world[i][0]}" aria-label="Point ${i + 1} x metres">m <input class="input" style="width:70px;height:30px" data-w="${i}" data-k="1" type="number" step="0.1" value="${world[i][1]}" aria-label="Point ${i + 1} y metres">m` : `<span class="muted">click it on the image</span>`}</div>`).join("");
+  };
+  src.frame(cam).then(f => { img = document.createElement("canvas"); img.width = f.videoWidth ? W : (f.naturalWidth || f.width); img.height = f.videoWidth ? H : (f.naturalHeight || f.height); img.getContext("2d").drawImage(f, 0, 0, img.width, img.height); draw(); }).catch(() => draw());
+  cv.onclick = e => { if (pts.length >= 4) return; const r = cv.getBoundingClientRect(); pts.push([Math.round((e.clientX - r.left) / r.width * cv.width), Math.round((e.clientY - r.top) / r.height * cv.height)]); draw(); };
+  body.querySelector("#cr").onclick = () => { pts = []; draw(); };
+  body.querySelector("#cl").oninput = e => { const t = e.target; if (t.dataset.w != null) world[+t.dataset.w][+t.dataset.k] = +t.value; };
+  md.root.querySelector("#cs").onclick = async () => {
+    if (pts.length !== 4) return toast("Click exactly 4 floor points.", true);
+    try { await src.setCalibration(cam.id, {image: pts, plan: world}, {width: +body.querySelector("#pw").value, depth: +body.querySelector("#pd").value}); cfg = await src.config(); md.close(); toast(`Floor map calibrated for ${cam.name}`); }
+    catch (e) { toast(e.message, true); }
+  };
   draw();
 }
 

@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 
 import cv2
+import numpy as np
 
 from .config import Camera, GymConfig, Zone
 from .engine import Engine
@@ -65,7 +66,12 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
     analyser = FrameAnalyzer(cam)
     if people is None:
         people = DEFAULT_MODEL.exists()
-    tracker = PeopleTracker(cam.zones, PersonDetector()) if people else None
+    tracker = None
+    if people:
+        from .pose import POSE_MODEL, PoseEstimator
+        plan = (cfg.plan["width"], cfg.plan["depth"]) if cfg.plan else None
+        tracker = PeopleTracker(cam.zones, PersonDetector(), pose=PoseEstimator() if POSE_MODEL.exists() else None,
+                                homography=cam.homography(), plan_size=plan)
     names = {m.id: m.name for m in cfg.members}
     tag_names = {m.tag: m.name for m in cfg.members}
     writer, background = None, None
@@ -88,7 +94,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         tracks = []
         if tracker:
             tracks = tracker.update(frame, start_ts + t, reading.tags, cfg.member_by_tag)
-            reading.people = [(tr.id, tr.member, tr.zone, tr.planted) for tr in tracks]
+            reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity) for tr in tracks]
             reading.tracking = True
         engine.ingest(reading)
         if background is None:
@@ -98,8 +104,10 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
             timeline.append({"t": round(t, 2),
                              "m": [[mid, st["state"] == "lifting", st["reps"], round(st["set_elapsed"], 1)]
                                    for mid, mt in engine.machines.items() for st in [mt.snapshot(start_ts + t)]],
-                             "p": [[tr.id, tr.member, tr.zone, int(tr.planted), *[round(v, 3) for v in (tr.box[0] / W, tr.box[1] / H, tr.box[2] / W, tr.box[3] / H)]]
-                                   for tr in tracks]})
+                             "p": [[tr.id, tr.member, tr.zone, int(tr.planted), *[round(v, 3) for v in (tr.box[0] / W, tr.box[1] / H, tr.box[2] / W, tr.box[3] / H)],
+                                    tr.activity, *[round(v, 2) for v in (tracker.to_plan(*tr.feet) or (None, None)) if v is not None]]
+                                   for tr in tracks],
+                             "n": tracker.headcount() if tracker else len(tracks)})
         if video_out:
             if writer is None:
                 writer = cv2.VideoWriter(video_out, cv2.VideoWriter_fourcc(*"mp4v"), sample_fps, (frame.shape[1], frame.shape[0]))
@@ -196,7 +204,7 @@ def report(cfg: GymConfig, engine: Engine, start: float, end: float, tracker=Non
                      "avg_rest_s": round(sum(r["rests"]) / len(r["rests"])) if r["rests"] else None,
                      "machines": sorted(r["machines"])}
                     for r in sorted(members.values(), key=lambda r: -r["lifting_s"])],
-        "sets": [{"member": s.member, "who": who(s)[0], "who_name": who(s)[1], "machine": s.machine,
+        "sets": [{"member": s.member, "who": who(s)[0], "who_name": who(s)[1], "machine": s.machine, "exercise": s.exercise,
                   "start": round(s.start, 1), "end": round(s.end, 1), "reps": s.reps, "id": s.id} for s in sets],
         "people": _people(tracker, names, sets, cfg) if tracker else None,
     }
@@ -209,8 +217,12 @@ def _people(tracker, names, sets, cfg) -> dict:
     for tr in sorted(tracks, key=lambda tr: -(tr.last - tr.first)):
         rows.append({"id": tr.id, "name": tr.label(names), "member": tr.member, "first": tr.first, "last": tr.last,
                      "seen_s": round(tr.last - tr.first), "zones": {z: round(v) for z, v in sorted(tr.dwell.items(), key=lambda kv: -kv[1])},
+                     "activities": {a: round(v) for a, v in sorted(tr.activities.items(), key=lambda kv: -kv[1]) if v >= 3},
                      "sets": sum(1 for s in sets if s.person == tr.id)})
-    return {"tracked": len(tracker.all_tracks()), "shown": len(rows), "rows": rows[:60]}
+    out = {"tracked": len(tracker.all_tracks()), "shown": len(rows), "rows": rows[:60]}
+    if tracker.plan_size:
+        out["plan_heat"] = np.round(tracker.plan_heat, 1).tolist()
+    return out
 
 
 def report_html(rep: dict) -> str:

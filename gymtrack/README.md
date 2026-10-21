@@ -50,6 +50,48 @@ Tested on real recorded gym footage from public Twitch streams (a CrossFit box's
 garage gym's fixed camera). This footage is not in the repo: the people in it never agreed to be filmed, so use it for
 internal testing only.
 
+## Feature map
+
+Built = in this repo now. Next = designed from the same data, not built yet.
+
+### For gym members (member app)
+
+| Feature | What it gives them | Status |
+|---|---|---|
+| Live set tracker | Rep count and set timer while lifting; rest timer against *their* usual rest | Built |
+| Where my time went | Time per machine/area, lifting vs resting vs other, today / 7 / 30 days | Built |
+| Body map | Front/back muscle diagram of what they trained this week, under-trained muscles outlined | Built |
+| Training style | Archetype (strength builder, hypertrophy, conditioning, machine-first beginner, upper-body focused, leg-day loyalist, all-rounder) with the numbers behind it | Built |
+| Coaching notes | Push:pull balance, missing muscle groups (with exercises), rest length vs goal, frequency, session efficiency | Built |
+| Next session plan | What to train next based on the last 7 days, skipping muscles hit in the last 48 h | Built |
+| Progress & records | Reps per set / top weight per machine, personal records, weekly training time | Built |
+| Weight logging | Members add the kg; cameras count sets and reps | Built |
+| Exercise recognition | Which exercise they did on open floor (squat, hinge, press, pull-up, push-up, ...) from pose | Built (accuracy below) |
+| Form flags | Depth on squats, range of motion, tempo, asymmetry from pose | Next |
+| Queue / free-machine alerts | "Squat rack 2 is free" push notification | Next |
+| Streaks and goals | Weekly visit goal, consistency streaks, challenges between members | Partly (weekly goal) |
+| Coach sharing | Share the body map and history with a personal trainer | Next |
+
+### For gym owners (dashboard)
+
+| Feature | What it gives them | Status |
+|---|---|---|
+| Live floor | Every camera with tracking, equipment status, live set timers, activity feed | Built |
+| Bird's-eye floor map | Everyone placed on a floor plan (per-camera calibration), trails | Built |
+| Traffic heatmap | Where person-time goes; hotspots; share of time between stations | Built |
+| Equipment ranking | Time under load, sets and people per station; busiest hours | Built |
+| Layout suggestions | Bottlenecks ("add a second rack"), barely used equipment, uneven traffic, walkways to keep clear | Built (rule-based) |
+| Crowding | Most people at once per zone, occupied share | Built |
+| Headcount | Smoothed people-on-camera count, peaks for staffing | Built |
+| Member training styles | Archetype mix of the membership, with what to buy or programme for it | Built |
+| Recording analysis | Upload an NVR export, get a report, tracking video and member history | Built |
+| Wait-time estimates | Time people stand near a busy station without using it | Next |
+| Churn risk | Members whose visit frequency is dropping, for a check-in | Next |
+| Equipment wear and maintenance | Use counts per machine to schedule servicing | Next |
+| Class and PT insights | Which classes/coaches keep members coming back | Next |
+| Multi-camera fusion on one plan | The same person seen by two cameras merged into one dot | Next |
+| Safety | Falls, someone pinned under a bar, lifting alone late at night | Next |
+
 ## Run it
 
 ```bash

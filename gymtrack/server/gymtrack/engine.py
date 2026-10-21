@@ -34,6 +34,7 @@ class SetRecord:
     cameras: list[str]
     id: int | None = None
     person: int | None = None   # people-tracker ID of who did it (anonymous if no tag)
+    exercise: str | None = None # recognised from pose (see activity.py), else None (the machine says what it is)
 
     @property
     def duration(self) -> float:
@@ -57,6 +58,7 @@ class MachineTracker:
         self.tag_since: dict[int, float] = {}  # tag -> since when it has stayed (roughly) in place
         self.tag_anchor: dict[int, tuple[float, float]] = {}
         self.set_people: Counter = Counter()
+        self.set_acts: Counter = Counter()
         self.set_tracked_frames = self.set_planted = 0
         self.set_frames = 0
         self.ema = 0.0
@@ -96,6 +98,8 @@ class MachineTracker:
             for pid, member, zone, *rest in people or []:
                 if zone == self.id:
                     self.set_people[(pid, member)] += 1
+                    if len(rest) > 1 and rest[1]:
+                        self.set_acts[(pid, rest[1])] += 1
                     if rest and rest[0]:
                         self.set_planted += 1
                         break
@@ -139,6 +143,7 @@ class MachineTracker:
                     self.set_start = self.above_since
                     self.set_tags = Counter()
                     self.set_people = Counter()
+                    self.set_acts = Counter()
                     self.set_frames = 0
                     self.set_tracked_frames = self.set_planted = 0
                     self.set_cams = {c for c, z in self.cams.items() if t - z.t <= FUSE_WINDOW_S}
@@ -171,9 +176,14 @@ class MachineTracker:
             (pid, pmember), n = self.set_people.most_common(1)[0]  # noqa
             if n >= SET_PRESENCE * self.set_frames:
                 person, member = pid, member or pmember
+        exercise = None
+        acts = Counter({a: n for (pid, a), n in self.set_acts.items() if (person is None or pid == person) and a != "standing"})
+        if acts:
+            from .activity import EXERCISE_ID
+            exercise = EXERCISE_ID.get(acts.most_common(1)[0][0])
         reps = max(1, self._count(start, end))  # too short to see a repeat, but a set is at least one rep
         self._trim(end)
-        self.e._record_set(SetRecord(member, self.id, start, end, reps, sorted(self.set_cams), person=person))
+        self.e._record_set(SetRecord(member, self.id, start, end, reps, sorted(self.set_cams), person=person, exercise=exercise))
 
     def _trim(self, before: float):
         for q in self.thumbs.values():

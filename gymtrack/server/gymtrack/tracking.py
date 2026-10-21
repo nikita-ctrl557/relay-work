@@ -24,7 +24,7 @@ DEFAULT_MODEL = Path(__file__).resolve().parents[1] / "models" / "yolox.onnx"
 class PersonDetector:
     """YOLOX-S person detector (COCO class 0)."""
 
-    def __init__(self, model: str | Path = DEFAULT_MODEL, conf: float = 0.35, nms: float = 0.45):
+    def __init__(self, model: str | Path = DEFAULT_MODEL, conf: float = 0.45, nms: float = 0.45):
         if not Path(model).exists():
             raise FileNotFoundError(f"person model not found at {model}; run: python -m gymtrack models")
         self.net = cv2.dnn.readNet(str(model))
@@ -56,6 +56,24 @@ class PersonDetector:
         return [(*map(float, boxes[i]), float(score[keep][i])) for i in np.array(idx).ravel()]
 
 
+def appearance(img: np.ndarray, box) -> np.ndarray | None:
+    """Clothing colour signature: hue/saturation histograms of the upper and lower body, L2-normalised."""
+    x, y, w, h = map(int, box)
+    H, W = img.shape[:2]
+    x0, x1 = max(0, x + w // 6), min(W, x + w - w // 6)
+    parts = []
+    for a, b in ((0.18, 0.52), (0.55, 0.88)):
+        y0, y1 = max(0, y + int(h * a)), min(H, y + int(h * b))
+        if x1 - x0 < 3 or y1 - y0 < 3:
+            return None
+        hsv = cv2.cvtColor(img[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [12, 4], [0, 180, 0, 256]).ravel()
+        dark = cv2.calcHist([hsv], [2], None, [4], [0, 256]).ravel()  # black/white clothing
+        parts.append(np.concatenate([hist, dark * 2]))
+    v = np.concatenate(parts).astype(np.float32)
+    return v / (np.linalg.norm(v) + 1e-6)
+
+
 def _iou(a, b) -> float:
     ax, ay, aw, ah = a[:4]
     bx, by, bw, bh = b[:4]
@@ -76,7 +94,21 @@ class Track:
     dwell: dict[str, float] = field(default_factory=dict)    # zone -> seconds
     trail: list[tuple[int, int]] = field(default_factory=list)
     vel: tuple[float, float] = (0.0, 0.0)
+    look: np.ndarray | None = None   # running appearance signature
+    merged: int = 0                  # how many times this person was re-identified after being lost
     feet_hist: list[tuple[float, float, float]] = field(default_factory=list)  # (t, x, y) of recent feet positions
+    pose_tries: int = 0
+    pose_hits: int = 0
+    kps: list = field(default_factory=list)          # [(t, (33,3) keypoints)] for the last ~8 s
+    activity: str | None = None                      # what they're doing right now (see activity.py)
+    act_conf: float = 0.0
+    act_at: float = -1e9
+    activities: dict[str, float] = field(default_factory=dict)  # activity -> seconds spent doing it
+
+    @property
+    def is_person(self) -> bool:
+        """A body is found in the box often enough (filters detections on racks, pillars, bags)."""
+        return self.pose_tries < 12 or self.pose_hits >= 0.05 * self.pose_tries
 
     @property
     def planted(self) -> bool:
@@ -102,7 +134,8 @@ class Track:
 class PeopleTracker:
     """Per-camera multi-person tracker with zone dwell times."""
 
-    def __init__(self, zones, detector: PersonDetector, detect_every_s: float = 0.34, max_age_s: float = 6.0, min_hits: int = 3):
+    def __init__(self, zones, detector: PersonDetector, detect_every_s: float = 0.34, max_age_s: float = 6.0, min_hits: int = 3,
+                 pose=None, homography=None, plan_size: tuple[float, float] | None = None):
         self.zones = [(z.machine, np.array(z.polygon, np.float32)) for z in zones]
         self.det = detector
         self.every, self.max_age, self.min_hits = detect_every_s, max_age_s, min_hits
@@ -112,6 +145,13 @@ class PeopleTracker:
         self.last_detect = -1e9
         self.last_t: float | None = None
         self.heat = np.zeros((36, 64), np.float32)  # where feet are, accumulated over time
+        self.lost: dict[int, Track] = {}               # recently lost people, kept for re-identification
+        self.reid_s = 20.0
+        self.count_hist: list[tuple[float, int]] = []  # (t, people visible) for a steady headcount
+        self.pose = pose
+        self.H = homography                     # image -> floor plan (metres)
+        self.plan_size = plan_size
+        self.plan_heat = np.zeros((int((plan_size or (1, 1))[1] * 4) + 1, int((plan_size or (1, 1))[0] * 4) + 1), np.float32)  # 25 cm cells
 
     def set_zones(self, zones):
         self.zones = [(z.machine, np.array(z.polygon, np.float32)) for z in zones]
@@ -128,7 +168,11 @@ class PeopleTracker:
         self.last_t = t
         if t - self.last_detect >= self.every:
             self.last_detect = t
+            self._frame = frame
             self._associate(self.det.detect(frame), t)
+            if self.pose is not None:
+                self._update_poses(frame, t)
+            self.count_hist = [c for c in self.count_hist if t - c[0] <= 10] + [(t, len(self.visible(t)))]
         # identity from tags inside a box
         for tag, (tx, ty) in (tags or {}).items():
             m = member_by_tag(tag) if member_by_tag else None
@@ -142,8 +186,10 @@ class PeopleTracker:
         # dwell + heat for confirmed tracks
         H, W = frame.shape[:2]
         for tr in self.tracks.values():
-            if tr.hits < self.min_hits or t - tr.last > self.every * 1.5:
+            if tr.hits < self.min_hits or t - tr.last > self.every * 1.5 or not tr.is_person:
                 continue
+            if tr.activity and dt:
+                tr.activities[tr.activity] = tr.activities.get(tr.activity, 0.0) + dt
             fx, fy = tr.feet
             tr.zone = self._zone_of(fx, fy)
             if tr.zone and dt:
@@ -151,14 +197,36 @@ class PeopleTracker:
             if dt:
                 gx, gy = int(np.clip(fx / W * 64, 0, 63)), int(np.clip(fy / H * 36, 0, 35))
                 self.heat[gy, gx] += dt
+                pp = self.to_plan(fx, fy)
+                if pp is not None and self.plan_size:
+                    cx, cy = int(pp[0] * 4), int(pp[1] * 4)
+                    if 0 <= cy < self.plan_heat.shape[0] and 0 <= cx < self.plan_heat.shape[1]:
+                        self.plan_heat[cy, cx] += dt
         for tid in [i for i, tr in self.tracks.items() if t - tr.last > self.max_age]:
             tr = self.tracks.pop(tid)
             if tr.hits >= self.min_hits:
-                self.finished.append(tr)
+                self.lost[tid] = tr
+        for tid in [i for i, tr in self.lost.items() if t - tr.last > self.reid_s]:
+            self.finished.append(self.lost.pop(tid))
         return self.visible(t)
 
     def visible(self, t: float) -> list[Track]:
-        return [tr for tr in self.tracks.values() if tr.hits >= self.min_hits and t - tr.last <= self.every * 1.5]
+        return [tr for tr in self.tracks.values() if tr.hits >= self.min_hits and t - tr.last <= self.every * 1.5 and tr.is_person]
+
+    def _update_poses(self, frame: np.ndarray, t: float):
+        from .activity import classify
+        for tr in self.tracks.values():
+            if tr.last != t:
+                continue  # not detected this round
+            kp = self.pose.estimate(frame, tr.box)
+            tr.pose_tries += 1
+            if kp is None:
+                continue
+            tr.pose_hits += 1
+            tr.kps = [k for k in tr.kps if t - k[0] <= 8.0] + [(t, kp)]
+            if t - tr.act_at >= 1.0 and len(tr.kps) >= 6:
+                tr.act_at = t
+                tr.activity, tr.act_conf, _ = classify([k for _, k in tr.kps[-18:]])
 
     def _associate(self, dets, t: float):
         """Match detections to tracks: overlap first, then distance (gated by size and time since seen)."""
@@ -192,15 +260,65 @@ class PeopleTracker:
             tr.box, tr.last, tr.hits = tuple(d[:4]), t, tr.hits + 1
             tr.trail = (tr.trail + [tuple(map(int, tr.feet))])[-20:]
             tr.feet_hist = [p for p in tr.feet_hist if t - p[0] <= 2.5] + [(t, *tr.feet)]
+        frame = getattr(self, "_frame", None)
+        for tid in used_t:  # refresh appearance of matched people
+            tr = self.tracks[tid]
+            if frame is not None:
+                a = appearance(frame, tr.box)
+                if a is not None:
+                    tr.look = a if tr.look is None else 0.8 * tr.look + 0.2 * a
         for j, d in enumerate(dets):
-            if j not in used_d:
-                tr = Track(self.next_id, tuple(d[:4]), t, t)
+            if j in used_d:
+                continue
+            look = appearance(frame, d[:4]) if frame is not None else None
+            back = self._reidentify(d, look, t)
+            if back is not None:  # someone we lost a moment ago: give them their old ID back
+                tr = self.lost.pop(back)
+                tr.box, tr.last, tr.hits, tr.vel, tr.merged = tuple(d[:4]), t, tr.hits + 1, (0.0, 0.0), tr.merged + 1
                 tr.trail = [tuple(map(int, tr.feet))]
-                self.tracks[self.next_id] = tr
-                self.next_id += 1
+                tr.feet_hist = []
+                self.tracks[back] = tr
+                continue
+            tr = Track(self.next_id, tuple(d[:4]), t, t, look=look)
+            tr.trail = [tuple(map(int, tr.feet))]
+            self.tracks[self.next_id] = tr
+            self.next_id += 1
+
+    def _reidentify(self, d, look, t) -> int | None:
+        if look is None or not self.lost:
+            return None
+        best, best_s = None, 0.0
+        dfx, dfy = d[0] + d[2] / 2, d[1] + d[3]
+        for tid, tr in self.lost.items():
+            if tr.look is None:
+                continue
+            gap = t - tr.last
+            fx, fy = tr.feet
+            size = (tr.box[3] + d[3]) / 2
+            dist = ((fx - dfx) ** 2 + (fy - dfy) ** 2) ** 0.5 / max(size, 1)
+            if dist > 1.0 + 0.6 * gap or not 0.5 <= d[3] / max(tr.box[3], 1) <= 2.0:
+                continue  # too far to have walked there in the time, or wrong size
+            sim = float(np.dot(look, tr.look))
+            score = sim - 0.04 * dist
+            if sim > 0.65 and score > best_s:
+                best, best_s = tid, score
+        return best
+
+    def to_plan(self, x: float, y: float):
+        """Image point -> floor-plan metres (None without calibration)."""
+        if self.H is None:
+            return None
+        v = self.H @ np.array([x, y, 1.0])
+        return float(v[0] / v[2]), float(v[1] / v[2])
+
+    def headcount(self) -> int:
+        """People on camera right now, smoothed over the last few seconds (detections flicker)."""
+        if not self.count_hist:
+            return 0
+        return int(round(float(np.median([c for _, c in self.count_hist]))))
 
     def all_tracks(self) -> list[Track]:
-        return self.finished + [tr for tr in self.tracks.values() if tr.hits >= self.min_hits]
+        return [tr for tr in self.finished + list(self.lost.values()) + [tr for tr in self.tracks.values() if tr.hits >= self.min_hits] if tr.is_person]
 
     def people_in(self, zone: str, t: float) -> list[Track]:
         return [tr for tr in self.visible(t) if tr.zone == zone]

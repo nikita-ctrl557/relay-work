@@ -37,6 +37,29 @@ function bbox(poly) { const xs = poly.map(p => p[0]), ys = poly.map(p => p[1]); 
 /* inside the polygon, or within 12px of its bounding box (same edge tolerance as the server) */
 function nearPoly(x, y, poly) { if (pointInPoly(x, y, poly)) return true; const [bx, by, bw, bh] = bbox(poly); return x >= bx - 12 && x <= bx + bw + 12 && y >= by - 12 && y <= by + bh + 12 && poly.length === 4; }
 
+/* image -> floor-plan homography from 4 point pairs (solves the 8 unknowns with Gaussian elimination) */
+function homography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  for (let c = 0; c < 8; c++) {
+    let p = c; for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
+    for (let r = 0; r < 8; r++) if (r !== c) { const f = A[r][c] / A[c][c]; for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k]; b[r] -= f * b[c]; }
+  }
+  const h = b.map((v, i) => v / A[i][i]);
+  return [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1]];
+}
+/* a zone's floor footprint on the plan: points drawn above the floor (up a wall or rack) are pulled down to the floor line */
+function projectZone(poly, calib, H) {
+  const floorY = Math.min(...calib.image.map(p => p[1])) + 2;
+  return poly.map(([x, y]) => applyH(H, x, Math.max(y, floorY)));
+}
+function applyH(H, x, y) { const w = H[2][0] * x + H[2][1] * y + H[2][2]; return [(H[0][0] * x + H[0][1] * y + H[0][2]) / w, (H[1][0] * x + H[1][1] * y + H[1][2]) / w]; }
+
 /* ================================================================
    Tracking engine: a port of server/gymtrack/engine.py
    ================================================================ */
@@ -258,7 +281,9 @@ class MemoryStore {
       const ss = sets.filter(x => x.start >= s.start && x.start <= (s.end ?? 9e18));
       return {start: s.start, end: s.end, ...(s.totals || {}), sets: ss.length, reps: ss.reduce((a, x) => a + x.reps, 0), machines: [...new Set(ss.map(x => x.machine))].sort()};
     });
-    return {days: Object.values(days).sort((a, b) => a.day < b.day ? -1 : 1), machines, sessions: sessions.length, areas, session_list,
+    const since28 = Date.now() / 1000 - 28 * 86400;
+    const sets_28d = sets.filter(s => s.start >= since28).map(s => ({machine: s.machine, start: s.start, end: s.end, reps: s.reps, weight_kg: s.weight_kg, exercise: s.exercise || null}));
+    return {days: Object.values(days).sort((a, b) => a.day < b.day ? -1 : 1), machines, sessions: sessions.length, areas, session_list, sets_28d,
       recent_sets: sets.slice(-30).reverse().map(s => ({id: s.id, machine: s.machine, start: s.start, end: s.end, reps: s.reps, weight_kg: s.weight_kg}))};
   }
   utilisation(since) {
@@ -508,6 +533,9 @@ class DemoSource {
   async utilisation() { const d = new Date(this.now() * 1000); d.setHours(0, 0, 0, 0); return this.store.utilisation(d / 1000); }
   async setWeight(id, kg) { this.store.setWeight(id, kg); }
   async hourly() { return this.store.hourly(this.now()); }
+  plans() { return []; }
+  async floor() { return []; }
+  async setCalibration() { throw new Error("The simulation has no floor plan."); }
   async recordings() { // the demo ships one finished example; uploading needs the server
     return [{id: "sample", status: "done", progress: 1, start_ts: Math.floor(this.t0 / 86400) * 86400 - 86400 + 7 * 3600, video_s: 2399, speed: 35.2, sample: true,
       totals: {sets: 102, reps: 794, lifting_s: 2351, tagged_sets: 86}, report_url: "assets/sample-report.html", name: "Free weights camera, 40 min (test recording)"}];
@@ -563,6 +591,14 @@ class ServerSource {
   hourly() { return this.j("api/machines/hourly?days=7"); }
   async removeCamera(id) { await this.j("api/cameras/" + encodeURIComponent(id), {method: "DELETE"}); delete this.imgs[id]; await this.config(); }
   tagUrl(tag) { return this.base + "api/tags/" + tag + ".png"; }
+  plans() {
+    const cams = this.cfg.cameras.filter(c => c.calib);
+    if (!this.cfg.plan || !cams.length) return [];
+    return [{id: "gym", name: this.cfg.gym, width: this.cfg.plan.width, depth: this.cfg.plan.depth, approx: cams.some(c => c.calib.approx),
+      zones: cams.flatMap(c => { const H = homography(c.calib.image, c.calib.plan); return c.zones.map(z => ({machine: z.machine, poly: projectZone(z.polygon, c.calib, H)})); })}];
+  }
+  async setCalibration(camId, calib, size) { await this.j("api/cameras/" + encodeURIComponent(camId) + "/calibration", {method: "PUT", body: JSON.stringify({...calib, ...(size || {})})}); await this.config(); }
+  async floor() { const f = await this.j("api/floor"); for (const p of f) if (p.heat) { p.heat.grid = Float32Array.from(p.heat.grid); p.heat.peak = Math.max(p.heat.peak || 0, p.headcount); } return f; }
   upload(file, camera, startTs, onProgress) {
     return new Promise((ok, bad) => {
       const q = new URLSearchParams({name: file.name, camera}); if (startTs) q.set("start", startTs);
@@ -666,7 +702,9 @@ class ReplaySource {
     for (const [zone, secs] of Object.entries(row?.zones || {})) { const frac = Math.min(1, ct / Math.max(1, c.data.duration)); areas[zone] = {time_s: secs * frac, lifting_s: 0, by_day: {[day]: secs * frac}, lift_by_day: {}}; }
     for (const s of st?.done || []) { const a = areas[s.m] ||= {time_s: 0, lifting_s: 0, by_day: {}, lift_by_day: {}}; a.lifting_s += s.t1 - s.t0; a.lift_by_day[day] = (a.lift_by_day[day] || 0) + s.t1 - s.t0; a.by_day[day] = Math.max(a.by_day[day] || 0, a.lift_by_day[day]); a.time_s = Math.max(a.time_s, a.lifting_s); }
     return {days: st ? [{day, lifting_s: 0, resting_s: 0, elapsed_s: 0, sets: st.done.length, reps: st.done.reduce((a, s) => a + s.reps, 0), volume_kg: 0}] : [], machines, sessions: st ? 1 : 0, areas, session_list: [],
-      recent_sets: (st?.done || []).map((s, i) => ({id: `${id}:${i}`, machine: s.m, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, weight_kg: this.weights[`${id}:${i}`] ?? null})).reverse()};
+      recent_sets: (st?.done || []).map((s, i) => ({id: `${id}:${i}`, machine: s.m, exercise: s.ex || null, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, weight_kg: this.weights[`${id}:${i}`] ?? null})).reverse(),
+      sets_28d: (st?.done || []).map((s, i) => ({machine: s.m, exercise: s.ex || null, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, weight_kg: this.weights[`${id}:${i}`] ?? null})),
+      activities: row?.activities || {}};
   }
   async utilisation() {
     const out = {};
@@ -675,6 +713,74 @@ class ReplaySource {
   }
   async hourly() { const h = new Date().getHours(), out = {}; for (const u of await this.utilisation()) { out[u.machine] = Array(24).fill(0); out[u.machine][h] = u.n; } return out; }
   async setWeight(id, kg) { this.weights[id] = kg; }
+  /* ---- floor plan / bird's-eye ---- */
+  H(c) { return c._H ||= c.calib ? homography(c.calib.image, c.calib.plan) : null; }
+  plans() {
+    return this.cams.filter(c => c.calib && c.plan).map(c => ({id: c.id, name: c.plan.name || c.name, width: c.plan.width, depth: c.plan.depth, approx: !!c.calib.approx,
+      zones: c.zones.map(z => ({machine: z.machine, poly: projectZone(z.polygon, c.calib, this.H(c))})),
+      view: c.calib.view || null}));
+  }
+  peopleAt(c, e) {
+    const H = this.H(c);
+    return e.p.map(p => {
+      const [pid, member, zone, planted, bx, by, bw, bh, act, px, py] = p;
+      let x = px, y = py;
+      if ((x == null || y == null) && H) [x, y] = applyH(H, (bx + bw / 2) * 640, (by + bh) * 360);
+      const mem = this.cfg.members.find(m => m.cam === c.id && m.pid === pid);
+      return {id: mem?.id || `${c.id}-${pid}`, pid, label: mem?.name || `${c.short} #${pid}`, plan: c.id, camera: c.id, x, y, zone, activity: act || null, planted: !!planted};
+    });
+  }
+  trails(c, ct, secs = 10) {
+    const out = {}, H = this.H(c);
+    for (const e of c.data.timeline) {
+      if (e.t > ct) break;
+      if (e.t < ct - secs) continue;
+      for (const q of this.peopleAt(c, e)) if (q.x != null) (out[q.pid] ||= []).push([q.x, q.y]);
+    }
+    return out;
+  }
+  heat(planId, cell = 0.5) {
+    const c = this.cams.find(x => x.id === planId); if (!c?.plan) return null;
+    const ct = this.ct(c), W = Math.ceil(c.plan.width / cell), D = Math.ceil(c.plan.depth / cell);
+    let h = c._heat;
+    if (!h || h.ct > ct + 1) h = c._heat = {grid: new Float32Array(W * D), i: 0, ct: 0, W, D, cell, peak: 0, total: 0};
+    const tl = c.data.timeline;
+    while (h.i < tl.length && tl[h.i].t <= ct) {
+      const e = tl[h.i], dt = h.i ? Math.min(2, e.t - tl[h.i - 1].t) : 0;
+      for (const q of this.peopleAt(c, e)) {
+        if (q.x == null) continue;
+        const gx = Math.floor(q.x / cell), gy = Math.floor(q.y / cell);
+        if (gx >= 0 && gy >= 0 && gx < W && gy < D) { h.grid[gy * W + gx] += dt; h.total += dt; }
+      }
+      h.peak = Math.max(h.peak, e.n ?? e.p.length);
+      h.i++;
+    }
+    h.ct = ct;
+    return h;
+  }
+  zoneStats() {
+    const out = {};
+    for (const c of this.cams) {
+      const ct = this.ct(c); let n = 0;
+      for (const e of c.data.timeline) {
+        if (e.t > ct) break; n++;
+        const per = {}; for (const p of e.p) if (p[2]) per[p[2]] = (per[p[2]] || 0) + 1;
+        for (const z of c.zones.map(z => z.machine)) { const o = out[z] ||= {max_people: 0, occ: 0, n: 0}; o.n++; if (per[z]) { o.occ++; o.max_people = Math.max(o.max_people, per[z]); } }
+      }
+    }
+    for (const o of Object.values(out)) o.occupied_share = o.n ? o.occ / o.n : 0;
+    return out;
+  }
+  async setCalibration(camId, calib, size) { // preview only: the recorded demo keeps it for this visit
+    const c = this.cams.find(x => x.id === camId); c.calib = {...calib, approx: false}; c._H = null; c._heat = null;
+    if (size) c.plan = {...(c.plan || {}), name: c.plan?.name || c.name, width: size.width, depth: size.depth};
+  }
+  async floor() {
+    return this.cams.filter(c => c.calib && c.plan).map(c => {
+      const ct = this.ct(c), e = this.at(c, ct), trails = this.trails(c, ct);
+      return {plan: c.id, headcount: e.n ?? e.p.length, people: this.peopleAt(c, e).map(q => ({...q, trail: trails[q.pid] || []})), heat: this.heat(c.id)};
+    });
+  }
   async recordings() { return this.cams.map(c => ({id: c.id, status: "done", progress: 1, start_ts: Date.now() / 1000 - 3600, video_s: c.data.duration, speed: c.speed_x || 0, totals: {sets: c.data.sets.length, reps: c.data.sets.reduce((a, s) => a + s.reps, 0)}, report_url: this.base + c.report, name: `${c.name} · real footage`})); }
   view(cam) { return this.cams.find(c => c.id === cam.id).el; }
   async frame(cam) { return this.cams.find(c => c.id === cam.id).el; }

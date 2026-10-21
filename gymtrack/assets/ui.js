@@ -23,6 +23,8 @@ const IC = {
   cable: SV('<path d="M5 3v18M19 3v18M5 5h14M12 5v8"/><rect x="9.5" y="13" width="5" height="4" rx="1"/>'),
   run: SV('<circle cx="14" cy="4.5" r="1.8"/><path d="m8 21 3-6 3 2v4M6 12l3-4 4 1 3 4 3 1"/>'),
   film: SV('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>'),
+  map: SV('<path d="M3 6.5 9 4l6 2.5L21 4v13.5L15 20l-6-2.5L3 20z"/><path d="M9 4v13.5M15 6.5V20"/>'),
+  insights: SV('<path d="M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z"/><path d="M9.5 19h5M10.5 21.5h3"/>'),
   expand: SV('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
 };
 const machineIcon = m => /bench/i.test(m.id + m.name) ? IC.bench : /squat|rack|dead/i.test(m.id + m.name) ? IC.rack : /cable|lat|pull|row|press/i.test(m.id + m.name) ? IC.cable : /tread|run|bike|row/i.test(m.kind) ? IC.run : IC.machines;
@@ -150,4 +152,38 @@ async function pickSource(params, base) {
     } catch (e) { console.warn("replay unavailable", e); }
   }
   return new DemoSource();
+}
+
+/* ---------------- exercises, training profile (uses body.js) ---------------- */
+const ACT_NAME = {squat: "Squat", hinge: "Deadlift / hinge", lunge: "Lunge", press: "Overhead press", pull_up: "Pull-up", raise: "Raise", curl: "Curl",
+  row: "Row", push_up: "Push-up", bench_press: "Bench press", plank: "Plank", burpee: "Burpee", jumping: "Jumping", situp: "Sit-up",
+  battle_rope: "Battle ropes", standing: "Standing"};
+const ACT_EX = {hinge: "deadlift", press: "overhead_press", standing: null};
+const actName = a => a ? (ACT_NAME[a] || a) : "";
+const exName = id => (typeof BM_EXERCISES !== "undefined" && BM_EXERCISES[id]?.name) || actName(id) || "";
+
+/* progress payload -> body.js history */
+function trainingHistory(prog) {
+  const sets = (prog?.sets_28d || []).map(s => ({exercise: s.exercise ? (ACT_EX[s.exercise] !== undefined ? ACT_EX[s.exercise] : s.exercise) : null,
+    machine: s.machine, reps: s.reps, start: s.start, end: s.end, duration_s: (s.end || s.start) - s.start, weight_kg: s.weight_kg}));
+  const sessions = (prog?.session_list || []).filter(s => s.end).map(s => ({start: s.start, end: s.end, lifting_s: s.lifting_s || 0, resting_s: s.resting_s || 0, sets: s.sets}));
+  return {sets, sessions, now: Date.now() / 1000};
+}
+
+function trainingProfileHTML(prog, {compact = false} = {}) {
+  if (typeof bmBodyMap === "undefined") return "";
+  const h = trainingHistory(prog), opts = {machines: cfg.machines};
+  const load = bmWeekLoad(h, opts), gaps = bmGaps(load), arch = bmArchetype(h, opts);
+  const recs = bmRecommendations(h, load, opts).slice(0, compact ? 3 : 6), next = bmNextSession(h, load, opts);
+  const icon = l => l === "warn" ? `<span class="pill warn" style="height:20px">Fix</span>` : l === "good" ? `<span class="pill good" style="height:20px">Good</span>` : `<span class="pill" style="height:20px">Tip</span>`;
+  const acts = Object.entries(prog?.activities || {}).filter(([a]) => a !== "standing").sort((a, b) => b[1] - a[1]).slice(0, 5);
+  return `<div class="tprof">
+    <div class="tp-map">${bmBodyMap(load, {highlight: gaps})}</div>
+    <div class="tp-side">
+      <div><div class="eyebrow">Training style</div><div class="tp-arch">${esc(arch.name)}</div><p class="muted" style="margin:4px 0 8px;font-size:13px">${esc(arch.summary || "")}</p>
+        <div class="tags2">${(arch.traits || []).slice(0, 4).map(t => `<span>${esc(t)}</span>`).join("")}</div></div>
+      ${acts.length ? `<div><div class="eyebrow" style="margin-bottom:6px">Seen doing (from pose)</div><div class="tags2">${acts.map(([a, s]) => `<span>${esc(actName(a))} · ${fmtDur(s)}</span>`).join("")}</div></div>` : ""}
+      <div class="tp-recs">${recs.map(r => `<div class="tp-rec">${icon(r.level)}<div><b>${esc(r.title)}</b><span>${esc(r.detail)}</span></div></div>`).join("")}</div>
+      ${next?.exercises?.length ? `<div class="tp-next"><div class="eyebrow">Next session</div><b>${esc(next.focus)}</b><div class="tags2" style="margin-top:6px">${next.exercises.map(e => `<span>${esc(exName(e))}</span>`).join("")}</div>${next.reason ? `<small class="muted">${esc(next.reason)}</small>` : ""}</div>` : ""}
+    </div></div>`;
 }

@@ -39,6 +39,17 @@ class Camera:
     fps: float = 10.0
     width: int = 640  # frames are resized to this width before analysis
     zones: list[Zone] = field(default_factory=list)
+    # floor calibration: 4 image points (px, in the resized frame) and where they are on the floor plan (metres)
+    calib: dict | None = None
+    people: bool = True   # run person detection/tracking on this camera (needs the model)
+
+    def homography(self):
+        """3x3 image->floor-plan matrix, or None if the camera isn't calibrated."""
+        if not self.calib:
+            return None
+        import cv2
+        import numpy as np
+        return cv2.getPerspectiveTransform(np.float32(self.calib["image"]), np.float32(self.calib["plan"]))
 
 
 @dataclass
@@ -60,6 +71,7 @@ class GymConfig:
     machines: list[Machine]
     cameras: list[Camera]
     thresholds: Thresholds = field(default_factory=Thresholds)
+    plan: dict | None = None   # {"width": m, "depth": m} floor plan size for the bird's-eye view
     path: Path | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
@@ -81,6 +93,7 @@ class GymConfig:
                 id=c["id"], name=c.get("name", c["id"]), source=str(c["source"]),
                 fps=float(c.get("fps", 10)), width=int(c.get("width", 640)),
                 zones=[Zone(z["machine"], [list(map(int, p)) for p in z["polygon"]]) for z in c.get("zones", [])],
+                calib=c.get("calib"), people=bool(c.get("people", True)),
             )
             for c in d.get("cameras", [])
         ]
@@ -90,6 +103,7 @@ class GymConfig:
             machines=[Machine(m["id"], m["name"], m.get("kind", "strength")) for m in d.get("machines", [])],
             cameras=cams,
             thresholds=Thresholds(**{k: v for k, v in d.get("thresholds", {}).items() if k in Thresholds.__dataclass_fields__}),
+            plan=d.get("plan"),
             path=path,
         )
 
@@ -105,6 +119,7 @@ class GymConfig:
             "machines": [asdict(m) for m in self.machines],
             "cameras": [asdict(c) for c in self.cameras],
             "thresholds": asdict(self.thresholds),
+            "plan": self.plan,
         }
 
     def save(self) -> None:

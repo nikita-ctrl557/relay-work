@@ -36,6 +36,10 @@ class Store:
         self.lock = threading.Lock()
         with self.lock:
             self.db.executescript(SCHEMA)
+            cols = {r[1] for r in self.db.execute("PRAGMA table_info(sets)")}
+            if "exercise" not in cols:
+                self.db.execute("ALTER TABLE sets ADD COLUMN exercise TEXT")
+                self.db.commit()
 
     def _exec(self, sql: str, args=()) -> int:
         with self.lock:
@@ -56,8 +60,8 @@ class Store:
 
     def add_set(self, rec, session_id: int | None) -> int:
         return self._exec(
-            "INSERT INTO sets(session,member,machine,start,end,reps,cameras) VALUES(?,?,?,?,?,?,?)",
-            (session_id, rec.member, rec.machine, rec.start, rec.end, rec.reps, ",".join(rec.cameras)))
+            "INSERT INTO sets(session,member,machine,start,end,reps,cameras,exercise) VALUES(?,?,?,?,?,?,?,?)",
+            (session_id, rec.member, rec.machine, rec.start, rec.end, rec.reps, ",".join(rec.cameras), getattr(rec, "exercise", None)))
 
     def add_usage(self, machine: str, member: str | None, start: float, end: float) -> None:
         self._exec("INSERT INTO usage(machine,member,start,end) VALUES(?,?,?,?)", (machine, member, start, end))
@@ -102,7 +106,8 @@ class Store:
             h[-1]["reps"] += s["reps"] or 0
             if s["weight_kg"]:
                 h[-1]["top_kg"] = max(h[-1]["top_kg"] or 0, s["weight_kg"])
-        recent = self._all("SELECT id,machine,start,end,reps,weight_kg FROM sets WHERE member=? ORDER BY start DESC LIMIT 30", (member,))
+        recent = self._all("SELECT id,machine,start,end,reps,weight_kg,exercise FROM sets WHERE member=? ORDER BY start DESC LIMIT 30", (member,))
+        week_sets = self._all("SELECT machine,start,end,reps,weight_kg,exercise FROM sets WHERE member=? AND start>=? ORDER BY start", (member, time.time() - 28 * 86400))
         # time spent per machine/area: occupancy (incl. rests there) and time under load
         usage = self._all("SELECT machine, start, end FROM usage WHERE member=? AND start>=?", (member, since))
         areas: dict[str, dict] = {}
@@ -128,7 +133,8 @@ class Store:
             sess_list.append({"start": s_["start"], "end": s_["end"], **tot, "sets": len(ss), "reps": sum(x["reps"] or 0 for x in ss),
                               "machines": sorted({x["machine"] for x in ss})})
         return {"days": sorted(by_day.values(), key=lambda d: d["day"]), "machines": dict(per_machine),
-                "recent_sets": recent, "sessions": len(sessions), "areas": areas, "session_list": sess_list}
+                "recent_sets": recent, "sessions": len(sessions), "areas": areas, "session_list": sess_list,
+                "sets_28d": week_sets}
 
     def machine_utilisation(self, since: float) -> list[dict]:
         rows = self._all("""SELECT machine, COUNT(*) n, SUM(end-start) busy, COUNT(DISTINCT member) members
