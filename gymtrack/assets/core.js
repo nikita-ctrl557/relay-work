@@ -828,7 +828,7 @@ class ReplaySource {
       return {plan: c.id, headcount: e.n ?? e.p.length, people: this.peopleAt(c, e).map(q => ({...q, trail: trails[q.pid] || []})), heat: this.heat(c.id)};
     });
   }
-  async recordings() { return this.cams.map(c => ({id: c.id, status: "done", progress: 1, start_ts: Date.now() / 1000 - 3600, video_s: c.data.duration, speed: c.speed_x || 0, totals: {sets: c.data.sets.length, reps: c.data.sets.reduce((a, s) => a + s.reps, 0)}, report_url: this.base + c.report, name: `${c.name} · real footage`})); }
+  async recordings() { return this.cams.map(c => ({id: c.id, status: "done", progress: 1, start_ts: Date.now() / 1000 - 3600, video_s: c.data.duration, speed: c.speed_x || 0, totals: {sets: c.data.sets.length, reps: c.data.sets.reduce((a, s) => a + s.reps, 0)}, report_url: c.report ? this.base + c.report : null, name: `${c.name} · real footage`})); }
   view(cam) { return this.cams.find(c => c.id === cam.id).el; }
   async frame(cam) { return this.cams.find(c => c.id === cam.id).el; }
   async setZones() { throw new Error("This demo replays recorded footage. Run the GymTrack server to connect cameras and edit their zones."); }

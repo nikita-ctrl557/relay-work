@@ -87,7 +87,7 @@ function FloorPage() {
     mount(v) {
       cancelAnimationFrame(this.raf); this.drawHits();
       if (src.mode !== "server" && !store.get("banner-off-" + src.mode)) {
-        const msg = src.mode === "replay" ? `<b>Real footage.</b> Recorded video from a CrossFit gym's wall camera and a garage gym, run through GymTrack: people tracking, sets, reps and rest, played back in sync. People without a member tag show as #ID.` : `<b>Simulation.</b> Synthetic cameras for testing. Remove ?sim from the address to see real footage.`;
+        const msg = src.mode === "replay" ? `<b>Real footage.</b> Recorded video from fixed cameras in a busy commercial gym, run through GymTrack: people tracking, skeletons, sets, reps and rest, played back in sync. People without a member tag show as #ID.` : `<b>Simulation.</b> Synthetic cameras for testing. Remove ?sim from the address to see real footage.`;
         v.append(el(`<div class="banner"><span>${msg}</span><a class="btn sm" href="#cameras">Connect your cameras</a><button class="x" aria-label="Dismiss">${IC.x.replace("<svg", '<svg style="width:16px;height:16px"')}</button></div>`));
         v.querySelector(".banner .x").onclick = e => { store.set("banner-off-" + src.mode, true); e.target.closest(".banner").remove(); };
       }
@@ -545,7 +545,7 @@ function RecordingsPage() {
       $("#jobs").innerHTML = jobs.map(j => {
         const when = new Date(j.start_ts * 1000).toLocaleString(undefined, {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"});
         const name = j.name || (cfg.cameras.find(c => c.id === j.camera)?.name ? `${cfg.cameras.find(c => c.id === j.camera).name} recording` : "Recording");
-        const right = j.status === "done" ? `<button class="btn secondary sm" data-report="${esc(j.report_url)}" data-title="${esc(name)}">${IC.film}View report</button>`
+        const right = j.status === "done" && j.report_url ? `<button class="btn secondary sm" data-report="${esc(j.report_url)}" data-title="${esc(name)}">${IC.film}View report</button>`
           : j.status === "failed" ? `<span class="pill bad">Failed</span>` : `<span class="pill warn"><i></i>${(j.progress * 100).toFixed(0)}%</span>`;
         return `<div class="job"><span class="ic">${IC.film}</span><div style="min-width:0"><div class="t">${esc(name)}${j.sample ? ' <span class="pill" style="margin-left:6px">Example</span>' : ""}</div>
           <div class="d"><span>${esc(when)}</span><span>${fmtDur(j.video_s)} of video</span>${j.status === "done" ? `<span>${j.totals?.sets ?? 0} sets · ${j.totals?.reps ?? 0} reps</span><span>analysed at ${Math.round(j.speed)}× real time</span>` : j.status === "failed" ? `<span style="color:var(--bad)">${esc(j.error || "")}</span>` : `<span>${Math.round(j.speed || 0)}× real time</span>`}</div>
