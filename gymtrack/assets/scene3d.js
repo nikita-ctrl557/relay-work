@@ -8,7 +8,7 @@
 */
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import {SparkRenderer, SplatMesh} from "@sparkjsdev/spark";
+import {SparkRenderer, SplatMesh, SplatFileType} from "@sparkjsdev/spark";
 
 const CAL_W = 640, CAL_H = 360; // zones and calibration points are stored at this frame size
 
@@ -29,12 +29,21 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer 
 
   // everything below lives in OpenCV camera coordinates; this group turns it into three.js axes
   const world = new THREE.Group(); world.quaternion.set(1, 0, 0, 0); scene.add(world);
-  let loaded = false;
+  let loaded = false, destroyed = false;
   const fail = why => { if (loaded) return; const l = wrap.querySelector(".s3d-load"); if (l) l.innerHTML = `3D model couldn't load here (${why}). People and zones are still shown; switch to Plan for the 2D map.`; };
-  const splat = new SplatMesh({url: base + meta.splat, onLoad: () => { loaded = true; wrap.querySelector(".s3d-load")?.remove(); }});
-  splat.initialized?.catch?.(e => fail(e?.message || "error"));
+  // the splat file is SPZ; hosts that won't serve binary files get it as base64 text (*.b64.txt)
   const slow = setTimeout(() => fail("timed out"), 45000);
-  world.add(splat);
+  let splat = null;
+  fetch(base + meta.splat).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return meta.splat.endsWith(".txt") ? r.text() : r.arrayBuffer(); })
+    .then(data => {
+      let bytes;
+      if (typeof data === "string") { const bin = atob(data.trim()); bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); }
+      else bytes = new Uint8Array(data);
+      if (destroyed) return;
+      splat = new SplatMesh({fileBytes: bytes, fileType: SplatFileType.SPZ, onLoad: () => { loaded = true; wrap.querySelector(".s3d-load")?.remove(); }});
+      splat.initialized?.catch?.(e => fail(e?.message || "error"));
+      world.add(splat);
+    }).catch(e => fail(e.message));
 
   const rayFloor = (u, v) => { // pixel in the splat image -> point on the floor (camera coords)
     const r = new THREE.Vector3((u - cx) / f, (v - cy) / f, 1), den = N.dot(r);
@@ -179,6 +188,6 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer 
 
   return {
     highlight(pid) { hoverPid = pid; },
-    destroy() { clearTimeout(slow); cancelAnimationFrame(raf); ro.disconnect(); controls.dispose(); splat.dispose?.(); renderer.dispose(); wrap.remove(); },
+    destroy() { destroyed = true; clearTimeout(slow); cancelAnimationFrame(raf); ro.disconnect(); controls.dispose(); splat?.dispose?.(); renderer.dispose(); wrap.remove(); },
   };
 }

@@ -111,7 +111,7 @@ def fit_floor(pts: np.ndarray, iters: int = 400, tol: float = 0.04, seed: int = 
     return nrm, float(-nrm @ c), best_n / len(pts)
 
 
-def pack(ply: str, cfg_path: str, cam_id: str, out: str, max_splats: int = 900_000):
+def pack(ply: str, cfg_path: str, cam_id: str, out: str, max_splats: int = 900_000, b64: bool = False):
     import cv2
     P = read_ply(ply)
     v = P["vertex"]
@@ -149,7 +149,10 @@ def pack(ply: str, cfg_path: str, cam_id: str, out: str, max_splats: int = 900_0
         idx = idx[np.argsort(-weight)[:max_splats]]
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     write_spz(out + ".spz", xyz[idx], f_dc[idx], op[idx], sc[idx], rot[idx])
-    meta = {"intrinsics": [f, cx, cy, W, H], "floor": [*map(float, nrm), d], "splat": Path(out).name + ".spz", "count": int(len(idx)),
+    if b64:  # for hosts that only serve text files
+        import base64
+        Path(out + ".b64.txt").write_bytes(base64.b64encode(Path(out + ".spz").read_bytes()))
+    meta = {"intrinsics": [f, cx, cy, W, H], "floor": [*map(float, nrm), d], "splat": Path(out).name + (".b64.txt" if b64 else ".spz"), "count": int(len(idx)),
             "source": "single camera frame, people removed (median background)"}
     json.dump(meta, open(out + ".json", "w"), indent=1)
     print(f"wrote {out}.spz ({Path(out + '.spz').stat().st_size / 1e6:.1f} MB, {len(idx)} of {len(xyz)} splats)")
@@ -167,11 +170,12 @@ def main():
     p.add_argument("camera")
     p.add_argument("out")
     p.add_argument("--max", type=int, default=900_000)
+    p.add_argument("--b64", action="store_true", help="also write the splat as base64 text and point the json at it")
     a = ap.parse_args()
     if a.cmd == "background":
         background(a.video, a.out)
     else:
-        pack(a.ply, a.config, a.camera, a.out, a.max)
+        pack(a.ply, a.config, a.camera, a.out, a.max, a.b64)
 
 
 if __name__ == "__main__":
