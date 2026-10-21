@@ -526,3 +526,9 @@ tr:last-child td { border-bottom: 0; }
 .skp-side { display: flex; flex-direction: column; gap: 12px; }
 .skp-side .skp-ang { flex: 1; }
 .skp-cav { font-size: 11px; line-height: 1.35; }
+.s3d-tag.mach { background: rgba(255,255,255,.92); color: #11151b; border-color: rgba(0,0,0,.12); font-weight: 700; }
+.s3d-tag.mach.on { background: #3d7cf0; color: #fff; border-color: #3d7cf0; }
+.s3d-tag.mach.busy { background: #f26b2e; color: #fff; border-color: #f26b2e; }
+.twin .s3d-hint { color: var(--muted); }
+.twin .s3d-bar button { background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--ink); border-color: var(--line-2); }
+.twin .s3d-bar button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }

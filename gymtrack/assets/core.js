@@ -595,12 +595,13 @@ class ServerSource {
     const cams = this.cfg.cameras.filter(c => c.calib);
     if (!this.cfg.plan || !cams.length) return [];
     return [{id: "gym", name: this.cfg.gym, width: this.cfg.plan.width, depth: this.cfg.plan.depth, approx: cams.some(c => c.calib.approx),
+      items: this.cfg.plan.items || [], height: this.cfg.plan.height, cameras: cams.map(c => ({id: c.id, calib: c.calib})),
       zones: cams.flatMap(c => { const H = homography(c.calib.image, c.calib.plan); return c.zones.map(z => ({machine: z.machine, poly: projectZone(z.polygon, c.calib, H)})); })}];
   }
   async setCalibration(camId, calib, size) { await this.j("api/cameras/" + encodeURIComponent(camId) + "/calibration", {method: "PUT", body: JSON.stringify({...calib, ...(size || {})})}); await this.config(); }
   peopleNow(camId) { // cached; refreshed in the background at ~4/s so the overlay stays smooth
     const c = (this._ppl ||= {})[camId] ||= {at: 0, list: []};
-    if (Date.now() - c.at > 250 && !c.busy) { c.busy = true; this.j("api/cameras/" + encodeURIComponent(camId) + "/people").then(l => { c.list = l.map(q => ({...q, pose: decodePose(q.kps)})); }).catch(() => {}).finally(() => { c.at = Date.now(); c.busy = false; }); }
+    if (Date.now() - c.at > 250 && !c.busy) { c.busy = true; this.j("api/cameras/" + encodeURIComponent(camId) + "/people").then(l => { c.list = l.map(q => ({...q, camera: camId, pose: decodePose(q.kps)})); }).catch(() => {}).finally(() => { c.at = Date.now(); c.busy = false; }); }
     return c.list;
   }
   async floor() { const f = await this.j("api/floor"); for (const p of f) if (p.heat) { p.heat.grid = Float32Array.from(p.heat.grid); p.heat.peak = Math.max(p.heat.peak || 0, p.headcount); } return f; }
@@ -724,6 +725,7 @@ class ReplaySource {
   plans() {
     return this.cams.filter(c => c.calib && c.plan).map(c => ({id: c.id, name: c.plan.name || c.name, width: c.plan.width, depth: c.plan.depth, approx: !!c.calib.approx,
       zones: c.zones.map(z => ({machine: z.machine, poly: projectZone(z.polygon, c.calib, this.H(c))})),
+      items: c.plan.items || [], height: c.plan.height, cameras: [{id: c.id, calib: c.calib}],
       view: c.calib.view || null}));
   }
   peopleAt(c, e) {
@@ -746,7 +748,8 @@ class ReplaySource {
     const now = this.peopleAt(c, a);
     if (!b || b.t - a.t > 2) return now;
     const k = Math.max(0, Math.min(1, (ct - a.t) / (b.t - a.t))), next = Object.fromEntries(this.peopleAt(c, b).map(q => [q.pid, q]));
-    return now.map(q => { const n = next[q.pid]; return {...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k)} : q), pose: this.poseAt(c, q.pid, ct)}; });
+    const mix = (a, b) => a == null || b == null ? a : a + (b - a) * k;
+    return now.map(q => { const n = next[q.pid]; return {...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k), x: mix(q.x, n.x), y: mix(q.y, n.y)} : q), pose: this.poseAt(c, q.pid, ct)}; });
   }
   poseIdx(c) { // pid -> {t: [], k: [decoded pose]} from the 5-per-second pose log
     if (c._pi) return c._pi;

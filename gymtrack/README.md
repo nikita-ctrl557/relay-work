@@ -74,7 +74,23 @@ garage camera, where both squat sets are named correctly.
 RepCount-A is for research use, so the trained model isn't committed. For a commercial launch, retrain on labelled
 footage from the gym's own cameras (the same scripts work on any folder of labelled clips).
 
-## 3D floor overview
+## 3D gym (digital twin)
+
+The Floor map opens on a 3D model of the gym, built from the floor calibration rather than from video:
+
+- every tracked zone becomes an equipment model sized and turned to its floor area (rack, bench, bench press,
+  cable station, dumbbell rack, treadmill, bike, rower, pull-up rig, selectorized machine, open training area),
+  picked from the machine's name/kind;
+- it lights up blue during a set and orange while someone rests on it; click it for today's use;
+- people stand where the cameras put them, as moving skeletons when a pose is known; click one for their profile;
+- the traffic heatmap is painted on the floor, and each camera is shown where it hangs (from its 3D scene).
+
+Equipment the cameras don't track goes in `plan.items` in `config.json` (metres on the floor plan, rotation in
+degrees): `{"type": "storage", "x": 5.05, "y": 0.3, "w": 1.1, "d": 0.5, "rot": 0}`. Types: `rack`, `bench`,
+`cable`, `dumbbells`, `machine`, `treadmill`, `bike`, `rower`, `rig`, `box`, `storage`, `bin`, `landmine`,
+`timer` (`h` = height on the wall). `plan.height` sets the wall height.
+
+## 3D floor overview (camera splat)
 
 The Floor map page shows each calibrated camera as a 3D Gaussian splat with the tracked people standing in it,
 zones and the traffic heatmap drawn on its floor. You can orbit it, switch to top-down, hover a person to highlight

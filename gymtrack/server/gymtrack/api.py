@@ -182,7 +182,8 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
         return [{"pid": t.id, "member": t.member, "label": names.get(t.member) or f"#{t.id}", "zone": t.zone,
                  "activity": t.activity, "planted": t.planted,
                  "box": [t.box[0] / W, t.box[1] / H, t.box[2] / W, t.box[3] / H],
-                 "kps": pose_vector(t.kps[-1][1], W, H) if t.kps and time.time() - t.kps[-1][0] < 1.0 else None}
+                 "kps": pose_vector(t.kps[-1][1], W, H) if t.kps and time.time() - t.kps[-1][0] < 1.0 else None,
+                 **dict(zip(("x", "y"), w.tracker.to_plan(*t.feet) or (None, None)))}
                 for t in w.tracker.visible(time.time())]
 
     @app.get("/api/cameras/{cid}/frame.jpg")

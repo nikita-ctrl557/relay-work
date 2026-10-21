@@ -368,29 +368,42 @@ function hotspots(plan, heat, n = 3) {
 
 function MapPage() {
   let layer = store.get("maplayer", "both"), hover = null;
-  let mode = store.get("mapmode", "3d");
+  let mode = store.get("mapmode2", "twin"), lastFloor = {}, lastStates = {};
   const scenes = {};
-  const setHover = pid => { hover = pid; document.querySelectorAll(".mapgrid [data-pid]").forEach(e => e.classList.toggle("hl", pid != null && +e.dataset.pid === pid)); Object.values(scenes).forEach(s => s?.highlight?.(pid)); };
+  const markHover = pid => { hover = pid; document.querySelectorAll(".mapgrid [data-pid]").forEach(e => e.classList.toggle("hl", pid != null && +e.dataset.pid === pid)); };
+  const setHover = pid => { markHover(pid); Object.values(scenes).forEach(s => s?.highlight?.(pid)); };
+  const openPerson = q => { if (q?.member) location.hash = "member-" + q.member; else if (q) toast(`${q.label} was only on camera briefly, so there's no profile yet.`); };
+  const labelOf = q => q.label + (q.activity && q.activity !== "standing" ? " · " + actName(q.activity) : "");
+  const openMachine = id => { const u = util[id], st = lastStates[id]; toast(`${machineName(id)}: ${st?.state === "lifting" ? `in use now (${st.reps} reps) · ` : st?.member ? "someone resting on it · " : "free · "}${u ? `${u.n} sets today, ${fmtDur(u.busy)} under load` : "no sets yet today"}`); };
+  const modesFor = p => [["twin", "3D gym"], ...(src.sceneFor?.(p.id) ? [["3d", "Camera 3D"]] : []), ["plan", "Plan"]];
   const showMode = async (box, p) => {
-    const sc = src.sceneFor?.(p.id), use3d = mode === "3d" && sc;
-    box.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === (use3d ? "3d" : "plan")));
-    box.querySelector(".pv").hidden = !!use3d; box.querySelector(".p3").hidden = !use3d;
-    box.querySelector(".legend").hidden = !!use3d;
-    if (!use3d) { scenes[p.id]?.destroy(); delete scenes[p.id]; return; }
-    if (scenes[p.id]) return;
-    scenes[p.id] = "loading";
+    const avail = modesFor(p).map(m => m[0]), m = avail.includes(mode) ? mode : "twin";
+    box.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === m));
+    box.querySelector(".pv").hidden = m !== "plan"; box.querySelector(".p3").hidden = m === "plan";
+    box.querySelector(".legend").hidden = m === "3d";
+    const key = p.id;
+    if (scenes[key]?.mode !== m) { scenes[key]?.destroy?.(); delete scenes[key]; box.querySelector(".p3").innerHTML = ""; }
+    if (m === "plan" || scenes[key]) return;
+    const token = scenes[key] = {mode: m, loading: true};
     try {
-      const [{mountScene}, meta] = await Promise.all([import("./scene3d.js"), sc.meta()]);
-      if (scenes[p.id] !== "loading") return;
-      scenes[p.id] = mountScene(box.querySelector(".p3"), {meta, base: sc.base, cam: sc.cam, plan: p,
-        peopleNow: () => src.peopleNow(p.id), heat: () => src.heat(p.id), layer: () => layer,
-        labelOf: q => q.label + (q.activity && q.activity !== "standing" ? " · " + actName(q.activity) : ""),
-        onHover: pid => { hover = pid; document.querySelectorAll(".mapgrid [data-pid]").forEach(e => e.classList.toggle("hl", pid != null && +e.dataset.pid === pid)); },
-        onOpen: q => { if (q?.member) location.hash = "member-" + q.member; else if (q) toast(`${q.label} was only on camera briefly, so there's no profile yet.`); }});
-    } catch (e) { console.error(e); delete scenes[p.id]; box.querySelector(".p3").innerHTML = `<div class="empty" style="padding:24px">3D view needs WebGL2. Showing the floor plan instead.</div>`; mode = "plan"; showMode(box, p); }
+      let view;
+      if (m === "twin") {
+        const {mountTwin, cameraPose} = await import("./twin3d.js");
+        const cams = await Promise.all((p.cameras || []).map(async c => { const sc = src.sceneFor?.(c.id); let pose = null; try { pose = sc ? cameraPose(await sc.meta(), c.calib) : null; } catch {} return {...c, pose}; }));
+        if (scenes[key] !== token) return;
+        view = mountTwin(box.querySelector(".p3"), {plan: p, machines: cfg.machines, cams, layer: () => layer, labelOf,
+          people: () => (p.cameras || [{id: p.id}]).flatMap(c => src.peopleNow?.(c.id) || []), states: () => lastStates, heat: () => src.heat?.(p.id) || lastFloor[p.id]?.heat,
+          onHover: markHover, onOpen: openPerson, onMachine: openMachine});
+      } else {
+        const sc = src.sceneFor(p.id), [{mountScene}, meta] = await Promise.all([import("./scene3d.js"), sc.meta()]);
+        if (scenes[key] !== token) return;
+        view = mountScene(box.querySelector(".p3"), {meta, base: sc.base, cam: sc.cam, plan: p, peopleNow: () => src.peopleNow(p.id), heat: () => src.heat(p.id), layer: () => layer, labelOf, onHover: markHover, onOpen: openPerson});
+      }
+      view.mode = m; scenes[key] = view;
+    } catch (e) { console.error(e); delete scenes[key]; box.querySelector(".p3").innerHTML = `<div class="empty" style="padding:24px">The 3D view needs WebGL. Showing the floor plan instead.</div>`; mode = "plan"; showMode(box, p); }
   };
   return {
-    title: "Floor map", sub: () => "Everyone the cameras see, placed in a 3D model of the gym or on the floor plan",
+    title: "Floor map", sub: () => "The gym rebuilt in 3D from the cameras: equipment, live status and everyone on the floor",
     actions(a) {
       const c = el(`<div class="chips" role="group" aria-label="Layers">${[["both", "People + traffic"], ["people", "People"], ["heat", "Traffic heatmap"]].map(([k, l]) => `<button class="chip" data-l="${k}" aria-pressed="${k === layer}">${l}</button>`).join("")}</div>`);
       c.onclick = e => { const b = e.target.closest("[data-l]"); if (!b) return; layer = b.dataset.l; store.set("maplayer", layer); c.querySelectorAll("[data-l]").forEach(x => x.setAttribute("aria-pressed", x.dataset.l === layer)); this.update(); };
@@ -399,12 +412,12 @@ function MapPage() {
     mount(v) {
       const plans = src.plans();
       if (!plans.length) { v.append(el(`<div class="card empty">${IC.map}<b>No calibrated cameras yet</b>Calibrate a camera (4 points on the floor and their distances) and GymTrack places everyone it sees on a floor plan.${src.mode === "demo" ? " The simulation has no floor plan; open the real-footage demo." : ""}</div>`)); return; }
-      for (const p of plans) v.append(el(`<section class="mapgrid" data-plan="${esc(p.id)}"><div class="card card-b"><div class="card-h" style="padding:0 0 10px"><h2>${esc(p.name)}</h2>${src.sceneFor?.(p.id) ? `<div class="seg" role="group" aria-label="View"><button data-mode="3d">3D scene</button><button data-mode="plan">Plan</button></div>` : ""}<span class="right legend"><span><i style="background:var(--lift)"></i>Exercising</span><span><i style="background:var(--rest)"></i>At a station</span><span><i style="background:var(--ink-2)"></i>Moving / other</span><span><i style="background:var(--rest);opacity:.5"></i>Traffic</span></span></div><div class="pv"></div><div class="p3" hidden></div></div>
+      for (const p of plans) v.append(el(`<section class="mapgrid" data-plan="${esc(p.id)}"><div class="card card-b"><div class="card-h" style="padding:0 0 10px"><h2>${esc(p.name)}</h2><div class="seg" role="group" aria-label="View">${modesFor(p).map(([k, l]) => `<button data-mode="${k}">${l}</button>`).join("")}</div><span class="right legend"><span><i style="background:var(--lift)"></i>Exercising</span><span><i style="background:var(--rest)"></i>At a station</span><span><i style="background:var(--ink-2)"></i>Moving / other</span><span><i style="background:var(--rest);opacity:.5"></i>Traffic</span></span></div><div class="pv"></div><div class="p3" hidden></div></div>
         <div style="display:flex;flex-direction:column;gap:20px;min-width:0"><section class="card kpi"><span class="eyebrow">On camera now</span><div class="row"><span class="big pc">–</span><span class="delta pk"></span></div></section>
         <section class="card"><div class="card-h"><h2>Right now</h2></div><div class="plist pl" style="margin-top:6px"></div></section>
         <section class="card"><div class="card-h"><h2>Hotspots</h2><span class="right hint">most person-time</span></div><div class="plist hs" style="margin-top:6px"></div></section></div></section>`));
       for (const p of plans) { const box = v.querySelector(`.mapgrid[data-plan="${CSS.escape(p.id)}"]`); showMode(box, p);
-        box.querySelector(".seg")?.addEventListener("click", e => { const b = e.target.closest("[data-mode]"); if (!b) return; mode = b.dataset.mode; store.set("mapmode", mode); for (const q of plans) showMode(document.querySelector(`.mapgrid[data-plan="${CSS.escape(q.id)}"]`), q); }); }
+        box.querySelector(".seg")?.addEventListener("click", e => { const b = e.target.closest("[data-mode]"); if (!b) return; mode = b.dataset.mode; store.set("mapmode2", mode); for (const q of plans) showMode(document.querySelector(`.mapgrid[data-plan="${CSS.escape(q.id)}"]`), q); }); }
       v.onmouseover = e => { const t = e.target.closest("[data-pid]"); setHover(t ? +t.dataset.pid : null); };
       v.onmouseleave = () => setHover(null);
       const open = e => { const t = e.target.closest("[data-member]"); if (t) location.hash = "member-" + t.dataset.member; };
@@ -413,10 +426,11 @@ function MapPage() {
     unmount() { for (const k of Object.keys(scenes)) { scenes[k]?.destroy?.(); delete scenes[k]; } },
     async update() {
       const plans = src.plans(); if (!plans.length || !live) return;
-      const fl = await src.floor(), states = Object.fromEntries(live.machines.map(m => [m.id, m]));
+      const fl = await src.floor(), states = lastStates = Object.fromEntries(live.machines.map(m => [m.id, m]));
+      if (Date.now() - utilAt > 5000) { utilAt = Date.now(); src.utilisation().then(u => { util = Object.fromEntries(u.map(x => [x.machine, x])); }).catch(() => {}); }
       for (const p of plans) {
         const box = document.querySelector(`.mapgrid[data-plan="${CSS.escape(p.id)}"]`); if (!box) continue;
-        const f = fl.find(x => x.plan === p.id) || {};
+        const f = lastFloor[p.id] = fl.find(x => x.plan === p.id) || {};
         box.querySelector(".pv").innerHTML = planSVG(p, f, layer, states, hover);
         box.querySelector(".pc").textContent = f.headcount ?? "–";
         box.querySelector(".pk").textContent = f.heat?.peak ? `peak ${f.heat.peak} so far` : "";
