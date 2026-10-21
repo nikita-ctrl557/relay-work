@@ -159,7 +159,7 @@ function FloorPage() {
 function MembersPage() {
   let filter = "all", q = "";
   return {
-    title: "Members", sub: PAGES[1].sub,
+    title: "Members", sub: PAGES.find(p => p.id === "members").sub,
     actions(a) {
       a.append(el(`<button class="btn secondary">${IC.print}Print tags</button>`)); a.lastChild.onclick = printTags;
       a.append(el(`<button class="btn">${IC.plus}Add member</button>`)); a.lastChild.onclick = addMember;
@@ -270,7 +270,7 @@ function printTags(only) {
 function MachinesPage() {
   let hourly = {};
   return {
-    title: "Machines", sub: PAGES[2].sub,
+    title: "Machines", sub: PAGES.find(p => p.id === "machines").sub,
     mount(v) {
       v.append(el(`<div class="mgrid" id="mg"></div>`));
       src.hourly().then(h => { hourly = h; this.update(); }).catch(() => {});
@@ -487,7 +487,7 @@ function InsightsPage() {
 function RecordingsPage() {
   let jobs = [], file = null;
   return {
-    title: "Recordings", sub: PAGES[3].sub,
+    title: "Recordings", sub: PAGES.find(p => p.id === "recordings").sub,
     actions(a) { a.append(el(`<button class="btn">${IC.upload}Upload recording</button>`)); a.lastChild.onclick = () => $("#rfile").click(); },
     mount(v) {
       const server = src.mode === "server";
