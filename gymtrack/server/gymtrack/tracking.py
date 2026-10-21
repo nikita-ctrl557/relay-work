@@ -263,7 +263,7 @@ class PeopleTracker:
             tr.kps = [k for k in tr.kps if t - k[0] <= 8.0] + [(t, kp)]
             if self.exercise_names and t - tr.act_at >= 1.0 and len(tr.kps) >= 6:
                 tr.act_at = t
-                raw, conf, _ = classify([k for _, k in tr.kps[-18:]])
+                raw, conf, _ = classify([k for tk, k in tr.kps if t - tk <= 6.0][-30:])  # last 6 s, whatever the pose rate
                 tr.act_raw = (tr.act_raw + [(raw, conf)])[-3:]
                 tr.activity, tr.act_conf = gate_activity(tr.act_raw, tr.stationary)
 

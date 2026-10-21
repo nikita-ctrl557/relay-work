@@ -600,7 +600,7 @@ class ServerSource {
   async setCalibration(camId, calib, size) { await this.j("api/cameras/" + encodeURIComponent(camId) + "/calibration", {method: "PUT", body: JSON.stringify({...calib, ...(size || {})})}); await this.config(); }
   peopleNow(camId) { // cached; refreshed in the background at ~4/s so the overlay stays smooth
     const c = (this._ppl ||= {})[camId] ||= {at: 0, list: []};
-    if (Date.now() - c.at > 250 && !c.busy) { c.busy = true; this.j("api/cameras/" + encodeURIComponent(camId) + "/people").then(l => { c.list = l; }).catch(() => {}).finally(() => { c.at = Date.now(); c.busy = false; }); }
+    if (Date.now() - c.at > 250 && !c.busy) { c.busy = true; this.j("api/cameras/" + encodeURIComponent(camId) + "/people").then(l => { c.list = l.map(q => ({...q, pose: decodePose(q.kps)})); }).catch(() => {}).finally(() => { c.at = Date.now(); c.busy = false; }); }
     return c.list;
   }
   async floor() { const f = await this.j("api/floor"); for (const p of f) if (p.heat) { p.heat.grid = Float32Array.from(p.heat.grid); p.heat.peak = Math.max(p.heat.peak || 0, p.headcount); } return f; }
@@ -746,7 +746,33 @@ class ReplaySource {
     const now = this.peopleAt(c, a);
     if (!b || b.t - a.t > 2) return now;
     const k = Math.max(0, Math.min(1, (ct - a.t) / (b.t - a.t))), next = Object.fromEntries(this.peopleAt(c, b).map(q => [q.pid, q]));
-    return now.map(q => { const n = next[q.pid]; return n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k)} : q; });
+    return now.map(q => { const n = next[q.pid]; return {...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k)} : q), pose: this.poseAt(c, q.pid, ct)}; });
+  }
+  poseIdx(c) { // pid -> {t: [], k: [decoded pose]} from the 5-per-second pose log
+    if (c._pi) return c._pi;
+    const idx = c._pi = {};
+    for (const e of c.data.poses || []) for (const [pid, flat] of e.k) { const pts = decodePose(flat); if (!pts) continue; const r = idx[pid] ||= {t: [], k: []}; r.t.push(e.t); r.k.push(pts); }
+    return idx;
+  }
+  poseAt(c, pid, ct) {
+    const r = this.poseIdx(c)[pid]; if (!r) return null;
+    let lo = 0, hi = r.t.length - 1; if (ct < r.t[0] - 0.4 || ct > r.t[hi] + 0.4) return null;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (r.t[m] <= ct) lo = m; else hi = m - 1; }
+    const a = lo, b = Math.min(lo + 1, r.t.length - 1);
+    if (Math.abs(ct - r.t[a]) > 0.6 && Math.abs(r.t[b] - ct) > 0.6) return null;
+    if (b === a || r.t[b] - r.t[a] > 0.8) return r.k[Math.abs(ct - r.t[a]) <= Math.abs(r.t[b] - ct) ? a : b];
+    return lerpPose(r.k[a], r.k[b], Math.max(0, Math.min(1, (ct - r.t[a]) / (r.t[b] - r.t[a]))));
+  }
+  poseClip(memberId) { // the member's posture: their longest set with pose data, or their best-seen 20 s
+    const m = this.cfg.members.find(x => x.id === memberId), c = m && this.cams.find(x => x.id === m.cam); if (!c) return null;
+    const r = this.poseIdx(c)[m.pid]; if (!r || r.t.length < 10) return null;
+    const pick = (t0, t1) => { const frames = []; for (let i = 0; i < r.t.length; i++) if (r.t[i] >= t0 && r.t[i] <= t1) frames.push({t: r.t[i], pts: r.k[i]}); return frames; };
+    let best = null;
+    for (const s of c.data.sets.filter(s => s.pid === m.pid)) { const f = pick(s.t0, s.t1); if (f.length >= 10 && (!best || f.length > best.frames.length)) best = {frames: f, set: s}; }
+    if (!best) { let bi = 0, bn = 0; for (let i = 0, j = 0; i < r.t.length; i++) { while (r.t[i] - r.t[j] > 20) j++; if (i - j > bn) { bn = i - j; bi = j; } } best = {frames: pick(r.t[bi], r.t[bi] + 20), set: null}; }
+    const s = best.set;
+    return {frames: best.frames, aspect: 16 / 9, camera: c.name, title: s ? `${s.ex ? exName(ACT_EX[s.ex] !== undefined ? ACT_EX[s.ex] || s.ex : s.ex) + " · " : ""}${s.reps} reps on ${machineName(s.m)}` : "Moving around the floor",
+      color: s ? "#3d7cf0" : "#9aa4b2", at: s ? s.t0 : best.frames[0].t};
   }
   trails(c, ct, secs = 10) {
     const out = {}, H = this.H(c);

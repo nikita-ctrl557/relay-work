@@ -104,8 +104,19 @@ function timeView() {
 /* ---------- BODY: muscles trained, training style, coaching ---------- */
 function bodyView() {
   if (!prog) return `<div class="mcard2 empty">Loading…</div>`;
-  return `<div class="sec-h"><h2>Your body this week</h2><span class="r">last 7 days</span></div>
+  return `${src.poseClip ? `<div class="sec-h"><h2>Your form</h2><span class="r">${esc(poseFor().clip?.title || "")}</span></div><div class="mcard2" id="mpose-slot"></div>` : ""}
+    <div class="sec-h"><h2>Your body this week</h2><span class="r">last 7 days</span></div>
     <div class="mcard2">${trainingProfileHTML(prog, {compact: false})}</div>`;
+}
+// the posture player lives in one node that survives re-renders, so the animation doesn't restart
+let poseState = {id: null, clip: null, host: null, player: null};
+function poseFor() {
+  if (poseState.id !== me) {
+    poseState.player?.destroy(); poseState = {id: me, clip: src.poseClip?.(me) || null, host: document.createElement("div"), player: null};
+    poseState.player = skeletonPlayer(poseState.host, poseState.clip);
+    if (poseState.clip) poseState.host.append(el(`<p class="muted skp-note">Replayed from ${esc(poseState.clip.camera)}. Only your skeleton is kept, never the video.</p>`));
+  }
+  return poseState;
 }
 
 /* ---------- PROGRESS ---------- */
@@ -145,6 +156,7 @@ function render() {
   const focused = document.activeElement?.dataset?.set;
   if (focused) return; // don't redraw under someone typing a weight
   $("#mapp").innerHTML = header() + view() + `<p class="privacy">${MIC.lock}Only you see this. Cameras never record you; GymTrack keeps sets, reps and times.</p>`;
+  const slot = $("#mpose-slot"); if (slot) slot.append(poseFor().host);
   $("#who").onchange = e => { me = e.target.value; store.set("me", me); prog = null; loadProg(); render(); };
   document.querySelectorAll("[data-range]").forEach(b => b.onclick = () => { range = b.dataset.range; render(); });
 }

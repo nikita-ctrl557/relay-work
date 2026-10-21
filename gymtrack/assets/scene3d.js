@@ -103,6 +103,12 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer 
   const body = new THREE.CapsuleGeometry(M(0.24), M(1.25), 4, 12), people = new Map();
   const upQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), N);
   const mats = {move: 0x9aa4b2, station: 0xf26b2e, lift: 0x3d7cf0};
+  const boneGeo = new THREE.CylinderGeometry(M(0.035), M(0.035), 1, 8), jointGeo = new THREE.SphereGeometry(M(0.045), 10, 8), headGeo = new THREE.SphereGeometry(M(0.11), 16, 12);
+  const jointMat = new THREE.MeshBasicMaterial({color: 0xffffff}), Y = new THREE.Vector3(0, 1, 0);
+  const O3 = new THREE.Vector3(), poseTo3D = (pose, F) => { // 2D joints -> upright plane through the feet, facing the camera
+    const d = O3.clone().sub(F); d.addScaledVector(N, -d.dot(N)).normalize(); const k = F.dot(d);
+    return pose.map(pt => { if (!pt) return null; const r = new THREE.Vector3((pt[0] * W - cx) / f, (pt[1] * H - cy) / f, 1), den = r.dot(d); return Math.abs(den) < 1e-6 ? null : r.multiplyScalar(k / den); });
+  };
   let hoverPid = null;
   function person(pid) {
     let p = people.get(pid); if (p) return p;
@@ -114,7 +120,11 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer 
     tag.onmouseenter = () => setHover(pid); tag.onmouseleave = () => setHover(null);
     tag.onfocus = () => setHover(pid); tag.onblur = () => setHover(null);
     tag.onclick = () => onOpen?.(people.get(pid)?.q);
-    p = {mesh, ring, tag, pos: null, target: null, q: null}; people.set(pid, p); return p;
+    const mat = new THREE.MeshBasicMaterial({color: mats.move}), skel = new THREE.Group();
+    const bones = [...SKEL_EDGES, [13, 0]].map(() => { const b = new THREE.Mesh(boneGeo, mat); skel.add(b); return b; });
+    const joints = Array.from({length: 13}, (_, i) => { const j = new THREE.Mesh(i === 0 ? headGeo : jointGeo, i === 0 ? mat : jointMat); skel.add(j); return j; });
+    world.add(skel);
+    p = {mesh, ring, tag, pos: null, target: null, q: null, skel, bones, joints, mat}; people.set(pid, p); return p;
   }
   function setHover(pid) { hoverPid = pid; onHover?.(pid); }
 
@@ -127,11 +137,12 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer 
       if (!p.pos) p.pos = at.clone();
       const lifting = q.activity && q.activity !== "standing";
       p.mesh.material.color.setHex(lifting ? mats.lift : q.planted && q.zone ? mats.station : mats.move);
+      p.mat.color.copy(p.mesh.material.color); p.pose = q.pose || null;
       const txt = labelOf(q);
       if (p.tag.textContent !== txt) { p.tag.textContent = txt; p.tag.setAttribute("aria-label", q.member ? `Open ${q.label}'s profile` : q.label); }
       p.tag.classList.toggle("link", !!q.member);
     }
-    for (const [pid, p] of people) if (!seen.has(pid)) { world.remove(p.mesh); world.remove(p.ring); p.tag.remove(); people.delete(pid); }
+    for (const [pid, p] of people) if (!seen.has(pid)) { world.remove(p.mesh); world.remove(p.ring); world.remove(p.skel); p.tag.remove(); people.delete(pid); }
   }
 
   // views
@@ -176,7 +187,20 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer 
       p.mesh.position.copy(p.pos).addScaledVector(N, M(0.87)); p.ring.position.copy(lift(p.pos));
       const hl = hoverPid === pid; p.ring.material.opacity = hl ? 0.95 : 0; p.mesh.material.opacity = hl ? 1 : 0.85; p.mesh.scale.setScalar(hl ? 1.12 : 1);
       tmp.copy(p.pos).addScaledVector(N, M(1.95)).applyQuaternion(world.quaternion).project(camera);
-      p.mesh.visible = p.ring.visible = showPeople;
+      p.ring.visible = showPeople;
+      const J = showPeople && p.pose ? poseTo3D(p.pose, p.pos) : null;
+      p.skel.visible = !!J; p.mesh.visible = showPeople && !J;
+      if (J) {
+        const sh = J[1] && J[2] ? J[1].clone().add(J[2]).multiplyScalar(0.5) : null;
+        [...SKEL_EDGES, [13, 0]].forEach(([a, b], i) => {
+          const A = a === 13 ? sh : J[a], B = J[b], bone = p.bones[i];
+          if (!A || !B) { bone.visible = false; return; }
+          const v = B.clone().sub(A), len = v.length(); bone.visible = len > 1e-4;
+          bone.position.copy(A).addScaledVector(v, 0.5); bone.quaternion.setFromUnitVectors(Y, v.normalize()); bone.scale.set(hl ? 1.5 : 1, len, hl ? 1.5 : 1);
+        });
+        J.forEach((P, i) => { const j = p.joints[i]; j.visible = !!P; if (P) j.position.copy(P); });
+        tmp.copy(J[0] || p.pos.clone().addScaledVector(N, M(1.8))).addScaledVector(N, M(0.35)).applyQuaternion(world.quaternion).project(camera);
+      }
       const vis = showPeople && tmp.z < 1 && Math.abs(tmp.x) < 1.1 && Math.abs(tmp.y) < 1.1;
       p.tag.style.display = vis ? "" : "none";
       if (vis) p.tag.style.transform = `translate(${((tmp.x + 1) / 2 * rect.width).toFixed(1)}px, ${((1 - tmp.y) / 2 * rect.height).toFixed(1)}px) translate(-50%, -100%)`;

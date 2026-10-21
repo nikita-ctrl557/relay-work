@@ -43,9 +43,20 @@ def whole_frame_zone(width: int, height: int, machine: str = "floor") -> Zone:
                           [int(width * (1 - m)), int(height * (1 - m))], [int(width * m), int(height * (1 - m))]])
 
 
+def pose_vector(kp, W: int, H: int) -> list[int]:
+    """13 body joints as x, y in thousandths of the frame (-1 = not visible), for skeleton playback."""
+    from .pose import JOINTS13
+    out = []
+    for j in JOINTS13:
+        x, y, v = kp[j]
+        out += [-1, -1] if v < 0.3 else [int(round(x / W * 1000)), int(round(y / H * 1000))]
+    return out
+
+
 def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float | None = None,
             sample_fps: float = 10.0, on_progress=None, should_stop=None,
-            people: bool | None = None, video_out: str | None = None, timeline: list | None = None) -> dict:
+            people: bool | None = None, video_out: str | None = None, timeline: list | None = None,
+            poses: list | None = None, detect_every_s: float = 0.34) -> dict:
     """Run one recording through the pipeline. Returns a report dict (see `report`).
 
     people: track individual people (needs the detector model; default: on if it's installed).
@@ -70,7 +81,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
     if people:
         from .pose import POSE_MODEL, PoseEstimator
         plan = (cfg.plan["width"], cfg.plan["depth"]) if cfg.plan else None
-        tracker = PeopleTracker(cam.zones, PersonDetector(), pose=PoseEstimator() if POSE_MODEL.exists() else None,
+        tracker = PeopleTracker(cam.zones, PersonDetector(), detect_every_s=detect_every_s, pose=PoseEstimator() if POSE_MODEL.exists() else None,
                                 homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names)
     names = {m.id: m.name for m in cfg.members}
     tag_names = {m.tag: m.name for m in cfg.members}
@@ -97,6 +108,11 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
             reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity) for tr in tracks]
             reading.tracking = True
         engine.ingest(reading)
+        if poses is not None and tracker:
+            fresh = [tr for tr in tracks if tr.kps and abs(tr.kps[-1][0] - (start_ts + t)) < 1e-6]
+            if fresh:
+                H, W = frame.shape[:2]
+                poses.append({"t": round(t, 2), "k": [[tr.id, pose_vector(tr.kps[-1][1], W, H)] for tr in fresh]})
         if background is None:
             background = frame.copy()
         if timeline is not None and (not timeline or t - timeline[-1]["t"] >= 1.0):

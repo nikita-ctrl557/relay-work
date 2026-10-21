@@ -54,9 +54,17 @@ function FloorPage() {
     drawHits() { // clickable boxes over each camera, following the tracked people
       this.raf = requestAnimationFrame(() => this.drawHits());
       if (!src.peopleNow || !wall) return;
+      const showSkel = store.get("skel", true);
       for (const t of wall.querySelectorAll(".tile")) {
-        const layer = t.querySelector(".hits"), seen = new Set();
-        for (const q of src.peopleNow(t.dataset.cam)) {
+        const layer = t.querySelector(".hits"), seen = new Set(), list = src.peopleNow(t.dataset.cam);
+        const cv = t.querySelector(".skel"), dpr = devicePixelRatio || 1, w = t.clientWidth, hh0 = t.clientHeight;
+        if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(hh0 * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(hh0 * dpr); }
+        const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, hh0);
+        if (showSkel) for (const q of list) if (q.pose) {
+          const lift = q.activity && q.activity !== "standing", hov = layer.querySelector(`.hit[data-pid="${q.pid}"]`)?.matches(":hover, .hl");
+          drawSkeleton(ctx, q.pose, p => [p[0] * w, p[1] * hh0], {color: lift ? "#3d7cf0" : hov ? "#ffffff" : "#ffb347", width: Math.max(1.6, w / 420) * (hov ? 1.5 : 1), joint: Math.max(1.4, w / 520), alpha: hov ? 1 : 0.9});
+        }
+        for (const q of list) {
           if (!q.box || q.box[2] <= 0) continue;
           const key = String(q.pid); seen.add(key);
           let h = layer.querySelector(`[data-pid="${key}"]`);
@@ -94,17 +102,18 @@ function FloorPage() {
       eq.onclick = e => { const r = e.target.closest("[data-member]"); if (r && cfg.members.some(m => m.id === r.dataset.member)) location.hash = "member-" + r.dataset.member; };
     },
     buildWall() {
-      wall.innerHTML = `<div class="wall-h"><b>Cameras</b><span>${cfg.cameras.length} feeds</span><span class="right">${focus ? '<button data-unfocus>Show all</button>' : ""}</span></div>`;
+      wall.innerHTML = `<div class="wall-h"><b>Cameras</b><span>${cfg.cameras.length} feeds</span><span class="right"><button data-skel aria-pressed="${store.get("skel", true)}" title="Draw each person's skeleton">${IC.skel}Skeletons</button>${focus ? '<button data-unfocus>Show all</button>' : ""}</span></div>`;
       wall.classList.toggle("focus", !!focus);
       const cams = focus ? [cfg.cameras.find(c => c.id === focus), ...cfg.cameras.filter(c => c.id !== focus)] : cfg.cameras;
       const list = cams.filter(Boolean);
       list.forEach((cam, i) => {
         const hero = cam.id === focus || (!focus && list.length % 2 === 1 && i === 0);
-        const t = el(`<div class="tile ${hero ? "main" : ""}" data-cam="${esc(cam.id)}" role="button" tabindex="0" aria-label="${esc(cam.name)} camera"><div class="ov"><div class="t"><span class="rec"><i></i>LIVE</span><span>${esc(cam.name)}</span><span class="fps"></span></div><div class="b"></div></div><div class="hits" aria-label="People on camera"></div></div>`);
+        const t = el(`<div class="tile ${hero ? "main" : ""}" data-cam="${esc(cam.id)}" role="button" tabindex="0" aria-label="${esc(cam.name)} camera"><div class="ov"><div class="t"><span class="rec"><i></i>LIVE</span><span>${esc(cam.name)}</span><span class="fps"></span></div><div class="b"></div></div><canvas class="skel" aria-hidden="true"></canvas><div class="hits" aria-label="People on camera"></div></div>`);
         t.prepend(src.view(cam)); wall.append(t);
       });
       wall.onclick = e => {
         if (e.target.closest("[data-unfocus]")) { focus = null; return this.buildWall(); }
+        const sk = e.target.closest("[data-skel]"); if (sk) { const on = !store.get("skel", true); store.set("skel", on); sk.setAttribute("aria-pressed", on); return; }
         const h = e.target.closest(".hit");
         if (h) { e.stopPropagation(); if (h.dataset.member) location.hash = "member-" + h.dataset.member; else toast(`${h.dataset.label} was only on camera briefly, so there's no profile yet.`); return; }
         const t = e.target.closest(".tile"); if (!t) return;
@@ -200,9 +209,13 @@ function MemberPage(id) {
     mount(v) {
       v.append(el(`<div class="profile"><section class="card ph" id="ph"></section><section class="tiles" id="ptiles"></section>
         <section class="card"><div class="card-h"><h2>Today's session</h2><span class="right legend"><span><i style="background:var(--lift)"></i>Set</span><span><i style="background:var(--rest)"></i>Rest between sets</span></span></div><div class="card-b" id="pstrip"></div></section>
+        <section class="card" id="ppose" hidden><div class="card-h"><h2>Posture</h2><span class="hint" id="pposeT"></span><span class="right hint">skeleton from the cameras · drag to scrub</span></div><div class="card-b" id="pposeB"></div></section>
         <div id="phist"><div class="card empty">Loading history…</div></div></div>`));
+      const clip = src.poseClip?.(id);
+      if (src.poseClip) { $("#ppose").hidden = false; $("#pposeT").textContent = clip ? `${clip.title} · ${clip.camera}` : ""; this.player = skeletonPlayer($("#pposeB"), clip); }
       this.load();
     },
+    unmount() { this.player?.destroy(); },
     async load() {
       prog = await src.progress(id).catch(() => null); built = false; this.update();
     },

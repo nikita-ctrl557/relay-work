@@ -15,6 +15,8 @@ POSE_MODEL = Path(__file__).resolve().parents[1] / "models" / "pose.onnx"
 
 # BlazePose keypoint indices
 NOSE, L_SH, R_SH, L_EL, R_EL, L_WR, R_WR, L_HIP, R_HIP, L_KN, R_KN, L_AN, R_AN = 0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28
+# the 13 joints shared with the browser (order matters: assets/ui.js SKEL_EDGES indexes into it)
+JOINTS13 = [NOSE, L_SH, R_SH, L_EL, R_EL, L_WR, R_WR, L_HIP, R_HIP, L_KN, R_KN, L_AN, R_AN]
 SKELETON = [(L_SH, R_SH), (L_SH, L_EL), (L_EL, L_WR), (R_SH, R_EL), (R_EL, R_WR), (L_SH, L_HIP), (R_SH, R_HIP),
             (L_HIP, R_HIP), (L_HIP, L_KN), (L_KN, L_AN), (R_HIP, R_KN), (R_KN, R_AN)]
 

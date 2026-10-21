@@ -3,6 +3,9 @@
 /* ---------------- icons (24px stroke) ---------------- */
 const SV = (d, extra = "") => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${d}</svg>`;
 const IC = {
+  pause: SV('<path d="M8 5v14M16 5v14" stroke-width="2.4"/>'),
+  play: SV('<path d="M7 5l12 7-12 7z" fill="currentColor"/>'),
+  skel: SV('<circle cx="12" cy="4.5" r="2"/><path d="M12 7v7M7 9.5l5-1 5 1M9 21l3-7 3 7"/>'),
   floor: SV('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M7 21h10M12 17v4"/><circle cx="12" cy="10.5" r="2.5"/>'),
   members: SV('<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.8 5.5-4.8s4.9 1.8 5.5 4.8"/><path d="M16 5.2a3 3 0 0 1 0 5.6M17.5 14.5c1.6.6 2.7 2.1 3 4.5"/>'),
   machines: SV('<path d="M6.5 7v10M3.5 9.5v5M17.5 7v10M20.5 9.5v5M6.5 12h11"/>'),
@@ -186,4 +189,71 @@ function trainingProfileHTML(prog, {compact = false} = {}) {
       <div class="tp-recs">${recs.map(r => `<div class="tp-rec">${icon(r.level)}<div><b>${esc(r.title)}</b><span>${esc(r.detail)}</span></div></div>`).join("")}</div>
       ${next?.exercises?.length ? `<div class="tp-next"><div class="eyebrow">Next session</div><b>${esc(next.focus)}</b><div class="tags2" style="margin-top:6px">${next.exercises.map(e => `<span>${esc(exName(e))}</span>`).join("")}</div>${next.reason ? `<small class="muted">${esc(next.reason)}</small>` : ""}</div>` : ""}
     </div></div>`;
+}
+
+/* ---------------- skeletons ----------------
+   Poses are 13 joints (server/gymtrack/pose.py JOINTS13), x/y as fractions of the camera frame. */
+const SKEL_EDGES = [[1, 2], [1, 3], [3, 5], [2, 4], [4, 6], [1, 7], [2, 8], [7, 8], [7, 9], [9, 11], [8, 10], [10, 12]];
+const SKEL_LEFT = new Set([3, 5, 9, 11]); // left arm/leg drawn a shade lighter so you can tell sides apart
+function decodePose(flat) {
+  if (!flat) return null;
+  const pts = []; for (let i = 0; i < 26; i += 2) pts.push(flat[i] < 0 ? null : [flat[i] / 1000, flat[i + 1] / 1000]);
+  return pts.filter(Boolean).length >= 5 ? pts : null;
+}
+function lerpPose(a, b, k) { return a.map((p, i) => p && b[i] ? [p[0] + (b[i][0] - p[0]) * k, p[1] + (b[i][1] - p[1]) * k] : p || b[i]); }
+const angleAt = (a, b, c) => { if (!a || !b || !c) return null; const v1 = [a[0] - b[0], a[1] - b[1]], v2 = [c[0] - b[0], c[1] - b[1]]; const d = Math.hypot(...v1) * Math.hypot(...v2); return d ? Math.acos(Math.max(-1, Math.min(1, (v1[0] * v2[0] + v1[1] * v2[1]) / d))) * 180 / Math.PI : null; };
+function poseAngles(p) { // knee bend, hip angle, torso lean from vertical (degrees); uses the better-seen side
+  const side = (h, k, a) => angleAt(p[h], p[k], p[a]);
+  const knee = [side(7, 9, 11), side(8, 10, 12)].filter(v => v != null), hip = [angleAt(p[1], p[7], p[9]), angleAt(p[2], p[8], p[10])].filter(v => v != null);
+  const sh = p[1] && p[2] ? [(p[1][0] + p[2][0]) / 2, (p[1][1] + p[2][1]) / 2] : p[1] || p[2], hp = p[7] && p[8] ? [(p[7][0] + p[8][0]) / 2, (p[7][1] + p[8][1]) / 2] : p[7] || p[8];
+  const lean = sh && hp ? Math.atan2(Math.abs(sh[0] - hp[0]) * 16 / 9, Math.abs(sh[1] - hp[1])) * 180 / Math.PI : null;
+  return {knee: knee.length ? Math.min(...knee) : null, hip: hip.length ? Math.min(...hip) : null, lean};
+}
+// draw on a 2D canvas; map(p) -> [x, y] in canvas pixels
+function drawSkeleton(ctx, pts, map, {color = "#3d7cf0", width = 3, joint = 3.2, alpha = 1, outline = true} = {}) {
+  ctx.save(); ctx.globalAlpha = alpha; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  const P = pts.map(p => p && map(p));
+  const lines = (w, c) => { ctx.lineWidth = w; for (const [a, b] of SKEL_EDGES) if (P[a] && P[b]) { ctx.strokeStyle = typeof c === "function" ? c(a, b) : c; ctx.beginPath(); ctx.moveTo(...P[a]); ctx.lineTo(...P[b]); ctx.stroke(); } };
+  if (outline) lines(width + 2.5, "rgba(10,14,20,.55)");
+  lines(width, (a, b) => SKEL_LEFT.has(a) || SKEL_LEFT.has(b) ? `color-mix(in srgb, ${color} 62%, white)` : color);
+  const sh = P[1] && P[2] ? [(P[1][0] + P[2][0]) / 2, (P[1][1] + P[2][1]) / 2] : null;
+  if (P[0] && sh) { const r = Math.max(joint * 1.6, Math.hypot(P[0][0] - sh[0], P[0][1] - sh[1]) * 0.42); ctx.lineWidth = width; ctx.strokeStyle = color; ctx.beginPath(); ctx.moveTo(...sh); ctx.lineTo(P[0][0], P[0][1] + r); ctx.stroke(); ctx.beginPath(); ctx.arc(P[0][0], P[0][1], r, 0, 7); ctx.fillStyle = "rgba(10,14,20,.35)"; ctx.fill(); ctx.stroke(); }
+  ctx.fillStyle = "#fff"; for (const p of P.slice(1)) if (p) { ctx.beginPath(); ctx.arc(p[0], p[1], joint, 0, 7); ctx.fill(); }
+  ctx.restore();
+}
+/* Posture replay: animates one person's skeleton through a clip ({frames: [{t, pts}], ...}). */
+function skeletonPlayer(host, clip) {
+  if (!clip?.frames?.length) { host.innerHTML = `<div class="empty" style="padding:20px">No clear pose yet: the camera needs to see this person's whole body for a few seconds.</div>`; return {destroy() {}}; }
+  host.innerHTML = `<div class="skp"><canvas></canvas><div class="skp-side"><div class="skp-ang"></div><small class="muted skp-cav">Angles as this camera sees them. Bending toward or away from the camera looks shallower, so a side-on view measures depth best.</small></div></div>
+    <div class="skp-bar"><button class="btn secondary sm" data-pp aria-label="Pause">${IC.pause}</button><input type="range" min="0" max="1000" value="0" aria-label="Position in clip"><span class="num skp-t"></span><button class="btn ghost sm" data-sp>1×</button></div>`;
+  const cv = host.querySelector("canvas"), ctx = cv.getContext("2d"), range = host.querySelector("input"), tEl = host.querySelector(".skp-t"), ang = host.querySelector(".skp-ang");
+  const F = clip.frames, t0 = F[0].t, t1 = F[F.length - 1].t, dur = Math.max(0.1, t1 - t0);
+  let x0 = 1, y0 = 1, x1 = 0, y1 = 0; // fit the whole clip, keep the camera's aspect
+  for (const f of F) for (const p of f.pts) if (p) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
+  const ar = clip.aspect || 16 / 9;
+  let playing = true, speed = 1, t = t0, last = performance.now(), raf, trail = [];
+  const lo = {min: {}, max: {}};
+  for (const f of F) { const a = poseAngles(f.pts); for (const k of ["knee", "hip", "lean"]) if (a[k] != null) { lo.min[k] = Math.min(lo.min[k] ?? 999, a[k]); lo.max[k] = Math.max(lo.max[k] ?? -1, a[k]); } }
+  function at(tt) { let i = F.findIndex(f => f.t > tt); if (i <= 0) return F[i === 0 ? 0 : F.length - 1].pts; const a = F[i - 1], b = F[i]; return b.t - a.t > 1.2 ? a.pts : lerpPose(a.pts, b.pts, (tt - a.t) / (b.t - a.t)); }
+  function draw() {
+    const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight; if (!w) return;
+    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    const bw = (x1 - x0) * ar, bh = y1 - y0, s = Math.min((w - 24) / Math.max(bw, 1e-3), (h - 24) / Math.max(bh, 1e-3)), ox = (w - bw * s) / 2, oy = (h - bh * s) / 2;
+    const map = p => [ox + (p[0] - x0) * ar * s, oy + (p[1] - y0) * s];
+    const floorY = oy + bh * s + 4; ctx.strokeStyle = "rgba(127,127,127,.35)"; ctx.lineWidth = 1; ctx.setLineDash([4, 5]); ctx.beginPath(); ctx.moveTo(12, floorY); ctx.lineTo(w - 12, floorY); ctx.stroke(); ctx.setLineDash([]);
+    const pts = at(t);
+    trail.push(pts); if (trail.length > 7) trail.shift();
+    trail.slice(0, -1).forEach((p, i) => drawSkeleton(ctx, p, map, {color: clip.color || "#3d7cf0", width: 2, joint: 0, alpha: 0.06 + i * 0.03, outline: false}));
+    drawSkeleton(ctx, pts, map, {color: clip.color || "#3d7cf0", width: Math.max(3, s * 0.012), joint: Math.max(3, s * 0.01)});
+    const a = poseAngles(pts), row = (k, l, help) => a[k] == null ? "" : `<div data-tip="${help}"><span class="eyebrow">${l}</span><b class="num">${Math.round(a[k])}°</b><small class="muted">range ${Math.round(lo.min[k])}–${Math.round(lo.max[k])}°</small></div>`;
+    ang.innerHTML = row("knee", "Knee", "Angle at the knee: 180° is straight, under 90° is below parallel on a squat") + row("hip", "Hip", "Angle between torso and thigh") + row("lean", "Torso lean", "Torso angle from vertical");
+    range.value = String(Math.round((t - t0) / dur * 1000)); tEl.textContent = `${clockFmt(t - t0)} / ${clockFmt(dur)}`;
+  }
+  function frame(ts) { raf = requestAnimationFrame(frame); const dt = Math.min(0.1, (ts - last) / 1000); last = ts; if (playing) { t += dt * speed; if (t > t1) { t = t0; trail = []; } } draw(); }
+  raf = requestAnimationFrame(frame);
+  host.querySelector("[data-pp]").onclick = e => { playing = !playing; e.currentTarget.innerHTML = playing ? IC.pause : IC.play; e.currentTarget.setAttribute("aria-label", playing ? "Pause" : "Play"); };
+  host.querySelector("[data-sp]").onclick = e => { speed = speed === 1 ? 0.5 : speed === 0.5 ? 0.25 : 1; e.currentTarget.textContent = speed + "×"; };
+  range.oninput = () => { t = t0 + range.value / 1000 * dur; trail = []; };
+  return {destroy() { cancelAnimationFrame(raf); }};
 }

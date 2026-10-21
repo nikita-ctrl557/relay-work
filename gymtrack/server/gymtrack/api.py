@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from .cameras import CameraWorker, redact
 from .config import Camera, GymConfig, Machine, Member, Zone
 from .engine import Engine
-from .offline import Job, analyse, report_html, whole_frame_zone
+from .offline import Job, analyse, pose_vector, report_html, whole_frame_zone
 from .store import Store
 from .vision import ARUCO_DICT
 
@@ -181,7 +181,9 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
         names = {m.id: m.name for m in cfg.members}
         return [{"pid": t.id, "member": t.member, "label": names.get(t.member) or f"#{t.id}", "zone": t.zone,
                  "activity": t.activity, "planted": t.planted,
-                 "box": [t.box[0] / W, t.box[1] / H, t.box[2] / W, t.box[3] / H]} for t in w.tracker.visible(time.time())]
+                 "box": [t.box[0] / W, t.box[1] / H, t.box[2] / W, t.box[3] / H],
+                 "kps": pose_vector(t.kps[-1][1], W, H) if t.kps and time.time() - t.kps[-1][0] < 1.0 else None}
+                for t in w.tracker.visible(time.time())]
 
     @app.get("/api/cameras/{cid}/frame.jpg")
     def frame(cid: str, overlay: bool = True):

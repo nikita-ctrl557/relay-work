@@ -299,3 +299,12 @@ def test_exercise_label_needs_confidence_agreement_and_stillness():
     assert gate_activity([("pull_up", 0.9), ("squat", 0.9)], True) == (None, 0.0)      # disagrees with itself
     assert gate_activity([("squat", 0.6), ("squat", 0.6)], True) == (None, 0.0)       # not confident
     assert gate_activity([("squat", 0.9), ("standing", 0.6)], False)[0] == "standing"
+
+
+def test_pose_vector_encodes_13_joints_and_hides_unseen():
+    import numpy as np
+    from gymtrack.offline import pose_vector
+    kp = np.zeros((33, 3)); kp[:, 0], kp[:, 1], kp[:, 2] = 320, 180, 0.9
+    kp[27, 2] = 0.1  # left ankle not visible
+    v = pose_vector(kp, 640, 360)
+    assert len(v) == 26 and v[:2] == [500, 500] and v[22:24] == [-1, -1]
