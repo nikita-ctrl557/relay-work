@@ -152,7 +152,7 @@ def _link_cost(A, B, geo: _Geo, doors, gap_max: float):
     # colour signatures of two different people agree above ~0.90 in 1% of pairs on our footage
     # (bench/eval_tracking.py data), so far / long links need near-identical clothes
     near = d <= SLACK + 0.2 * gap and gap <= 15
-    need = 0.86 if near else 0.93
+    need = 0.86 if near else 0.91 if gap <= 30 else 0.93
     if edge:
         need = max(need, 0.94)  # walked out of the picture and back in: clothes must agree strongly
     if sim < need:
