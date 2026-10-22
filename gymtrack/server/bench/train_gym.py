@@ -36,8 +36,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gymtrack.activity import FEATURE_VERSION, RATE_HZ, WINDOW_S, window_vector, windows  # noqa: E402
-from gymtrack.exercises import candidates  # noqa: E402
-from gymtrack.pose import JOINTS13  # noqa: E402
+from gymtrack.exercises import candidates, vec_to33  # noqa: E402
 
 REPCOUNT = {"squat": "squat", "pull_up": "pull_up", "push_up": "push_up", "bench_press": "bench_press",
             "front_raise": "raise", "situp": "situp", "jump_jack": "jumping", "battle_rope": "battle_rope"}
@@ -48,15 +47,8 @@ CHOICES = [("cable_row", "press"), ("row", "press"), ("cable_row", "row")]
 
 
 def to33(vec: list[int]) -> np.ndarray | None:
-    """26-number replay pose (thousandths of a 16:9 frame, -1 = unseen) -> (33, 3); unseen joints get conf 0."""
-    k = np.zeros((33, 3), np.float32)
-    seen = 0
-    for i, j in enumerate(JOINTS13):
-        x, y = vec[2 * i], vec[2 * i + 1]
-        if x >= 0:
-            k[j] = (x * 1.6, y * 0.9, 1.0)  # thousandths of a 16:9 frame -> square-ish units
-            seen += 1
-    return k if seen >= 9 else None
+    """26-number replay pose -> (33, 3); see exercises.vec_to33."""
+    return vec_to33(vec)
 
 
 def _seq(track, a, b):

@@ -97,7 +97,7 @@ def _split_points(samples, geo: _Geo, looks):
     cuts = []
     for (ta, ba, _), (tb, bb, _) in zip(samples, samples[1:]):
         dt = tb - ta
-        if 0 < dt <= 3.0:
+        if 0 < dt <= 3.0 and ba[1] + ba[3] < 0.98 and bb[1] + bb[3] < 0.98:  # feet visible in both
             d = geo.dist(ba, bb)
             hr = max(ba[3], bb[3]) / max(1e-6, min(ba[3], bb[3]))
             if d > 0.8 + 3.0 * dt or (hr > 2.0 and d > 0.5):

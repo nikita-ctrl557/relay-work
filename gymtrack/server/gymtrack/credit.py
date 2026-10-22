@@ -23,6 +23,7 @@ event; Grab arXiv 2001.01033: bipartite matching of hands to events); our own co
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -193,8 +194,11 @@ def torso_length(P: np.ndarray, boxes: np.ndarray) -> float:
 def _group_xy(P: np.ndarray, idx) -> np.ndarray:
     xy = P[:, idx, :2].copy()
     xy[P[:, idx, 2] < CONF_MIN] = np.nan
-    with np.errstate(all="ignore"):
-        return np.nanmean(xy, axis=1) if len(idx) > 1 else xy[:, 0]
+    if len(idx) == 1:
+        return xy[:, 0]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # frames where no joint of the group was seen -> NaN
+        return np.nanmean(xy, axis=1)
 
 
 def person_signals(obs: list, grid: np.ndarray, smooth_s: float = 0.7) -> tuple[dict[str, np.ndarray], dict]:

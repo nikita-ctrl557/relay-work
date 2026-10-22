@@ -172,7 +172,9 @@ def pose_embedding(obs: list) -> tuple[np.ndarray, np.ndarray] | tuple[None, Non
     P = np.stack(P)
     xy = P[:, :, :2].copy()
     xy[P[:, :, 2] < 0.3] = np.nan
-    with np.errstate(all="ignore"):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
         hip = np.nanmean(xy[:, [7, 8]], 1)
         sh = np.nanmean(xy[:, [1, 2]], 1)
         torso = np.nanmedian(np.linalg.norm(sh - hip, axis=1))

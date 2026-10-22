@@ -109,6 +109,42 @@ def pick(cands: list[str], poses: list[list[float]]) -> tuple[str | None, float]
     return best, round(conf, 2)
 
 
+def vec_to33(vec: list[int]) -> np.ndarray | None:
+    """26-number pose vector (thousandths of a 16:9 frame, -1 = unseen) -> (33, 3) keypoints for activity.py."""
+    from .pose import JOINTS13
+    k = np.zeros((33, 3), np.float32)
+    seen = 0
+    for i, j in enumerate(JOINTS13):
+        x, y = vec[2 * i], vec[2 * i + 1]
+        if x >= 0:
+            k[j] = (x * 1.6, y * 0.9, 1.0)  # square-ish units
+            seen += 1
+    return k if seen >= 9 else None
+
+
+def name_set(cands: list[str], times: list[float], poses: list[list[float]]) -> tuple[str | None, float, str]:
+    """Exercise of one set: the station's candidates decide what's possible; pose only chooses among them.
+
+    Robust pose cues (pick) first; the learned classifier (activity.classify_among, product-safe models
+    only) may override them when it is confident and the cues aren't. Returns (exercise, confidence, source)."""
+    if not cands:
+        return None, 0.0, "none"
+    if len(cands) == 1:
+        return cands[0], 0.9, "station"
+    ex, conf = pick(cands, poses)
+    src = "pose-cues"
+    try:
+        from .activity import classify_among
+        pts = [(t, vec_to33(v)) for t, v in zip(times, poses)]
+        pts = [(t, k) for t, k in pts if k is not None]
+        ml, mconf = classify_among([t for t, _ in pts], [k for _, k in pts], cands) if len(pts) >= 6 else (None, 0.0)
+    except Exception:
+        ml, mconf = None, 0.0
+    if ml and mconf >= 0.6 and (ml == ex or conf < 0.7):
+        ex, conf, src = ml, mconf, "classifier"
+    return ex, conf, src
+
+
 def refine_sets(sets: list[dict], machines: list[dict], poses: list[dict]) -> None:
     """In-place: give each set {t0, t1, m, pid, ex} the equipment-based exercise (pose picks between options)."""
     by_pid: dict[int, list] = {}
@@ -119,10 +155,10 @@ def refine_sets(sets: list[dict], machines: list[dict], poses: list[dict]) -> No
     for s in sets:
         m = info.get(s["m"], {"id": s["m"]})
         c = m.get("exercises") or candidates(m["id"], m.get("name", ""), m.get("kind", ""))
-        win = [v for t, v in by_pid.get(s.get("pid"), []) if s["t0"] - 0.5 <= t <= s["t1"] + 0.5]
-        ex, conf = pick(c, win)
+        win = [(t, v) for t, v in by_pid.get(s.get("pid"), []) if s["t0"] - 0.5 <= t <= s["t1"] + 0.5]
+        ex, conf, src = name_set(c, [t for t, _ in win], [v for _, v in win])
         if ex:
-            s["ex"], s["ex_conf"] = ex, conf
+            s["ex"], s["ex_conf"], s["ex_src"] = ex, conf, src
 
 
 def movement(poses: list[list[float]]) -> dict | None:

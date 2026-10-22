@@ -148,8 +148,8 @@ def evaluate(data, cam=None, plan=None, video=None, t0=None, t1=None, doors=(), 
     for i, s in tracks.items():
         for (ta, ba, _), (tb, bb, _) in zip(s, s[1:]):
             dt = tb - ta
-            if dt <= 0:
-                continue
+            if dt <= 0 or ba[1] + ba[3] >= 0.98 or bb[1] + bb[3] >= 0.98:
+                continue  # feet below the frame edge: the box bottom isn't where they stand
             if dt > 3.0:  # the ID was hidden for a while: was it physically possible to get there?
                 d, how = fm.distance(px(ba), px(bb))
                 if d > JUMP_SLACK + 2.0 * dt:
