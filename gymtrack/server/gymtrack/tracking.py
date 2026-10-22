@@ -207,6 +207,7 @@ class PersonDetector:
         return [(*map(float, boxes[i]), float(score[keep][i])) for i in np.array(idx).ravel()]
 
 
+GATE = (0.25, 0.7)  # feet-distance gate for frame-to-frame matches: body heights, + per second unseen
 ANCHOR = True  # allow matches across a box that grew/shrank because legs or head were hidden
 
 APP_PARTS = ((0.15, 0.35), (0.35, 0.55), (0.55, 0.75), (0.75, 0.95))  # shoulders, chest, hips/shorts, legs
@@ -541,7 +542,7 @@ class PeopleTracker:
         dn_top = math.hypot(cx0 - cx1, pb[1] - d[1]) / hmax
         hr = d[3] / max(pb[3], 1.0)
         g = min(gap, 3.0)
-        gate = 0.25 + 0.7 * g  # body heights: ~2.5 m/s plus detector jitter; a stood-still person can't slide onto a neighbour
+        gate = GATE[0] + GATE[1] * g  # body heights: ~2.5 m/s plus detector jitter; a stood-still person can't slide onto a neighbour
         if 0.6 <= hr <= 1.65:
             if dn_feet > gate:
                 return None

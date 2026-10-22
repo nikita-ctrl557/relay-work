@@ -49,6 +49,10 @@ def finish_sets(data: dict, cfg, cam=None) -> dict:
         s.setdefault("_i", i)
     info = {"sets_in": len(sets)}
     info["credit_changes"] = resolve_credit(sets)
+    # a set whose only credible mover was taken by a concurrent set had no lifter of its own
+    orphans = [s for s in sets if s.get("credit") is not None and s.get("pid") is None]
+    sets[:] = [s for s in sets if not (s.get("credit") is not None and s.get("pid") is None)]
+    info["dropped_no_mover"] = len(orphans)
     no_evidence = [s for s in sets if s.get("credit") is None and s.get("pid") is not None]
     gone = drop_fake_sets(no_evidence, data.get("poses", []))
     if gone:

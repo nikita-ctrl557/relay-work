@@ -39,7 +39,11 @@ CONF_MIN = 0.3             # joint confidence below this = not seen
 
 # joint groups in the 13-joint layout (pose.JOINTS13): 0 nose, 1/2 shoulders, 3/4 elbows, 5/6 wrists,
 # 7/8 hips, 9/10 knees, 11/12 ankles
-GROUPS = {"wrist": (5, 6), "elbow": (3, 4), "shoulder": (1, 2), "hip": (7, 8), "knee": (9, 10), "ankle": (11, 12), "head": (0,)}
+GROUPS = {"wrist": (5, 6), "elbow": (3, 4), "shoulder": (1, 2), "hip": (7, 8), "knee": (9, 10), "ankle": (11, 12)}
+# Lifts move joints up and down (squat, press, pulldown, leg press) or the arms forward and back (rows,
+# flys, presses seen side-on). Sideways sway of hips, knees and ankles is mostly gait and shifting weight,
+# and the head bobs when talking, so those don't count as moving with the machine.
+AXES = {"wrist": "xy", "elbow": "xy", "shoulder": "y", "hip": "y", "knee": "y", "ankle": "y"}
 
 
 @dataclass
@@ -214,6 +218,8 @@ def person_signals(obs: list, grid: np.ndarray, smooth_s: float = 0.7) -> tuple[
     for name, idx in GROUPS.items():
         xy = _group_xy(P, idx)
         for k, ax in enumerate("xy"):
+            if ax not in AXES[name]:
+                continue
             v = xy[:, k]
             if np.isfinite(v).sum() < MIN_POSES // 2:
                 continue

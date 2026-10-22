@@ -27,6 +27,7 @@ LIVE_REPS_EVERY_S = 1.0
 MAX_SET_FRAMES = 3000  # per camera; ~5 minutes at 10 fps
 NEAR_ZONE = 0.25       # a person whose box overlaps the zone (this share of the box) is a candidate lifter
 PREROLL_S = 3.0        # observations kept from before a set starts
+ZONE_REPEAT_MIN = 0.15 # zone-thumbnail periodicity a set needs when no person was seen moving with the machine
 
 
 @dataclass
@@ -276,6 +277,15 @@ class MachineTracker:
             ex = EXERCISE_ID.get(acts.most_common(1)[0][0])
             exercise = ex if ex and (not cands or ex in cands) else None  # the equipment decides what's possible
         reps, conf, ev = self._count_set(start, end, person, cr)
+        if score is None and self.set_tracked_frames >= 10 and ev["counts"]["zone"][1] < ZONE_REPEAT_MIN and \
+                not self._set_member():
+            # nobody was seen moving with the machine and the zone itself doesn't repeat either: people walking
+            # through, a bag dropped, someone stretching. (With a member tag present we keep it.)
+            self.vetoed.append({"machine": self.id, "start": start, "end": end, "cands": cr.scores() if cr else {}, "why": "no repetition"})
+            return self._done(end)
+        if cr is not None:  # why it was (or wasn't) credited, for debugging and active learning
+            ev["credit"] = {p: [round(c.score, 2), round(c.corr, 2), round(c.amp, 2), round(c.still, 2), c.best, c.n_poses]
+                            for p, c in sorted(cr.cands.items(), key=lambda kv: -kv[1].score)[:4]}
         cands = cr.scores() if cr is not None else {}
         cams = sorted(self.set_cams)
         self._done(end)
