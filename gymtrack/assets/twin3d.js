@@ -15,9 +15,10 @@ const dark = () => matchMedia("(prefers-color-scheme: dark)").matches && documen
 function palette() {
   const d = dark();
   return {
-    floor: d ? 0x151b2c : 0xf4f6fb, floorLine: d ? 0x1f2740 : 0xe4e8f2, wall: d ? 0x1a2135 : 0xffffff, wallEdge: d ? 0x262f48 : 0xdde2ee,
-    bg: d ? 0x121829 : 0xf4f6fb, mat: d ? 0x2a3147 : 0x2b3040, steel: d ? 0x6b7390 : 0x3a4255, black: 0x161a26, pad: 0x1f2433,
-    chrome: 0xc3c9d5, rubber: 0x12151e, wood: 0xc9b08a, plate: [0x1e2333, 0x2b3040, 0x1e2333, 0x3a4255, 0x161a26],
+    // a light floor plan in the style of a security console's site map: white floor, thin plan lines, grey equipment
+    floor: d ? 0x1a232c : 0xffffff, floorLine: d ? 0x232e38 : 0xeef1f4, wall: d ? 0x222c36 : 0xf2f4f6, wallEdge: d ? 0x2c3742 : 0xd6dce2,
+    bg: d ? 0x131b22 : 0xf6f8fa, mat: d ? 0x34404b : 0xe2e6ea, steel: d ? 0x8a96a2 : 0x8a949e, black: d ? 0x56616c : 0x59636d, pad: d ? 0x4a5560 : 0x6b7580,
+    chrome: 0xc9d0d6, rubber: d ? 0x3a444e : 0x4d565f, wood: d ? 0x6b5f4f : 0xe4d6bf, plate: d ? [0x4a5560, 0x56616c, 0x4a5560, 0x626d78, 0x3e4852] : [0x59636d, 0x6b7580, 0x59636d, 0x7c8690, 0x4d565f],
   };
 }
 const M = {}, Y = new THREE.Vector3(0, 1, 0);
@@ -153,14 +154,14 @@ export function cameraPose(meta, calib) {
 const pref = (k, d) => { try { return localStorage.getItem("gymtrack:twin-" + k) || d; } catch { return d; } };
 const savePref = (k, v) => { try { localStorage.setItem("gymtrack:twin-" + k, v); } catch {} };
 const HEX = c => "#" + c.toString(16).padStart(6, "0");
-// usage ramp: pale blue (little use) -> ultramarine (busiest)
-const RAMP = [[0, 0xc9cdfa], [0.5, 0x6c78ff], [1, 0x2430d6]];  // usage: pale blue -> ultramarine
+// usage ramp: pale cyan (little use) -> deep blue (busiest)
+const RAMP = [[0, 0xbfe6f5], [0.5, 0x38a9d6], [1, 0x005f85]];  // usage: pale cyan -> deep blue
 function rampColor(t) {
   const c = new THREE.Color();
   for (let i = 1; i < RAMP.length; i++) if (t <= RAMP[i][0]) { const [a, ca] = RAMP[i - 1], [b, cb] = RAMP[i]; return c.set(ca).lerp(new THREE.Color(cb), (t - a) / (b - a)); }
   return c.set(RAMP[RAMP.length - 1][1]);
 }
-const UNUSED = 0x98a2b3, LIFT = 0x2430d6, REST = 0xe4572e;
+const UNUSED = 0xa4adb6, LIFT = 0x007faf, REST = 0xf29d0c, CAM = 0x2fbf5a;
 const fmtMin = s => s >= 3600 ? `${(s / 3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s / 60)}m` : `${Math.round(s)}s`;
 
 export function mountTwin(host, {plan, machines, people, states, heat, layer = () => "both", cams = [], usage = () => ({}), onOpen, onHover, onMachine, labelOf}) {
@@ -169,10 +170,10 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const wrap = document.createElement("div"); wrap.className = "s3d twin";
   const seg = (g, opts, cur) => `<div class="tw-seg" role="group" aria-label="${g === "pm" ? "People" : "Colour"}"><span>${g === "pm" ? "People" : "Colour"}</span>${opts.map(([k, l]) => `<button data-${g}="${k}" aria-pressed="${k === cur}">${l}</button>`).join("")}</div>`;
   wrap.innerHTML = `<div class="s3d-labels"></div><div class="tw-legend" aria-live="polite"></div>
-    <div class="s3d-bar tw-bar"><div class="tw-views"><button data-v="iso" aria-pressed="true">Overview</button><button data-v="top">Top down</button>${cams.some(c => c.pose) ? `<button data-v="cam">From the camera</button>` : ""}</div>
-    <button class="tw-tog" data-tog="opts" aria-expanded="false">Display</button><button class="tw-tog" data-tog="key" aria-expanded="false">Key</button>
-    <div class="tw-opts">${seg("pm", [["skel", "Skeletons"], ["fig", "Figures"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Live status"], ["heat", "Usage heat"]], colourMode)}</div>
-    <span class="s3d-hint">${matchMedia("(pointer: coarse)").matches ? "Drag to orbit · pinch to zoom · tap a person or machine" : "Drag to orbit · scroll to zoom · click a person or machine"}</span></div>`;
+    <div class="s3d-bar tw-bar"><div class="tw-views"><button data-v="iso" aria-pressed="true">Overview</button><button data-v="top">Top</button>${cams.some(c => c.pose) ? `<button data-v="cam">Camera</button>` : ""}</div>
+    <button class="tw-tog" data-tog="opts" aria-expanded="false">Display</button><button class="tw-tog" data-tog="key" aria-expanded="false">Legend</button>
+    <div class="tw-opts">${seg("pm", [["skel", "Skeleton"], ["fig", "Figure"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Status"], ["heat", "Usage"]], colourMode)}</div>
+    <span class="s3d-hint">${matchMedia("(pointer: coarse)").matches ? "Drag to rotate · pinch to zoom" : "Drag to rotate · scroll to zoom"}</span></div>`;
   host.append(wrap);
   const labels = wrap.querySelector(".s3d-labels"), legend = wrap.querySelector(".tw-legend");
   const renderer = new THREE.WebGLRenderer({antialias: true}); renderer.setPixelRatio(Math.min(2, devicePixelRatio));
@@ -208,7 +209,14 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     g.strokeStyle = HEX(P.floorLine); g.lineWidth = 1;
     for (let x = Math.ceil(x0); x <= x1; x++) { g.beginPath(); g.moveTo((x - x0) * s, 0); g.lineTo((x - x0) * s, fc.height); g.stroke(); }
     for (let z = Math.ceil(z0); z <= z1; z++) { g.beginPath(); g.moveTo(0, (z - z0) * s); g.lineTo(fc.width, (z - z0) * s); g.stroke(); }
-    if (h && L !== "people" && colourMode === "live") { let mx = 0; for (const v of h.grid) mx = Math.max(mx, v); if (mx > 0) for (let i = 0; i < h.grid.length; i++) { const v = h.grid[i]; if (v <= 0) continue; const gx = i % h.W, gy = Math.floor(i / h.W); g.fillStyle = `rgba(242,107,46,${(0.08 + 0.55 * Math.sqrt(v / mx)).toFixed(2)})`; g.fillRect((gx * h.cell - x0) * s, (gy * h.cell - z0) * s, h.cell * s + 0.5, h.cell * s + 0.5); } }
+    // camera markers: green field-of-view wedge on the floor
+    for (const c of cams) {
+      if (!c.pose) continue;
+      const cx = (c.pose.x - x0) * s, cz = (c.pose.y - z0) * s, ang = Math.atan2(CZ - c.pose.y, CX - c.pose.x), r = Math.max(RW, RD) * 0.62 * s, half = 0.62;
+      const grd = g.createRadialGradient(cx, cz, 0, cx, cz, r); grd.addColorStop(0, "rgba(47,191,90,0.22)"); grd.addColorStop(1, "rgba(47,191,90,0.04)");
+      g.beginPath(); g.moveTo(cx, cz); g.arc(cx, cz, r, ang - half, ang + half); g.closePath(); g.fillStyle = grd; g.fill();
+    }
+    if (h && L !== "people" && colourMode === "live") { let mx = 0; for (const v of h.grid) mx = Math.max(mx, v); if (mx > 0) for (let i = 0; i < h.grid.length; i++) { const v = h.grid[i]; if (v <= 0) continue; const gx = i % h.W, gy = Math.floor(i / h.W); g.fillStyle = `rgba(240,98,45,${(0.06 + 0.5 * Math.sqrt(v / mx)).toFixed(2)})`; g.fillRect((gx * h.cell - x0) * s, (gy * h.cell - z0) * s, h.cell * s + 0.5, h.cell * s + 0.5); } }
     for (const mo of machineObjs) {
       g.beginPath(); mo.poly.forEach(([x, y], i) => g[i ? "lineTo" : "moveTo"]((x - x0) * s, (y - z0) * s)); g.closePath();
       g.fillStyle = mo.fill; g.fill();
@@ -242,13 +250,13 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     place(obj, it.x, it.y, (it.rot || 0) * Math.PI / 180);
     if (it.type === "timer") obj.position.y = it.h || 2.3;
   }
-  // cameras (kept subtle)
-  const camM = new THREE.MeshStandardMaterial({color: dark() ? 0x9aa4b2 : 0xc7cdd5, roughness: 0.6});
+  // cameras: small green markers, like the camera icons on a site map
+  const camM = new THREE.MeshStandardMaterial({color: dark() ? 0x9aa4b2 : 0xc7cdd5, roughness: 0.6}), camG = new THREE.MeshStandardMaterial({color: CAM, roughness: 0.5, emissive: CAM, emissiveIntensity: 0.25});
   for (const c of cams) {
     if (!c.pose) continue;
-    const g = group(box(0.2, 0.12, 0.26, camM), cyl(0.05, 0.06, M.black, 0, 0, 0.16, "z"));
+    const g = group(box(0.22, 0.14, 0.28, camG), cyl(0.055, 0.06, M.white, 0, 0, 0.16, "z"));
     g.position.set(c.pose.x, c.pose.h, c.pose.y); g.lookAt(CX, 0, CZ); scene.add(g);
-    if (c.calib) for (const [px, py] of c.calib.plan) { const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([g.position.clone(), new THREE.Vector3(px, 0.02, py)]), new THREE.LineDashedMaterial({color: 0x6b7280, dashSize: 0.2, gapSize: 0.2, transparent: true, opacity: 0.18})); l.computeLineDistances(); scene.add(l); }
+    if (c.calib) for (const [px, py] of c.calib.plan) { const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([g.position.clone(), new THREE.Vector3(px, 0.02, py)]), new THREE.LineDashedMaterial({color: CAM, dashSize: 0.2, gapSize: 0.2, transparent: true, opacity: 0.25})); l.computeLineDistances(); scene.add(l); }
     if (c.pose.h > 0.5) scene.add(box(0.04, c.pose.h, 0.04, camM, c.pose.x, c.pose.h / 2, c.pose.y));
   }
 
@@ -262,14 +270,14 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       if (colourMode === "heat") {
         const u = us[mo.id] || {}, b = u.busy_s || 0, share = max > 0 ? b / max : 0;
         col = b > 0 ? rampColor(share) : new THREE.Color(UNUSED);
-        mo.fill = b > 0 ? `rgba(${Math.round(col.r * 255)},${Math.round(col.g * 255)},${Math.round(col.b * 255)},${(0.18 + 0.32 * share).toFixed(2)})` : "rgba(148,163,184,0.10)";
+        mo.fill = b > 0 ? `rgba(${Math.round(col.r * 255)},${Math.round(col.g * 255)},${Math.round(col.b * 255)},${(0.18 + 0.32 * share).toFixed(2)})` : "rgba(164,173,182,0.10)";
         mo.stroke = "#" + col.getHexString(); mo.strong = b > 0;
         label = `${mo.name} · ${u.sets || 0} set${(u.sets || 0) === 1 ? "" : "s"} · ${fmtMin(b)}`; cls = "use"; mo.prio = 1 + share;
         mo.tag.style.setProperty("--c", "#" + col.getHexString());
         for (const m of mo.tint) { m.emissive.copy(col); m.emissiveIntensity = b > 0 ? 0.18 + 0.4 * share : 0; }
       } else {
-        mo.fill = lifting ? "rgba(47,111,228,0.22)" : busy ? "rgba(242,107,46,0.16)" : "rgba(0,0,0,0)";
-        mo.stroke = HEX(lifting ? LIFT : busy ? REST : (dark() ? 0x6b7585 : 0x8a94a3)); mo.strong = lifting || busy;
+        mo.fill = lifting ? "rgba(0,127,175,0.16)" : busy ? "rgba(242,157,12,0.16)" : (dark() ? "rgba(255,255,255,0.03)" : "rgba(31,42,51,0.03)");
+        mo.stroke = HEX(lifting ? LIFT : busy ? REST : (dark() ? 0x55616c : 0xb8c1c9)); mo.strong = lifting || busy;
         if (lifting) { label = `${mo.name} · ${s.reps} reps`; cls = "on"; mo.prio = 3; } else if (busy) { label = `${mo.name} · resting`; cls = "busy"; mo.prio = 2; } else mo.prio = 0;
         mo.tag.style.removeProperty("--c");
         for (const m of mo.tint) { m.emissive.setHex(lifting ? LIFT : 0); m.emissiveIntensity = lifting ? 0.22 : 0; }
@@ -278,15 +286,15 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       mo.tag.className = `s3d-tag mach ${cls}`;
     }
     legend.innerHTML = colourMode === "heat"
-      ? `<b>Equipment use</b><div class="tw-ramp"><i style="background:${HEX(UNUSED)}"></i><span>Unused</span><i class="grad"></i><span>Busiest</span></div><small>Time under load since the recording started</small>`
-      : `<b>Live status</b><div class="tw-keys"><span><i style="background:${HEX(LIFT)}"></i>In a set</span><span><i style="background:${HEX(REST)}"></i>Resting on it</span><span><i style="background:${HEX(0x9aa4b2)}"></i>Moving / other</span>${layer() !== "people" ? `<span><i style="background:rgba(242,107,46,.45)"></i>Foot traffic</span>` : ""}</div>`;
+      ? `<b>Usage</b><div class="tw-ramp"><i style="background:${HEX(UNUSED)}"></i><span>Unused</span><i class="grad"></i><span>Busiest</span></div><small>Time under load</small>`
+      : `<b>Status</b><div class="tw-keys"><span><i style="background:${HEX(LIFT)}"></i>In set</span><span><i style="background:${HEX(REST)}"></i>Resting</span><span><i style="background:${HEX(UNUSED)}"></i>Moving</span>${layer() !== "people" ? `<span><i style="background:rgba(240,98,45,.5)"></i>Traffic</span>` : ""}<span><i style="background:${HEX(CAM)}"></i>Camera</span></div>`;
     paintFloor();
   }
 
   // people
   const ppl = new Map(), boneGeo = new THREE.CylinderGeometry(0.045, 0.045, 1, 8), jointGeo = new THREE.SphereGeometry(0.055, 10, 8), headGeo = new THREE.SphereGeometry(0.13, 16, 12);
   const bodyGeo = new THREE.CapsuleGeometry(0.23, 1.1, 4, 12), shadowGeo = new THREE.CircleGeometry(0.42, 28), ringGeo = new THREE.RingGeometry(0.44, 0.56, 36);
-  const COL = {move: 0x9aa4b2, station: REST, lift: LIFT};
+  const COL = {move: UNUSED, station: REST, lift: LIFT};
   let hoverPid = null;
   const camFor = id => cams.find(c => c.id === id)?.pose || {x: CX, y: z1 + 8};
   function person(key) {

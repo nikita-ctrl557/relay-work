@@ -230,7 +230,7 @@ function MembersPage() {
       const list = live.members.filter(F[filter]).filter(m => !q || m.name.toLowerCase().includes(q));
       $("#roster").innerHTML = list.map(m => `
         <tr class="mc" data-member="${esc(m.id)}" tabindex="0" role="link" aria-label="${esc(m.name)}">
-          <td class="who">${avatar(m, "sm")}<span><b>${esc(m.name)}</b>${m.tag != null ? `<small>Tag ${m.tag}</small>` : ""}</span></td>
+          <td class="who"><div class="wc">${avatar(m, "sm")}<span><b>${esc(m.name)}</b>${m.tag != null ? `<small>Tag ${m.tag}</small>` : ""}</span></div></td>
           <td class="st">${pill(m.status)}</td>
           <td class="loc">${m.status === "away" ? '<span class="muted">–</span>' : m.location ? esc(machineName(m.location)) : `<span class="muted">In since ${hm(m.session_start)}</span>`}</td>
           <td class="tl">${sessionStrip(m)}</td>
@@ -375,7 +375,7 @@ function MemberPage(id) {
           <section class="card"><div class="card-h"><h2>Weekly training time</h2><span class="hint">min</span><span class="right legend"><span><i style="background:var(--lift)"></i>Lifting</span><span><i style="background:var(--rest)"></i>Resting</span></span></div><div class="card-b">${weeklyChart(weeks)}</div></section>
           <section class="card"><div class="card-h"><h2>Progress</h2><span class="right"><select class="input sm" id="tm" aria-label="Machine">${machines.map(x => `<option value="${esc(x)}" ${x === trendM ? "selected" : ""}>${esc(machineName(x))}</option>`).join("")}</select><select class="input sm" id="tk" aria-label="Measure"><option value="reps" ${metric === "reps" ? "selected" : ""}>Reps per set</option><option value="kg" ${metric === "kg" ? "selected" : ""}>Top weight</option></select></span></div><div class="card-b">${trendChart(pts, metric === "kg" ? "Top weight" : "Reps per set", metric === "kg" ? " kg" : "")}</div></section>
         </div>
-        <div class="grid2">
+        <div class="grid2 g-pr">
           <section class="card"><div class="card-h"><h2>Personal records</h2><span class="hint">90 days · ${prog.sessions} sessions</span></div><div class="card-b"><div class="prs">${machines.map(x => { const r = prog.machines[x]; return `<div class="pr" style="--pc:${plateFor(x)}"><span class="m">${esc(machineName(x))}</span><span class="v">${r.best_kg != null ? `${r.best_kg}<small>kg</small>` : `${r.best_reps}<small>reps</small>`}</span><span class="s">${r.best_kg != null ? `best ${r.best_reps} reps · ` : ""}${r.sets} sets · ${fmtDur(r.time_s)}</span></div>`; }).join("") || `<div class="empty">No sets yet</div>`}</div></div></section>
           <section class="card tcard"><div class="card-h"><h2>Sets</h2><span class="hint">${prog.recent_sets.length}</span></div><div class="tbl-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>When</th><th>Station</th><th>Exercise</th><th>Muscles</th><th class="n">Reps</th><th class="n">Time</th><th class="n">Rest before</th><th class="n">kg</th></tr></thead><tbody>
             ${prog.recent_sets.map((s, i, arr) => { const ex = typeof bmExerciseFor === "function" ? bmExerciseFor({exercise: s.exercise, machine: s.machine}, cfg.machines) : s.exercise, E = typeof BM_EXERCISES !== "undefined" ? BM_EXERCISES[ex] : null, mus = E ? E.primary.map(id => BM_MUSCLES.find(m => m.id === id)?.name || id).join(", ") : "–", prev = arr[i + 1], rest = prev && s.start - prev.end > 0 && s.start - prev.end < 600 ? fmtDur(s.start - prev.end) : "–";
@@ -441,7 +441,7 @@ function MachinesPage() {
       $("#mg").innerHTML = live.machines.filter(m => cfg.machines.some(x => x.id === m.id)).map(m => {
         const mach = cfg.machines.find(x => x.id === m.id), u = util[m.id] || {n: 0, busy: 0, members: 0}, st = m.state === "lifting" ? "lifting" : m.member ? "resting" : "idle";
         const h = hourly[m.id] || Array(24).fill(0);
-        return `<tr><td class="who"><span class="ico">${machineIcon(mach)}</span><span><b>${esc(m.name)}</b><small>${esc(mach.kind || "")}</small></span></td><td class="st">${pill(st)}</td>
+        return `<tr><td class="who"><div class="wc"><span class="ico">${machineIcon(mach)}</span><span><b>${esc(m.name)}</b><small>${esc(mach.kind || "")}</small></span></div></td><td class="st">${pill(st)}</td>
           <td class="nowc">${m.state === "lifting" ? `${esc(m.member_name || "Guest")} · ${m.reps} reps` : m.member ? `${esc(m.member_name)} · resting` : '<span class="muted">–</span>'}</td>
           <td class="n" data-l="Sets">${u.n}</td><td class="n" data-l="Under load">${clockFmt(u.busy)}</td><td class="n" data-l="Members">${u.members}</td>
           <td class="hcol"><div class="heat">${h.map((n, i) => `<span style="background:${n ? `color-mix(in srgb, var(--lift) ${Math.round(18 + 82 * n / maxH)}%, var(--surface-3))` : ""}" data-tip="${String(i).padStart(2, "0")}:00–${String(i + 1).padStart(2, "0")}:00\n${n} sets"></span>`).join("")}</div></td>
@@ -603,19 +603,19 @@ function ownerSuggestions({util, observed, plans, floors, zstats, archetypes}) {
   const rows = Object.values(util).filter(u => cfg.machines.some(m => m.id === u.machine)).sort((a, b) => b.busy - a.busy);
   if (rows.length && observed > 120) {
     const top = rows[0], share = top.busy / observed;
-    if (share > 0.45) add("warn", `${machineName(top.machine)} is a bottleneck`, `In use ${Math.round(share * 100)}% of the time observed (${top.n} sets by ${top.members} people). Add a second one or move it next to an alternative.`);
+    if (share > 0.45) add("warn", `${machineName(top.machine)} is a bottleneck`, `In use ${Math.round(share * 100)}% of observed time (${top.n} sets, ${top.members} people). Consider a second one.`);
     const unused = cfg.machines.filter(m => !util[m.id] || util[m.id].busy < 0.05 * top.busy);
-    if (unused.length) add("tip", `Barely used: ${unused.slice(0, 3).map(m => m.name).join(", ")}`, `Less than 5% of the busiest station's time under load. Move it somewhere visible, add signage, or swap it for more of what's busy (${machineName(top.machine)}).`);
+    if (unused.length) add("tip", `Barely used: ${unused.slice(0, 3).map(m => m.name).join(", ")}`, `Under 5% of the busiest station's load. Relocate, add signage, or replace.`);
   }
   for (const [p, f] of plans.map((p, i) => [p, floors.find(x => x.plan === p.id)])) {
     if (!f?.heat?.total) continue;
     const zt = zoneTimes(p, f.heat), walk = zt.outside / zt.total;
-    if (walk > 0.3) { const hs = hotspots(p, f.heat, 6).find(h => !h.zone); add("tip", `${Math.round(walk * 100)}% of floor time is spent between stations`, `People stand or move outside equipment areas a lot${hs ? `; the busiest spot is ${hs.where}` : ""}. Keep that walkway clear and put water, chalk and plates where the traffic already goes.`); }
+    if (walk > 0.3) { const hs = hotspots(p, f.heat, 6).find(h => !h.zone); add("tip", `${Math.round(walk * 100)}% of floor time is between stations`, `${hs ? `Busiest spot: ${hs.where}. ` : ""}Keep walkways clear; put water, chalk and plates where traffic already goes.`); }
     const zs = Object.entries(zt.zones).sort((a, b) => b[1] - a[1]);
-    if (zs.length >= 2 && zs[0][1] > 2.5 * (zs[zs.length - 1][1] || 1)) add("tip", `Traffic is uneven: ${machineName(zs[0][0])} gets ${Math.round(zs[0][1] / zt.total * 100)}% of floor time`, `${machineName(zs[zs.length - 1][0])} gets ${Math.round(zs[zs.length - 1][1] / zt.total * 100)}%. Spread popular equipment so people don't queue in one corner.`);
-    if (f.heat.peak) add("good", `Peak of ${f.heat.peak} people on camera in ${p.name}`, `Use this to plan staff cover and class sizes; the headcount is smoothed over a few seconds so it doesn't jump when people overlap.`);
+    if (zs.length >= 2 && zs[0][1] > 2.5 * (zs[zs.length - 1][1] || 1)) add("tip", `Traffic is uneven: ${machineName(zs[0][0])} gets ${Math.round(zs[0][1] / zt.total * 100)}% of floor time`, `${machineName(zs[zs.length - 1][0])} gets ${Math.round(zs[zs.length - 1][1] / zt.total * 100)}%. Spread popular equipment to avoid queues.`);
+    if (f.heat.peak) add("good", `Peak of ${f.heat.peak} people on camera in ${p.name}`, `Use for staff cover and class sizes.`);
   }
-  for (const [z, st] of Object.entries(zstats || {})) if (st.max_people >= 3 && st.occupied_share > 0.2) add("warn", `Crowding at ${machineName(z)}`, `Up to ${st.max_people} people at once, occupied ${Math.round(st.occupied_share * 100)}% of the time. Split it into two stations or stagger class groups.`);
+  for (const [z, st] of Object.entries(zstats || {})) if (st.max_people >= 3 && st.occupied_share > 0.2) add("warn", `Crowding at ${machineName(z)}`, `Up to ${st.max_people} people at once, occupied ${Math.round(st.occupied_share * 100)}% of the time. Consider a second station.`);
   const tot = Object.values(archetypes).reduce((a, b) => a + b, 0);
   if (tot) {
     const [topA, n] = Object.entries(archetypes).sort((a, b) => b[1] - a[1])[0];
@@ -741,7 +741,7 @@ python -m gymtrack analyse cam1-export.mp4 --report report.html                 
     render() {
       $("#cg").innerHTML = "";
       for (const cam of cfg.cameras) {
-        const card = el(`<article class="card ccard" data-cam="${esc(cam.id)}"><div class="thumb"><span class="tlabel"><i></i>${esc(cam.name)}</span></div><div class="body"><div class="row"><span class="nm">${esc(cam.name)}</span><span class="st" style="margin-left:auto"></span></div><div class="src">${esc(cam.source)}</div><div class="muted small">${cam.zones.length} zone${cam.zones.length === 1 ? "" : "s"}${cam.zones.length ? ": " + cam.zones.map(z => esc(machineName(z.machine))).join(", ") : ""}</div>${cam.exercise_names === false ? `<div class="muted small" data-tip="Camera angle too steep to name exercises. Sets, reps and rest are still tracked.">Exercise names off</div>` : ""}</div>
+        const card = el(`<article class="card ccard" data-cam="${esc(cam.id)}"><div class="thumb"><span class="tlabel"><i></i>${esc(cam.name)}</span></div><div class="body"><div class="row"><span class="st"></span></div><div class="src">${esc(cam.source)}</div><div class="muted small">${cam.zones.length} zone${cam.zones.length === 1 ? "" : "s"}${cam.zones.length ? ": " + cam.zones.map(z => esc(machineName(z.machine))).join(", ") : ""}</div>${cam.exercise_names === false ? `<div class="muted small" data-tip="Camera angle too steep to name exercises. Sets, reps and rest are still tracked.">Exercise names off</div>` : ""}</div>
           <div class="foot"><button class="btn secondary sm" data-act="zones" data-cam="${esc(cam.id)}">Zones</button><button class="btn secondary sm" data-act="calib" data-cam="${esc(cam.id)}">Calibrate</button><button class="btn ghost sm icon-btn" data-act="remove" data-cam="${esc(cam.id)}" style="margin-left:auto" aria-label="Remove camera" data-tip="Remove">${IC.trash}</button></div></article>`);
         let t;
         if (src.mode !== "server") { t = document.createElement("canvas"); t.width = 320; t.height = 180; }
@@ -885,7 +885,7 @@ function SettingsPage() {
   const tog = (k, d) => `<label class="switch"><input type="checkbox" id="s-${k}" data-set="${k}" ${S(k, d) ? "checked" : ""}><span></span></label>`;
   const users = () => store.get("users", [{name: "You", email: "you@your-gym.com", role: "owner", status: "Active"}]);
   const views = {
-    general: () => `<section class="card"><div class="card-h"><h2>Organisation</h2></div><div class="card-b sform">
+    general: () => `<section class="card"><div class="card-h"><h2>Organization</h2></div><div class="card-b sform">
       ${field("org", "Organization name", "", `<input class="input" id="s-org" data-set="org" value="${esc(S("org", cfg.gym))}">`)}
       ${field("tz", "Time zone", "", sel("tz", ["Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Australia/Brisbane", "Asia/Singapore"].map(z => [z, z.replace("_", " ")]), Intl.DateTimeFormat().resolvedOptions().timeZone))}
       ${field("units", "Weight units", "", sel("units", [["kg", "Kilograms"], ["lb", "Pounds"]], "kg"))}

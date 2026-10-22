@@ -10,7 +10,9 @@ const MIC = {
   lock: SV('<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>'),
   spark: SV('<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>'),
 };
-const TABS = [{id: "today", label: "Today"}, {id: "time", label: "Time"}, {id: "body", label: "Body"}, {id: "progress", label: "Progress"}, {id: "history", label: "History"}];
+const TABS = [{id: "today", label: "Workout"}, {id: "time", label: "Time"}, {id: "body", label: "Body"}, {id: "progress", label: "Progress"}, {id: "history", label: "History"}];
+const MIC2 = {today: SV('<path d="M6.5 8v8M3.5 10v4M17.5 8v8M20.5 10v4M6.5 12h11"/>'), timer: SV('<circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2 1.5M10 2.5h4"/>'), check: SV('<path d="m5 12.5 4.5 4.5L19 7.5" stroke-width="2.4"/>')};
+const fmtHM = s => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}min` : m ? `${m}min` : `${s}s`; };
 let src, cfg, live, me, prog = null, progAt = 0, range = "7";
 
 const ring = (frac, color, value, label) => {
@@ -26,34 +28,36 @@ const longDate = ts => new Date(ts * 1000).toLocaleDateString(undefined, {weekda
 function route() { const h = location.hash.slice(1); return TABS.some(t => t.id === h) ? h : "today"; }
 function renderTabs() {
   const cur = route();
-  $("#mtabs").innerHTML = TABS.map(t => `<a href="#${t.id}" ${t.id === cur ? 'aria-current="page"' : ""}>${MIC[t.id]}${t.label}</a>`).join("");
+  $("#mtabs").innerHTML = TABS.map(t => `<a href="#${t.id}" ${t.id === cur ? 'aria-current="page"' : ""}>${t.id === "today" ? MIC2.today : MIC[t.id]}${t.label}</a>`).join("");
 }
 
 function header() {
   const m = memberOf(me) || {id: me, name: "Member"};
-  const hour = new Date().getHours(), greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-  return `<header class="mhead">${avatar(m, "")}<div><div class="hi">${greet}, ${esc(m.name.includes("#") ? m.name : m.name.split(" ")[0])}</div><div class="gym">${esc(cfg.gym)}</div></div>
-    <div class="switch"><select id="who" aria-label="Viewing as">${cfg.members.map(x => `<option value="${esc(x.id)}" ${x.id === me ? "selected" : ""}>${src.mode === "demo" ? "View as " : ""}${esc(x.name)}</option>`).join("")}</select></div></header>`;
+  const t = TABS.find(x => x.id === route());
+  return `<header class="mhead"><label class="mwho"><select id="who" aria-label="Viewing as">${cfg.members.map(x => `<option value="${esc(x.id)}" ${x.id === me ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label><h1>${esc(t.label)}</h1><span class="mgym">${avatar(m, "sm")}</span></header>`;
 }
 
 /* ---------- TODAY ---------- */
 function heroHTML(m) {
   const mach = live?.machines.find(x => x.member === m.id && x.state === "lifting") || live?.machines.find(x => x.member === m.id);
   const todaySets = m.timeline || [];
-  const foot = `<div class="foot"><div><b>${clockFmt(m.elapsed_s || 0)}</b><span>in the gym</span></div><div><b>${clockFmt(m.lifting_s || 0)}</b><span>lifting</span></div><div><b>${m.sets || 0}</b><span>sets</span></div><div><b>${m.reps || 0}</b><span>reps</span></div></div>`;
+  const stats = `<div class="hv-stats"><div><small>Time</small><b class="acc">${fmtHM(m.elapsed_s)}</b></div><div><small>Lifting</small><b>${fmtHM(m.lifting_s)}</b></div><div><small>Sets</small><b>${m.sets || 0}</b></div><div><small>Reps</small><b>${m.reps || 0}</b></div></div>`;
+  const ex = (mc, title, sub, right = "") => `<div class="hv-ex"><span class="exic">${machineIcon(mc || {id: "", name: "", kind: ""})}</span><div class="exb"><b class="exn">${title}</b><small>${sub}</small></div>${right}</div>`;
+  const machOf = id => cfg.machines.find(x => x.id === id);
   if (m.status === "lifting" && mach) {
     const setNo = todaySets.filter(s => s[2] === mach.id).length + 1;
-    return `<section class="hero"><div class="lbl"><i></i>Lifting now</div><div class="hmain">${ring(mach.set_elapsed / 40, "var(--blue)", mach.reps, "reps")}<div><div class="what">${esc(mach.name)}</div><div class="detail">Set ${setNo} · ${clockFmt(mach.set_elapsed)} so far</div></div></div>${foot}</section>`;
+    return `<section class="hv-live">${stats}${ex(machOf(mach.id), esc(mach.name), `Set ${setNo} · ${clockFmt(mach.set_elapsed)}`, `<span class="hv-now"><b class="num">${mach.reps}</b> reps</span>`)}</section>`;
   }
   if (m.status === "resting") {
     const rest = m.current_rest_s ?? 0, avg = m.avg_rest_s || 90, last = todaySets[todaySets.length - 1];
-    return `<section class="hero resting"><div class="lbl"><i></i>Resting${mach ? " at " + esc(mach.name) : ""}</div><div class="hmain">${ring(rest / Math.max(avg, 30), rest > avg * 1.3 ? "var(--bad)" : "var(--rest)", clockFmt(rest), "rest")}<div><div class="what">${rest > avg * 1.3 ? "Time for the next set" : "Recover"}</div><div class="detail">Your usual rest is ${clockFmt(avg)}${last ? ` · last set ${last[3]} reps on ${esc(machineName(last[2]))}` : ""}</div></div></div>${foot}</section>`;
+    return `<section class="hv-live">${stats}${ex(machOf(mach?.id || last?.[2]), mach ? esc(mach.name) : last ? esc(machineName(last[2])) : "Resting", last ? `Last set ${last[3]} reps` : "Between sets")}
+      <div class="hv-timer ${rest > avg * 1.3 ? "over" : ""}">${MIC2.timer}<span>Rest timer: <b class="num">${clockFmt(rest)}</b></span><small>usual ${clockFmt(avg)}</small></div></section>`;
   }
   if (m.status === "on floor") {
-    return `<section class="hero"><div class="lbl"><i></i>In the gym</div><div class="hmain">${ring((m.elapsed_s || 0) / 3600, "var(--blue)", clockFmt(m.elapsed_s || 0), "today")}<div><div class="what">Checked in ${hm(m.session_start)}</div><div class="detail">Between machines. Your next set will show up here as it happens.</div></div></div>${foot}</section>`;
+    return `<section class="hv-live">${stats}<div class="hv-note">In the gym since ${hm(m.session_start)}</div></section>`;
   }
   const lastS = prog?.session_list?.[0];
-  return `<section class="hero away"><div class="lbl"><i></i>Not in the gym</div><div class="hmain"><div><div class="what">${lastS ? "Last visit " + longDate(lastS.start) : "No visits yet"}</div><div class="detail">${lastS ? `${clockFmt(lastS.elapsed_s || 0)} in the gym · ${lastS.sets} sets · ${lastS.reps} reps` : "Wear your tag and your workouts appear here automatically."}</div></div></div></section>`;
+  return `<section class="hv-live away"><div class="hv-note"><b>Not in the gym</b>${lastS ? `Last workout ${longDate(lastS.start)} · ${fmtHM(lastS.elapsed_s)} · ${lastS.sets} sets` : "Wear your tag to log workouts automatically."}</div></section>`;
 }
 function weekGoal() {
   if (!prog) return "";
@@ -61,15 +65,16 @@ function weekGoal() {
   const days = new Set((prog.session_list || []).filter(s => s.start * 1000 >= monday).map(s => (new Date(s.start * 1000).getDay() + 6) % 7));
   if (meRow().status !== "away") days.add((now.getDay() + 6) % 7);
   const goal = 3, n = days.size;
-  return `<div class="mcard2"><div class="goal">${ring(n / goal, "var(--lift)", `${n}/${goal}`, "visits")}<div style="flex:1"><b style="font-size:15px">${n >= goal ? "Weekly goal done" : `${goal - n} more visit${goal - n === 1 ? "" : "s"} this week`}</b><div class="muted" style="font-size:12.5px;margin:2px 0 10px">Goal: ${goal} sessions a week</div>
-    <div class="dots">${["M", "T", "W", "T", "F", "S", "S"].map((d, i) => `<span class="${days.has(i) ? "on" : ""}">${d}</span>`).join("")}</div></div></div></div>`;
+  return `<div class="hv-card goal"><div class="gtop"><b>${n} of ${goal} workouts</b><span class="muted">${n >= goal ? "Goal reached" : `${goal - n} to go`}</span></div>
+    <div class="dots">${["M", "T", "W", "T", "F", "S", "S"].map((d, i) => `<span class="${days.has(i) ? "on" : ""}"><i>${days.has(i) ? MIC2.check : ""}</i>${d}</span>`).join("")}</div></div>`;
 }
 function todayView() {
   const m = meRow(), today = (prog?.recent_sets || []).filter(s => dayKey(s.start) === todayKey());
+  const order = [...today].sort((a, b) => a.start - b.start);
   return `${heroHTML(m)}
-    <div class="sec-h"><h2>Today</h2><span class="r">${m.session_start ? "since " + hm(m.session_start) : ""}</span></div>
-    <div class="mcard2">${m.session_start ? sessionStrip(m, true) : `<div class="muted" style="font-size:13px">Nothing yet today.</div>`}
-      ${today.length ? `<div class="tbl-wrap"><table><thead><tr><th>Time</th><th>Machine</th><th class="n">Reps</th><th class="n">kg</th></tr></thead><tbody>${today.map(s => `<tr><td>${hm(s.start)}</td><td>${esc(machineName(s.machine))}</td><td class="n">${s.reps}</td><td class="n"><input class="kg" type="number" step="2.5" min="0" inputmode="decimal" aria-label="Weight in kg" data-set="${s.id}" value="${s.weight_kg ?? ""}" placeholder="add"></td></tr>`).join("")}</tbody></table></div>` : ""}</div>
+    <div class="sec-h"><h2>Sets</h2><span class="r">${m.session_start ? "Since " + hm(m.session_start) : ""}</span></div>
+    ${today.length ? `<div class="hv-sets"><div class="hs-h"><span>Set</span><span>Station</span><span class="n">Reps</span><span class="n">kg</span><span></span></div>${order.map((s, i) => `<div class="hs-r"><span class="sn">${i + 1}</span><span class="st">${esc(machineName(s.machine))}<small>${hm(s.start)}</small></span><span class="n num">${s.reps}</span><span class="n"><input class="kg" type="number" step="2.5" min="0" inputmode="decimal" aria-label="Weight in kg" data-set="${s.id}" value="${s.weight_kg ?? ""}" placeholder="–"></span><span class="ck">${MIC2.check}</span></div>`).join("")}</div>` : `<div class="hv-empty">No sets yet today</div>`}
+    ${m.session_start ? `<div class="sec-h"><h2>Timeline</h2></div><div class="mcard2">${sessionStrip(m, true)}</div>` : ""}
     <div class="sec-h"><h2>This week</h2></div>${weekGoal()}`;
 }
 
@@ -88,24 +93,24 @@ function timeView() {
   const atMachines = areas.reduce((s, a) => s + a.t, 0), max = Math.max(1, ...areas.map(a => a.t));
   const top = areas[0], pct = v => gym ? Math.round(v / gym * 100) : 0;
   const ratio = lift ? rest / lift : null;
-  const tip = !gym ? "No visits in this period yet." : top ? `Most of your time went to the <b>${esc(machineName(top.id))}</b>: ${dur(top.t)}, ${pct(top.t)}% of your time in the gym.` : "";
-  const tip2 = ratio ? `You rest <b>${ratio.toFixed(1)}×</b> as long as you lift. ${ratio > 3 ? "Shorter rests would fit more work into the same visit." : ratio < 1.2 ? "That's a fast pace; make sure you recover enough for heavy sets." : "That's a typical strength-training balance."}` : "";
-  return `<div class="seg" role="group" aria-label="Period">${[["1", "Today"], ["7", "7 days"], ["30", "30 days"]].map(([k, l]) => `<button data-range="${k}" aria-pressed="${k === range}">${l}</button>`).join("")}</div>
-    <div class="mcard2"><div class="eyebrow">Time in the gym</div><div class="totline"><b>${dur(gym)}</b><span>${visits} visit${visits === 1 ? "" : "s"}${visits ? ` · avg ${dur(gym / Math.max(visits, 1))}` : ""}</span></div>
+  const tip = !gym ? "" : top ? `Most time: <b>${esc(machineName(top.id))}</b> · ${dur(top.t)} (${pct(top.t)}%)` : "";
+  const tip2 = ratio ? `Rest to lift ratio <b>${ratio.toFixed(1)} : 1</b>${ratio > 3 ? " · shorter rests fit more work in" : ""}` : "";
+  return `<div class="utabs" role="group" aria-label="Period">${[["1", "Today"], ["7", "7 days"], ["30", "30 days"]].map(([k, l]) => `<button data-range="${k}" aria-pressed="${k === range}">${l}</button>`).join("")}</div>
+    <div class="mcard2"><div class="totline"><small>Time in gym</small><b>${dur(gym)}</b><span>${visits} workout${visits === 1 ? "" : "s"}${visits ? ` · avg ${dur(gym / Math.max(visits, 1))}` : ""}</span></div>
       <div class="split3" data-tip="Lifting ${dur(lift)}\nResting between sets ${dur(rest)}\nOther ${dur(other)}">${gym ? `<span style="width:${pct(lift)}%;background:var(--lift)"></span><span style="width:${pct(rest)}%;background:var(--rest)"></span><span style="flex:1;background:var(--other)"></span>` : `<span style="flex:1;background:var(--surface-3)"></span>`}</div>
       <div class="legend"><span><i style="background:var(--lift)"></i>Lifting ${dur(lift)}</span><span><i style="background:var(--rest)"></i>Resting ${dur(rest)}</span><span><i style="background:var(--other)"></i>Other ${dur(other)}</span></div></div>
     ${tip ? `<div class="insight">${MIC.spark}<span>${tip}</span></div>` : ""}
-    <div class="sec-h"><h2>Where your time went</h2><span class="r">${dur(atMachines)} at machines</span></div>
-    <div class="mcard2">${areas.map(a => { const mach = cfg.machines.find(x => x.id === a.id) || {id: a.id, name: a.id, kind: ""}; return `<div class="area"><span class="ico">${machineIcon(mach)}</span><div style="min-width:0"><div class="nm">${esc(mach.name)}<span>${dur(a.t)} · ${dur(a.l)} lifting</span></div><div class="bar2" data-tip="${esc(mach.name)}\nAt the machine ${dur(a.t)}\nLifting ${dur(a.l)}"><i style="width:${(a.t / max * 100).toFixed(1)}%"></i><i style="width:${(a.l / max * 100).toFixed(1)}%"></i></div></div><span class="pct">${pct(a.t)}%</span></div>`; }).join("") || `<div class="muted" style="font-size:13px">No machine time in this period.</div>`}
-      <div class="legend"><span><i style="background:color-mix(in srgb, var(--lift) 30%, var(--surface-3))"></i>At the machine (incl. rest)</span><span><i style="background:var(--lift)"></i>Lifting</span></div></div>
+    <div class="sec-h"><h2>By station</h2><span class="r">${dur(atMachines)}</span></div>
+    <div class="mcard2">${areas.map(a => { const mach = cfg.machines.find(x => x.id === a.id) || {id: a.id, name: a.id, kind: ""}; return `<div class="area"><span class="ico">${machineIcon(mach)}</span><div style="min-width:0"><div class="nm">${esc(mach.name)}<span>${dur(a.t)} · ${dur(a.l)} lifting</span></div><div class="bar2" data-tip="${esc(mach.name)}\nAt the machine ${dur(a.t)}\nLifting ${dur(a.l)}"><i style="width:${(a.t / max * 100).toFixed(1)}%"></i><i style="width:${(a.l / max * 100).toFixed(1)}%"></i></div></div><span class="pct">${pct(a.t)}%</span></div>`; }).join("") || `<div class="hv-empty">No station time</div>`}
+      <div class="legend"><span><i style="background:color-mix(in srgb, var(--lift) 30%, var(--surface-3))"></i>At station</span><span><i style="background:var(--lift)"></i>Lifting</span></div></div>
     ${tip2 ? `<div class="insight">${MIC.spark}<span>${tip2}</span></div>` : ""}`;
 }
 
 /* ---------- BODY: muscles trained, training style, coaching ---------- */
 function bodyView() {
   if (!prog) return `<div class="mcard2 empty">Loading…</div>`;
-  return `${src.poseClip ? `<div class="sec-h"><h2>Your form</h2><span class="r">${esc(poseFor().clip?.title || "")}</span></div><div class="mcard2" id="mpose-slot"></div>` : ""}
-    <div class="sec-h"><h2>Your body this week</h2><span class="r">last 7 days</span></div>
+  return `${src.poseClip ? `<div class="sec-h"><h2>Form</h2><span class="r">${esc(poseFor().clip?.title || "")}</span></div><div class="mcard2" id="mpose-slot"></div>` : ""}
+    <div class="sec-h"><h2>Muscles</h2><span class="r">Last 7 days</span></div>
     <div class="mcard2">${trainingProfileHTML(prog, {compact: false})}</div>`;
 }
 // the posture player lives in one node that survives re-renders, so the animation doesn't restart
@@ -114,7 +119,7 @@ function poseFor() {
   if (poseState.id !== me) {
     poseState.player?.destroy(); poseState = {id: me, clip: src.poseClip?.(me) || null, host: document.createElement("div"), player: null};
     poseState.player = skeletonPlayer(poseState.host, poseState.clip);
-    if (poseState.clip) poseState.host.append(el(`<p class="muted skp-note">Replayed from ${esc(poseState.clip.camera)}. Only your skeleton is kept, never the video.</p>`));
+    if (poseState.clip) poseState.host.append(el(`<p class="muted skp-note">From ${esc(poseState.clip.camera)} · skeleton only, no video stored</p>`));
   }
   return poseState;
 }
@@ -131,23 +136,23 @@ function progressView() {
     const kg = r.history.map(h => h.top_kg).filter(v => v != null), reps = r.history.map(h => h.reps / h.sets);
     const useKg = kg.length >= 2, vals = useKg ? kg : reps, first = vals[0], last = vals[vals.length - 1];
     const ch = first ? (last - first) / first * 100 : 0;
-    return `<div class="prow"><div style="min-width:0"><div class="nm">${esc(machineName(id))}</div><div class="sub">${r.sets} sets · best ${r.best_reps} reps</div></div>${spark(vals)}<div><div class="v">${useKg ? `${last}<small>kg</small>` : `${last.toFixed(1)}<small>reps</small>`}</div>${vals.length > 1 && Math.abs(ch) >= 1 ? `<span class="up" style="${ch < 0 ? "color:var(--muted)" : ""}">${ch > 0 ? "▲" : "▼"} ${Math.abs(ch).toFixed(0)}%</span>` : ""}</div></div>`;
+    const mc = cfg.machines.find(x => x.id === id) || {id, name: id, kind: ""};
+    return `<div class="prow"><span class="exic">${machineIcon(mc)}</span><div style="min-width:0"><div class="nm">${esc(machineName(id))}</div><div class="sub">${r.sets} sets · best ${r.best_reps} reps</div></div>${spark(vals)}<div><div class="v">${useKg ? `${last}<small>kg</small>` : `${last.toFixed(1)}<small>reps</small>`}</div>${vals.length > 1 && Math.abs(ch) >= 1 ? `<span class="up" style="${ch < 0 ? "color:var(--muted)" : ""}">${ch > 0 ? "▲" : "▼"} ${Math.abs(ch).toFixed(0)}%</span>` : ""}</div></div>`;
   }).join("");
-  return `<div class="sec-h"><h2>Strength</h2><span class="r">last 90 days</span></div><div class="mcard2">${rows || `<div class="muted">Your progress appears after a few sessions.</div>`}</div>
-    <div class="sec-h"><h2>Training time</h2><span class="r">minutes per week</span></div><div class="mcard2">${weeklyChart(weeksFrom(prog, meRow()))}<div class="legend"><span><i style="background:var(--lift)"></i>Lifting</span><span><i style="background:var(--rest)"></i>Resting</span></div></div>`;
+  return `<div class="sec-h"><h2>Stations</h2><span class="r">Last 90 days</span></div><div class="mcard2">${rows || `<div class="hv-empty">No data yet</div>`}</div>
+    <div class="sec-h"><h2>Training time</h2><span class="r">Min per week</span></div><div class="mcard2">${weeklyChart(weeksFrom(prog, meRow()))}<div class="legend"><span><i style="background:var(--lift)"></i>Lifting</span><span><i style="background:var(--rest)"></i>Resting</span></div></div>`;
 }
 
 /* ---------- HISTORY ---------- */
 function historyView() {
   if (!prog) return `<div class="mcard2 empty">Loading…</div>`;
   const list = (prog.session_list || []).filter(s => s.end); // the visit in progress is on Today
-  return `<div class="sec-h"><h2>Sessions</h2><span class="r">${prog.sessions} in 90 days</span></div>` + (list.map(s => {
+  return `<div class="sec-h"><h2>Workouts</h2><span class="r">${prog.sessions} in 90 days</span></div>` + (list.map(s => {
     const el_ = s.elapsed_s || ((s.end || s.start) - s.start), l = s.lifting_s || 0, r = s.resting_s || 0;
-    return `<article class="sess"><div class="top"><span class="d">${longDate(s.start)}</span><span class="t">${hm(s.start)}${s.end ? "–" + hm(s.end) : ""}</span><span class="dur">${dur(el_)}</span></div>
-      <div class="split3" style="height:8px"><span style="width:${el_ ? l / el_ * 100 : 0}%;background:var(--lift)"></span><span style="width:${el_ ? r / el_ * 100 : 0}%;background:var(--rest)"></span><span style="flex:1;background:var(--other)"></span></div>
-      <div class="muted" style="font-size:12.5px">${s.sets} sets · ${s.reps} reps · ${dur(l)} lifting · ${dur(r)} resting</div>
-      <div class="tags2">${s.machines.map(x => `<span>${esc(machineName(x))}</span>`).join("")}</div></article>`;
-  }).join("") || `<div class="mcard2 muted">No sessions yet.</div>`);
+    return `<article class="hv-card sess"><div class="top"><b>${longDate(s.start)}</b><small>${hm(s.start)}${s.end ? "–" + hm(s.end) : ""}</small></div>
+      <div class="hv-stats"><div><small>Time</small><b>${fmtHM(el_)}</b></div><div><small>Lifting</small><b>${fmtHM(l)}</b></div><div><small>Sets</small><b>${s.sets}</b></div><div><small>Reps</small><b>${s.reps}</b></div></div>
+      <div class="exl">${s.machines.map(x => { const mc = cfg.machines.find(y => y.id === x) || {id: x, name: x, kind: ""}; return `<div class="exr"><span class="exic sm">${machineIcon(mc)}</span>${esc(machineName(x))}</div>`; }).join("")}</div></article>`;
+  }).join("") || `<div class="hv-empty">No workouts yet</div>`);
 }
 
 /* ---------- shell ---------- */
@@ -155,7 +160,7 @@ function render() {
   const view = {today: todayView, time: timeView, body: bodyView, progress: progressView, history: historyView}[route()];
   const focused = document.activeElement?.dataset?.set;
   if (focused) return; // don't redraw under someone typing a weight
-  $("#mapp").innerHTML = header() + view() + `<p class="privacy">${MIC.lock}Only you see this. Cameras never record you; GymTrack keeps sets, reps and times.</p>`;
+  $("#mapp").innerHTML = header() + `<div class="mbody">` + view() + `<p class="privacy">${MIC.lock}Private to you · no video is stored</p></div>`;
   const slot = $("#mpose-slot"); if (slot) slot.append(poseFor().host);
   $("#who").onchange = e => { me = e.target.value; store.set("me", me); prog = null; loadProg(); render(); };
   document.querySelectorAll("[data-range]").forEach(b => b.onclick = () => { range = b.dataset.range; render(); });
