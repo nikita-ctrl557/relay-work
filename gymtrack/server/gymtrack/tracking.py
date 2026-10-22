@@ -207,6 +207,8 @@ class PersonDetector:
         return [(*map(float, boxes[i]), float(score[keep][i])) for i in np.array(idx).ravel()]
 
 
+ANCHOR = True  # allow matches across a box that grew/shrank because legs or head were hidden
+
 APP_PARTS = ((0.15, 0.35), (0.35, 0.55), (0.55, 0.75), (0.75, 0.95))  # shoulders, chest, hips/shorts, legs
 
 
@@ -522,7 +524,7 @@ class PeopleTracker:
         return float(np.clip((0.95 - sim) / 0.18, 0.0, 1.5))
 
     @staticmethod
-    def _geo_cost(pb, d, gap: float):
+    def _geo_cost(pb, d, gap: float, self_anchor: bool = ANCHOR):
         """Geometric cost of 'detection d is the person last at / predicted at box pb', or None if implausible.
 
         Racks, benches and other people often hide the legs (or the head) for a while, so the box height can
@@ -545,7 +547,7 @@ class PeopleTracker:
         wr = d[2] / max(pb[2], 1.0)
         small, big = (d, pb) if d[3] < pb[3] else (pb, d)
         anchor = min(dn_top, dn_feet * hmean / hmax)
-        if 0.4 <= hr <= 2.5 and 0.6 <= wr <= 1.6 and cover(small, big) >= 0.75 and anchor <= 0.15 + 0.2 * g:
+        if self_anchor and 0.4 <= hr <= 2.5 and 0.6 <= wr <= 1.6 and cover(small, big) >= 0.75 and anchor <= 0.15 + 0.2 * g:
             return 0.5 + 0.6 * anchor / (0.15 + 0.2 * g) + 0.15 * abs(math.log(hr))
         return None
 

@@ -105,6 +105,8 @@ def cmd_track(a):
     if not a.no_stitch:
         if hasattr(tr, "appearance_summary"):
             data["looks"] = tr.appearance_summary()
+            if a.looks_out:  # scratch analysis only: appearance signatures stay with this recording
+                pickle.dump(data["looks"], open(a.looks_out, "wb"))
         sig = stitch_mod.stitch.__code__.co_varnames[:stitch_mod.stitch.__code__.co_argcount]
         extra = {}
         if "cam" in sig:
@@ -135,6 +137,7 @@ def main():
     t.add_argument("--server")
     t.add_argument("--out", required=True)
     t.add_argument("--no-stitch", action="store_true")
+    t.add_argument("--looks-out", help="also pickle the tracker's appearance signatures (for analysis)")
     a = ap.parse_args()
     (cmd_dets if a.cmd == "dets" else cmd_track)(a)
 

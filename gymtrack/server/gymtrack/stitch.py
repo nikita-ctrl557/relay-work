@@ -155,7 +155,8 @@ def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap
     """
     tl = data["timeline"]
     geo = _Geo(cam, plan_size, data.get("frame_wh"))
-    looks = looks if looks is not None else data.get("looks") or {}
+    stored = data.pop("looks", None)  # appearance never leaves this function (per recording, never persisted)
+    looks = looks if looks is not None else stored or {}
     looks = {int(k): sorted(((float(t), np.asarray(v, np.float32)) for t, v in seq), key=lambda x: x[0]) for k, seq in looks.items()}
     doors = doors if doors is not None else (getattr(cam, "doors", None) or [])
     samples: dict[int, list] = {}
