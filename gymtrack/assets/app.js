@@ -44,7 +44,21 @@ function navHTML(grouped) {
   }
   return html;
 }
-function renderNav() { $("#sideNav").innerHTML = navHTML(true); $("#tabNav").innerHTML = navHTML(false); }
+/* phone tab bar: the five most-used pages the role can see, the rest behind "More" */
+const TAB_FIRST = ["floor", "map", "members", "machines", "insights"];
+function tabHTML() {
+  const cur = parseRoute().id === "member" ? "members" : parseRoute().id, vis = PAGES.filter(p => canSee(p.id));
+  const main = vis.length <= 5 ? vis : TAB_FIRST.map(id => vis.find(p => p.id === id)).filter(Boolean).slice(0, 4);
+  const rest = vis.filter(p => !main.includes(p));
+  const short = {floor: "Floor", map: "3D map", machines: "Equipment", members: "Members", insights: "Insights", recordings: "Recordings", cameras: "Cameras", settings: "Settings"};
+  const a = p => `<a href="#${p.id}" ${p.id === cur ? 'aria-current="page"' : ""}>${IC[p.icon]}<span>${short[p.id] || p.label}</span></a>`;
+  $("#tabNav").style.setProperty("--n", main.length + (rest.length ? 1 : 0));
+  return main.map(a).join("") + (rest.length ? `<button id="moreBtn" aria-haspopup="menu" ${rest.some(p => p.id === cur) ? 'aria-current="page"' : ""}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="5.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18.5" cy="12" r="1.3"/></svg><span>More</span></button>` : "");
+}
+function renderNav() {
+  $("#sideNav").innerHTML = navHTML(true); $("#tabNav").innerHTML = tabHTML();
+  const more = $("#moreBtn"); if (more) more.onclick = () => popover(more, `<div class="pop-h">More</div><nav class="pop-nav">${navHTML(true)}</nav>`, e => { if (e.target.closest("a")) $("#pop").hidden = true; });
+}
 
 function go() {
   const r = parseRoute();
@@ -52,7 +66,8 @@ function go() {
   const view = $("#view"); view.innerHTML = "";
   page = !canSee(r.id) ? NoAccessPage(r.id) : r.id === "member" ? MemberPage(r.arg) : ({floor: FloorPage, members: MembersPage, map: MapPage, machines: MachinesPage, insights: InsightsPage, recordings: RecordingsPage, cameras: CamerasPage, settings: SettingsPage})[r.id]();
   const pg = PAGES.find(p => p.id === (r.id === "member" ? "members" : r.id));
-  $("#pageCrumb").innerHTML = pg ? `${esc(pg.group)} <span>/</span> ${r.id === "member" ? `<a href="#members">Members</a> <span>/</span> Profile` : esc(pg.label)}` : "";
+  const day = new Date((typeof now === "function" ? now() : Date.now() / 1000) * 1000).toLocaleDateString("en-GB", {weekday: "long", day: "numeric", month: "long"});
+  $("#pageCrumb").innerHTML = r.id === "member" ? `<a href="#members">Members</a> <span>/</span> Profile` : `${esc(day)} <span>·</span> ${esc(cfg.gym || pg?.group || "")}`;
   $("#pageTitle").textContent = page.title;
   $("#pageSub").textContent = page.sub?.() || "";
   $("#pageActions").innerHTML = ""; page.actions?.($("#pageActions"));
@@ -81,12 +96,12 @@ function FloorPage() {
       const showSkel = store.get("skel", true);
       for (const t of wall.querySelectorAll(".tile")) {
         const layer = t.querySelector(".hits"), seen = new Set(), list = src.peopleNow(t.dataset.cam);
-        const cv = t.querySelector(".skel"), dpr = devicePixelRatio || 1, w = t.clientWidth, hh0 = t.clientHeight;
+        const fr = t.querySelector(".frame") || t, cv = t.querySelector(".skel"), dpr = devicePixelRatio || 1, w = fr.clientWidth, hh0 = fr.clientHeight;
         if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(hh0 * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(hh0 * dpr); }
         const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, hh0);
         if (showSkel) for (const q of list) if (q.pose) {
           const lift = q.activity && q.activity !== "standing", hov = layer.querySelector(`.hit[data-pid="${q.pid}"]`)?.matches(":hover, .hl");
-          drawSkeleton(ctx, q.pose, p => [p[0] * w, p[1] * hh0], {color: lift ? "#3d7cf0" : hov ? "#ffffff" : "#ffb347", width: Math.max(1.6, w / 420) * (hov ? 1.5 : 1), joint: Math.max(1.4, w / 520), alpha: hov ? 1 : 0.9});
+          drawSkeleton(ctx, q.pose, p => [p[0] * w, p[1] * hh0], {color: lift ? "#7c86ff" : hov ? "#ffffff" : "#ff8a5c", width: Math.max(1.6, w / 420) * (hov ? 1.5 : 1), joint: Math.max(1.4, w / 520), alpha: hov ? 1 : 0.9});
         }
         for (const q of list) {
           if (!q.box || q.box[2] <= 0) continue;
@@ -132,8 +147,8 @@ function FloorPage() {
       const list = cams.filter(Boolean);
       list.forEach((cam, i) => {
         const hero = cam.id === focus || (!focus && list.length % 2 === 1 && i === 0);
-        const t = el(`<div class="tile ${hero ? "main" : ""}" data-cam="${esc(cam.id)}" role="button" tabindex="0" aria-label="${esc(cam.name)} camera"><div class="ov"><div class="t"><span class="rec"><i></i>LIVE</span><span>${esc(cam.name)}</span><span class="fps"></span></div><div class="b"></div></div><canvas class="skel" aria-hidden="true"></canvas><div class="hits" aria-label="People on camera"></div></div>`);
-        t.prepend(src.view(cam)); wall.append(t);
+        const t = el(`<div class="tile ${hero ? "main" : ""}" data-cam="${esc(cam.id)}" role="button" tabindex="0" aria-label="${esc(cam.name)} camera"><div class="frame"><canvas class="skel" aria-hidden="true"></canvas><div class="hits" aria-label="People on camera"></div></div><div class="cap"><span class="rec"><i></i>LIVE</span><b>${esc(cam.name)}</b><span class="b"></span><span class="fps"></span></div></div>`);
+        t.querySelector(".frame").prepend(src.view(cam)); wall.append(t);
       });
       wall.onclick = e => {
         if (e.target.closest("[data-unfocus]")) { focus = null; return this.buildWall(); }
@@ -286,7 +301,7 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
     const map = p => [(p[0] * W - crop.x) / crop.w * cw, (p[1] * H - crop.y) / crop.h * chh];
     const set = tr.sets.find(x => t >= x.t0 && t <= x.t1), si = set ? tr.sets.indexOf(set) : -1, smp = tr.samples.reduce((a, b) => Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a);
     // outline the person so it's clear who this is in a crowd
-    const [qx, qy] = map([bx, by]), [rx, ry] = map([bx + bw, by + bh]); ctx.strokeStyle = set ? "#5b8af0" : "rgba(255,255,255,.85)"; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(qx, qy, rx - qx, ry - qy); ctx.setLineDash([]);
+    const [qx, qy] = map([bx, by]), [rx, ry] = map([bx + bw, by + bh]); ctx.strokeStyle = set ? "#7c86ff" : "rgba(255,255,255,.85)"; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(qx, qy, rx - qx, ry - qy); ctx.setLineDash([]);
     if (showSk) { const pose = tr.pose(t); if (pose) drawSkeleton(ctx, pose, map, {color: set ? "#3d7cf0" : "#ffb347", width: 3, joint: 3}); }
     cap.innerHTML = set ? `<b>Set ${si + 1} · ${set.reps} reps</b><span>${esc(machineName(set.m))}</span>` : smp.zone ? `<b>${esc(machineName(smp.zone))}</b><span>between sets</span>` : `<b>On the floor</b><span>moving</span>`;
     cap.className = "prp-cap " + (set ? "lift" : smp.zone ? "rest" : "");
@@ -503,9 +518,17 @@ function MapPage() {
   const scenes = {};
   const markHover = pid => { hover = pid; document.querySelectorAll(".mapgrid [data-pid]").forEach(e => e.classList.toggle("hl", pid != null && +e.dataset.pid === pid)); };
   const setHover = pid => { markHover(pid); Object.values(scenes).forEach(s => s?.highlight?.(pid)); };
-  const openPerson = q => { if (q?.member) location.hash = "member-" + q.member; else if (q) toast(`${q.label} was only on camera briefly, so there's no profile yet.`); };
+  const personSheet = q => sheet(`<div class="sheet-h"><span class="avatar" style="--a:${q.activity && q.activity !== "standing" ? "var(--lift)" : "var(--muted)"}">${esc(initials(q.label))}</span><div><b>${esc(q.label)}</b><small>${esc(q.activity ? actName(q.activity) : "On the floor")}${q.zone ? " · " + esc(machineName(q.zone)) : ""}</small></div></div>
+    ${q.member ? `<a class="btn sheet-btn" href="#member-${esc(q.member)}">Open profile</a>` : `<p class="muted sheet-p">${esc(q.label)} was only on camera briefly, so there's no profile yet.</p>`}<button class="btn secondary sheet-btn" data-close>Close</button>`,
+    e => { if (e.target.closest("a")) $("#pop").hidden = true; });
+  const openPerson = q => { if (!q) return; if (isPhone()) return personSheet(q); if (q.member) location.hash = "member-" + q.member; else toast(`${q.label} was only on camera briefly, so there's no profile yet.`); };
   const labelOf = q => q.label + (q.activity && q.activity !== "standing" ? " · " + actName(q.activity) : "");
-  const openMachine = id => { const u = util[id], st = lastStates[id]; toast(`${machineName(id)}: ${st?.state === "lifting" ? `in use now (${st.reps} reps) · ` : st?.member ? "someone resting on it · " : "free · "}${u ? `${u.n} sets today, ${fmtDur(u.busy)} under load` : "no sets yet today"}`); };
+  const openMachine = id => { const u = util[id], st = lastStates[id];
+    if (isPhone()) { const who = st?.member ? cfg.members.find(m => m.id === st.member) : null;
+      return sheet(`<div class="sheet-h"><span class="avatar" style="--a:${st?.state === "lifting" ? "var(--lift)" : st?.member ? "var(--rest)" : "var(--muted)"}">${IC.machines}</span><div><b>${esc(machineName(id))}</b><small>${st?.state === "lifting" ? `In use now · ${st.reps} reps` : st?.member ? "Someone resting on it" : "Free"}</small></div></div>
+        <div class="sheet-facts"><div><small>Sets today</small><b>${u ? u.n : 0}</b></div><div><small>Under load</small><b>${u ? fmtDur(u.busy) : "–"}</b></div><div><small>People</small><b>${u?.members ?? 0}</b></div></div>
+        ${who ? `<a class="btn sheet-btn" href="#member-${esc(who.id)}">Open ${esc(who.name)}'s profile</a>` : ""}<button class="btn secondary sheet-btn" data-close>Close</button>`, e => { if (e.target.closest("a")) $("#pop").hidden = true; }); }
+    toast(`${machineName(id)}: ${st?.state === "lifting" ? `in use now (${st.reps} reps) · ` : st?.member ? "someone resting on it · " : "free · "}${u ? `${u.n} sets today, ${fmtDur(u.busy)} under load` : "no sets yet today"}`); };
   const modesFor = p => [["twin", "3D gym"], ...(src.sceneFor?.(p.id) ? [["3d", "Camera 3D"]] : []), ["plan", "Plan"]];
   const showMode = async (box, p) => {
     const avail = modesFor(p).map(m => m[0]), m = avail.includes(mode) ? mode : "twin";
@@ -932,11 +955,24 @@ function popover(anchor, html, onClick) {
   const pop = $("#pop"), r = anchor.getBoundingClientRect();
   if (!pop.hidden && pop.dataset.for === anchor.id) { pop.hidden = true; return null; }
   pop.innerHTML = html; pop.dataset.for = anchor.id; pop.hidden = false;
+  if (matchMedia("(max-width: 860px)").matches) { pop.classList.add("sheet"); pop.style.top = pop.style.left = ""; pop.onclick = e => onClick?.(e); return pop; } // phones: bottom sheet (CSS)
+  pop.classList.remove("sheet");
   const w = pop.offsetWidth; pop.style.top = `${r.bottom + 6}px`; pop.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w > 8 && anchor.id !== "siteBtn" ? r.right - w : r.left))}px`;
   pop.onclick = e => onClick?.(e);
   return pop;
 }
-document.addEventListener("click", e => { const pop = $("#pop"); if (!pop.hidden && !pop.contains(e.target) && !e.target.closest("#" + pop.dataset.for)) pop.hidden = true; });
+/* phones: a scrim behind the bottom sheet that closes it (kept in sync with #pop's hidden state) */
+(() => { const pop = $("#pop"), sc = Object.assign(document.createElement("div"), {className: "pop-scrim", hidden: true});
+  pop.before(sc); sc.onclick = () => pop.hidden = true;
+  new MutationObserver(() => sc.hidden = pop.hidden || !pop.classList.contains("sheet")).observe(pop, {attributes: true, attributeFilter: ["hidden", "class"]}); })();
+/* bottom sheet with details (phones); the tap that opens it must not also close it */
+function sheet(html, onClick) {
+  const pop = $("#pop"); pop.innerHTML = `<div class="sheet-grip" aria-hidden="true"></div>${html}`; pop.dataset.for = "__sheet"; pop.dataset.at = Date.now();
+  pop.classList.add("sheet"); pop.style.top = pop.style.left = ""; pop.hidden = false;
+  pop.onclick = e => { if (e.target.closest("[data-close]")) pop.hidden = true; else onClick?.(e); };
+}
+const isPhone = () => matchMedia("(max-width: 860px)").matches;
+document.addEventListener("click", e => { const pop = $("#pop"); if (Date.now() - (+pop.dataset.at || 0) < 450) return; if (!pop.hidden && !pop.contains(e.target) && !e.target.closest("#" + pop.dataset.for)) pop.hidden = true; });
 function alerts() {
   const out = [...(typeof SAFETY !== "undefined" ? SAFETY.active : [])];
   for (const c of live?.camera_status || []) if (c.status !== "live") out.push({level: "bad", title: `${c.name || c.id} is ${c.status}`, detail: "Check power and the network connection to the camera.", href: "#cameras"});

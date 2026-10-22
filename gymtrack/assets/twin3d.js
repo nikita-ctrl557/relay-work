@@ -15,9 +15,9 @@ const dark = () => matchMedia("(prefers-color-scheme: dark)").matches && documen
 function palette() {
   const d = dark();
   return {
-    floor: d ? 0x1e232b : 0xf1f3f6, floorLine: d ? 0x272d36 : 0xe2e6eb, wall: d ? 0x252b34 : 0xf7f8fa, wallEdge: d ? 0x323a46 : 0xd9dde3,
-    bg: d ? 0x0f1217 : 0xf6f7f9, mat: d ? 0x262d36 : 0x3b4048, steel: d ? 0x5b6573 : 0x4a525e, black: 0x1d2127, pad: 0x262a31,
-    chrome: 0xb9c0ca, rubber: 0x15181c, wood: 0xc8a06a, plate: [0x1d5bd8, 0xc9352b, 0xd9a400, 0x1f8a4c, 0x2a2f36],
+    floor: d ? 0x151b2c : 0xf4f6fb, floorLine: d ? 0x1f2740 : 0xe4e8f2, wall: d ? 0x1a2135 : 0xffffff, wallEdge: d ? 0x262f48 : 0xdde2ee,
+    bg: d ? 0x121829 : 0xf4f6fb, mat: d ? 0x2a3147 : 0x2b3040, steel: d ? 0x6b7390 : 0x3a4255, black: 0x161a26, pad: 0x1f2433,
+    chrome: 0xc3c9d5, rubber: 0x12151e, wood: 0xc9b08a, plate: [0x1e2333, 0x2b3040, 0x1e2333, 0x3a4255, 0x161a26],
   };
 }
 const M = {}, Y = new THREE.Vector3(0, 1, 0);
@@ -153,14 +153,14 @@ export function cameraPose(meta, calib) {
 const pref = (k, d) => { try { return localStorage.getItem("gymtrack:twin-" + k) || d; } catch { return d; } };
 const savePref = (k, v) => { try { localStorage.setItem("gymtrack:twin-" + k, v); } catch {} };
 const HEX = c => "#" + c.toString(16).padStart(6, "0");
-// usage ramp: unused slate -> blue -> amber -> red (busiest)
-const RAMP = [[0, 0x3b82f6], [0.5, 0xf59e0b], [1, 0xef4444]];
+// usage ramp: pale blue (little use) -> ultramarine (busiest)
+const RAMP = [[0, 0xc9cdfa], [0.5, 0x6c78ff], [1, 0x2430d6]];  // usage: pale blue -> ultramarine
 function rampColor(t) {
   const c = new THREE.Color();
   for (let i = 1; i < RAMP.length; i++) if (t <= RAMP[i][0]) { const [a, ca] = RAMP[i - 1], [b, cb] = RAMP[i]; return c.set(ca).lerp(new THREE.Color(cb), (t - a) / (b - a)); }
   return c.set(RAMP[RAMP.length - 1][1]);
 }
-const UNUSED = 0x94a3b8, LIFT = 0x2f6fe4, REST = 0xf26b2e;
+const UNUSED = 0x98a2b3, LIFT = 0x2430d6, REST = 0xe4572e;
 const fmtMin = s => s >= 3600 ? `${(s / 3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s / 60)}m` : `${Math.round(s)}s`;
 
 export function mountTwin(host, {plan, machines, people, states, heat, layer = () => "both", cams = [], usage = () => ({}), onOpen, onHover, onMachine, labelOf}) {
@@ -170,8 +170,9 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const seg = (g, opts, cur) => `<div class="tw-seg" role="group" aria-label="${g === "pm" ? "People" : "Colour"}"><span>${g === "pm" ? "People" : "Colour"}</span>${opts.map(([k, l]) => `<button data-${g}="${k}" aria-pressed="${k === cur}">${l}</button>`).join("")}</div>`;
   wrap.innerHTML = `<div class="s3d-labels"></div><div class="tw-legend" aria-live="polite"></div>
     <div class="s3d-bar tw-bar"><div class="tw-views"><button data-v="iso" aria-pressed="true">Overview</button><button data-v="top">Top down</button>${cams.some(c => c.pose) ? `<button data-v="cam">From the camera</button>` : ""}</div>
-    ${seg("pm", [["skel", "Skeletons"], ["fig", "Figures"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Live status"], ["heat", "Usage heat"]], colourMode)}
-    <span class="s3d-hint">Drag to orbit · scroll to zoom · click a person or machine</span></div>`;
+    <button class="tw-tog" data-tog="opts" aria-expanded="false">Display</button><button class="tw-tog" data-tog="key" aria-expanded="false">Key</button>
+    <div class="tw-opts">${seg("pm", [["skel", "Skeletons"], ["fig", "Figures"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Live status"], ["heat", "Usage heat"]], colourMode)}</div>
+    <span class="s3d-hint">${matchMedia("(pointer: coarse)").matches ? "Drag to orbit · pinch to zoom · tap a person or machine" : "Drag to orbit · scroll to zoom · click a person or machine"}</span></div>`;
   host.append(wrap);
   const labels = wrap.querySelector(".s3d-labels"), legend = wrap.querySelector(".tw-legend");
   const renderer = new THREE.WebGLRenderer({antialias: true}); renderer.setPixelRatio(Math.min(2, devicePixelRatio));
@@ -231,7 +232,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const tint = [];
     obj.traverse(o => { if (o.isMesh) { o.userData.machine = m.id; if (o.material.emissive) { o.material = o.material.clone(); tint.push(o.material); } } });
     const tag = document.createElement("button"); tag.className = "s3d-tag mach idle"; labels.append(tag);
-    tag.onclick = () => onMachine?.(m.id);
+    tag.onclick = () => { selM = m.id; onMachine?.(m.id); };
     let topY = 0; new THREE.Box3().setFromObject(obj).max.y > 0 && (topY = new THREE.Box3().setFromObject(obj).max.y);
     machineObjs.push({id: m.id, name: m.name, obj, tint, tag, poly: z.poly, fill: "transparent", stroke: HEX(UNUSED), strong: false, prio: 0, top: new THREE.Vector3(fp.cx, Math.max(0.9, topY) + 0.25, fp.cy)});
   }
@@ -329,15 +330,32 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   // views and modes
   const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.maxPolarAngle = Math.PI / 2 - 0.05; controls.target.set(CX, 0, CZ);
   const span = Math.max(RW, RD);
+  // frame the whole room: along a view direction, back off until every corner of the room is inside the picture
+  const corners = []; for (const x of [x0, x1]) for (const y of [0, WH]) for (const z of [z0, z1]) corners.push(new THREE.Vector3(x, y, z));
+  const probe = camera.clone();
+  const fitPos = (dir, look, margin = 0.9) => {
+    dir = dir.clone().normalize(); probe.aspect = camera.aspect; probe.fov = camera.fov; probe.updateProjectionMatrix();
+    let lo = span * 0.3, hi = span * 6;
+    for (let i = 0; i < 22; i++) {
+      const d = (lo + hi) / 2; probe.position.copy(look).addScaledVector(dir, d); probe.lookAt(look); probe.updateMatrixWorld();
+      const ok = corners.every(c => { const v = c.clone().project(probe); return v.z < 1 && Math.abs(v.x) <= margin && Math.abs(v.y) <= margin; });
+      if (ok) hi = d; else lo = d;
+    }
+    return look.clone().addScaledVector(dir, hi);
+  };
   const views = {
-    iso: () => ({pos: new THREE.Vector3(CX + span * 0.5, span * 0.72, CZ + span * 0.9), look: new THREE.Vector3(CX, 0, CZ)}),
-    top: () => ({pos: new THREE.Vector3(CX, span * 1.3, CZ + 0.01), look: new THREE.Vector3(CX, 0, CZ)}),
+    iso: () => { const look = new THREE.Vector3(CX, 0, CZ), tall = camera.aspect < 1.2; // portrait: look down more steeply so the room fills the frame
+      return {pos: fitPos(tall ? (RW > RD ? new THREE.Vector3(0.78, 1.05, 0.3) : new THREE.Vector3(0.3, 1.05, 0.78)) : new THREE.Vector3(0.5, 0.72, 0.9), look, tall ? 0.94 : 0.9), look}; },
+    top: () => { const look = new THREE.Vector3(CX, 0, CZ); return {pos: fitPos(new THREE.Vector3(0, 1, 0.0001), look, 0.94), look}; },
     cam: () => { const c = cams.find(c => c.pose)?.pose; return c ? {pos: new THREE.Vector3(c.x, c.h, c.y), look: new THREE.Vector3(CX, 0, CZ)} : views.iso(); },
   };
   let anim = null;
-  const setView = (k, now) => { wrap.querySelectorAll("[data-v]").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === k)); const v = views[k](); if (now) { camera.position.copy(v.pos); controls.target.copy(v.look); return; } anim = {t: 0, p0: camera.position.clone(), p1: v.pos, l0: controls.target.clone(), l1: v.look}; };
+  let curView = "iso", userMoved = false;
+  controls.addEventListener("start", () => { userMoved = true; anim = null; });
+  const setView = (k, now) => { curView = k; wrap.querySelectorAll("[data-v]").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === k)); const v = views[k](); if (now) { camera.position.copy(v.pos); controls.target.copy(v.look); return; } anim = {t: 0, p0: camera.position.clone(), p1: v.pos, l0: controls.target.clone(), l1: v.look}; };
   wrap.querySelector(".tw-bar").onclick = e => {
-    const v = e.target.closest("[data-v]"); if (v) return setView(v.dataset.v);
+    const tg = e.target.closest("[data-tog]"); if (tg) { const on = wrap.classList.toggle("show-" + tg.dataset.tog); tg.setAttribute("aria-expanded", on); return; }
+    const v = e.target.closest("[data-v]"); if (v) { userMoved = false; return setView(v.dataset.v); }
     const pm = e.target.closest("[data-pm]"); if (pm) { peopleMode = pm.dataset.pm; savePref("people", peopleMode); wrap.querySelectorAll("[data-pm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.pm === peopleMode)); return; }
     const cm = e.target.closest("[data-cm]"); if (cm) { colourMode = cm.dataset.cm; savePref("colour", colourMode); wrap.querySelectorAll("[data-cm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.cm === colourMode)); applyColours(); }
   };
@@ -346,12 +364,21 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   // click / hover machines in the scene
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
   const pick = e => { const r = renderer.domElement.getBoundingClientRect(); ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); ray.setFromCamera(ndc, camera); return ray.intersectObjects(machineObjs.map(m => m.obj), true)[0]?.object.userData.machine; };
-  let downAt = null, hoverM = null;
+  let downAt = null, hoverM = null, selM = null;
   renderer.domElement.addEventListener("pointerdown", e => downAt = [e.clientX, e.clientY]);
-  renderer.domElement.addEventListener("pointerup", e => { if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) < 5) { const m = pick(e); if (m) onMachine?.(m); } downAt = null; });
+  renderer.domElement.addEventListener("pointerup", e => { if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) < 8) { const m = pick(e); selM = m || null; if (m) onMachine?.(m); } downAt = null; });
   renderer.domElement.addEventListener("pointermove", e => { if (e.buttons) return; hoverM = pick(e) || null; renderer.domElement.style.cursor = hoverM ? "pointer" : ""; });
 
-  function resize() { const w = wrap.clientWidth, h = Math.round(w * 9 / 16); renderer.setSize(w, h, false); renderer.domElement.style.width = "100%"; renderer.domElement.style.height = h + "px"; camera.aspect = w / h; camera.updateProjectionMatrix(); }
+  // phones: taller canvas, controls under it, fewer labels
+  let compact = false;
+  function resize() {
+    const w = wrap.clientWidth; if (!w) return;
+    compact = w < 640; wrap.classList.toggle("compact", compact);
+    const h = compact ? Math.round(Math.min(w * 1.1, Math.max(320, innerHeight * 0.62))) : Math.round(w * 9 / 16);
+    renderer.setSize(w, h, false); renderer.domElement.style.width = "100%"; renderer.domElement.style.height = h + "px"; wrap.style.setProperty("--ch", h + "px");
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+    if (!userMoved && !anim) setView(curView, true);
+  }
   const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
 
   let raf, last = 0, heatAt = -1e9, colAt = -1e9; const tmp = new THREE.Vector3();
@@ -364,7 +391,8 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     if (anim) { anim.t = Math.min(1, anim.t + 0.04); const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.l0, anim.l1, e); if (anim.t >= 1) anim = null; }
     controls.update();
     const rect = renderer.domElement.getBoundingClientRect(), W = rect.width, H = rect.height, showP = layer() !== "heat" && peopleMode !== "off";
-    const placeTag = (tag, s) => { tag.style.display = ""; tag.style.transform = `translate(${((s.x + 1) / 2 * W).toFixed(1)}px, ${((1 - s.y) / 2 * H).toFixed(1)}px) translate(-50%, -100%)`; };
+    const taken = []; // screen rects already used by people tags; machine labels avoid them
+    const placeTag = (tag, s) => { const x = (s.x + 1) / 2 * W, y = (1 - s.y) / 2 * H, w = tag.offsetWidth || 30, h = tag.offsetHeight || 18; taken.push({l: x - w / 2, r: x + w / 2, t: y - h, b: y}); tag.style.display = ""; tag.style.transform = `translate(${((s.x + 1) / 2 * W).toFixed(1)}px, ${((1 - s.y) / 2 * H).toFixed(1)}px) translate(-50%, -100%)`; };
     for (const [k, p] of [...ppl]) {
       p.alpha += ((showP ? p.want : 0) - p.alpha) * 0.12;
       if (p.want === 0 && p.alpha < 0.02) { scene.remove(p.skel, p.fig, p.shadow, p.halo); p.tag.remove(); ppl.delete(k); continue; }
@@ -386,10 +414,12 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       if (s) placeTag(p.tag, s); else p.tag.style.display = "none";
     }
     // machine labels: always shown, de-overlapped in screen space (busy/in-use win; idle ones give way)
-    const placed = [], order = machineObjs.map(mo => ({mo, s: sp(mo.top)})).filter(x => { if (!x.s) x.mo.tag.style.display = "none"; return x.s; })
+    const placed = [...taken], order = machineObjs.map(mo => ({mo, s: sp(mo.top)})).filter(x => { if (!x.s) x.mo.tag.style.display = "none"; return x.s; })
       .sort((a, b) => (b.mo.prio + (hoverM === b.mo.id ? 5 : 0)) - (a.mo.prio + (hoverM === a.mo.id ? 5 : 0)));
     for (const {mo, s} of order) {
-      mo.tag.classList.toggle("hl", hoverM === mo.id);
+      const focus = hoverM === mo.id || selM === mo.id;
+      mo.tag.classList.toggle("hl", focus);
+      if (compact && mo.prio < (colourMode === "heat" ? 1.6 : 2) && !focus) { mo.tag.style.display = "none"; continue; }
       const w = mo.tag.offsetWidth || 80, h = mo.tag.offsetHeight || 20;
       let cx = (s.x + 1) / 2 * W, cy = (1 - s.y) / 2 * H, ok = false;
       for (let tries = 0; tries < 4; tries++) {
@@ -397,7 +427,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
         if (!placed.some(q => r.l < q.r + 3 && r.r > q.l - 3 && r.t < q.b + 2 && r.b > q.t - 2)) { placed.push(r); ok = true; break; }
         cy -= h + 4;
       }
-      if (!ok && mo.prio === 0 && hoverM !== mo.id) { mo.tag.style.display = "none"; continue; }
+      if (!ok && (mo.prio === 0 || compact) && !focus) { mo.tag.style.display = "none"; continue; }
       mo.tag.style.display = ""; mo.tag.style.transform = `translate(${cx.toFixed(1)}px, ${cy.toFixed(1)}px) translate(-50%, -100%)`;
     }
     renderer.render(scene, camera);
