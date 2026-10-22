@@ -267,3 +267,122 @@ def refine_with_people(cam: PinholeCamera, feet_uv, head_uv, head_h: float = 1.6
     out = _params_to_cam(sol.x, cx, cy, W, Hh, flip)
     out.info = dict(cam.info, refined_with_people=len(feet_uv))
     return out
+
+
+# ---- self-calibration from people ---------------------------------------------------------------------
+
+NOSE_ABOVE_ANKLE_M = 1.50   # adult nose height (~1.58 m) minus ankle-joint height (~0.08 m)
+ANKLE_Z = 0.08
+
+
+def _gravity_cam(p, W, Hh):
+    """Camera at (0, 0, h) looking along +Y, pitched down by tilt and rolled; p = (log f, tilt, roll, h)."""
+    f, tilt, roll, h = float(np.exp(p[0])), p[1], p[2], p[3]
+    # base: camera x = world +X, camera y (down) = world -Z, camera z (forward) = world +Y
+    R0 = np.array([[1.0, 0, 0], [0, 0, -1.0], [0, 1.0, 0]])
+    Rt = Rotation.from_euler("x", tilt).as_matrix()        # pitch the optical axis down
+    Rr = Rotation.from_euler("z", roll).as_matrix()
+    R = Rr @ Rt @ R0
+    return PinholeCamera(f, W / 2.0, Hh / 2.0, R, np.array([0.0, 0.0, h]), W, Hh, 1.0)
+
+
+def standing_samples(frames, W: int, Hh: int):
+    """(feet_uv, nose_uv) pixel pairs of people who look upright in 13-joint 2D poses (pixels)."""
+    F, N = [], []
+    for P in frames:
+        P = np.asarray(P, float)
+        an, hip, kn, sh, no = P[11:13].mean(0), P[7:9].mean(0), P[9:11].mean(0), P[1:3].mean(0), P[0]
+        L = an[1] - no[1]
+        if L < 0.08 * Hh:
+            continue
+        if abs(hip[0] - an[0]) > 0.1 * L or abs(sh[0] - hip[0]) > 0.1 * L or abs(no[0] - an[0]) > 0.12 * L:
+            continue
+        if not (no[1] < sh[1] < hip[1] < kn[1] < an[1]):
+            continue
+        if (kn[1] - hip[1]) < 0.2 * L or (an[1] - kn[1]) < 0.2 * L or abs(P[11, 1] - P[12, 1]) > 0.06 * L:
+            continue
+        if an[1] > Hh - 2:
+            continue
+        F.append(an)
+        N.append(no)
+    return np.array(F).reshape(-1, 2), np.array(N).reshape(-1, 2)
+
+
+def calibrate_from_people(feet_uv, nose_uv, width: int, height: int, H_img2plan=None, calib_image=None,
+                          hfov_prior_deg: float = 65.0) -> PinholeCamera:
+    """Camera from upright people alone (each is a ~1.5 m vertical ankle->nose segment standing on the floor),
+    optionally placed on the floor plan with the config homography.
+
+    1. gravity frame: focal length, tilt, roll and mounting height from the people (robust least squares;
+       a weak prior on the field of view keeps f sane when the people don't span much depth);
+    2. plan frame: a rigid 2D transform (rotation + translation, reflection allowed) that best maps the
+       camera's floor to the homography's floor over the calibrated quad, so feet land where the 2D
+       pipeline puts them. The homography's scale is *not* used for the body: metric scale comes from
+       people's heights, and the scale mismatch is reported in info["plan_scale"].
+    """
+    feet_uv = np.asarray(feet_uv, float)
+    nose_uv = np.asarray(nose_uv, float)
+    W, Hh = width, height
+    f0 = W / (2 * np.tan(np.radians(hfov_prior_deg / 2)))
+    sig = 0.01 * Hh
+
+    def resid(p):
+        c = _gravity_cam(p, W, Hh)
+        foot = c.backproject_to_height(feet_uv, ANKLE_Z)
+        bad = ~np.isfinite(foot).all(1) | (c.depth(foot) <= 0.3)
+        top = foot.copy()
+        top[:, 2] = ANKLE_Z + NOSE_ABOVE_ANKLE_M
+        r = (c.project(top) - nose_uv) / sig
+        r[bad] = 30.0
+        r = np.nan_to_num(r, nan=30.0).ravel()
+        prior = np.array([(p[0] - np.log(f0)) / 0.35, (p[3] - 3.0) / 3.0])
+        return np.r_[r, prior * np.sqrt(len(feet_uv) / 20.0)]
+
+    best = None
+    for tilt0 in (0.15, 0.35, 0.6):
+        for h0 in (2.0, 3.5):
+            p0 = np.array([np.log(f0), tilt0, 0.0, h0])
+            try:
+                sol = least_squares(resid, p0, loss="soft_l1", f_scale=2.0, max_nfev=300,
+                                    bounds=([np.log(0.25 * W), -0.2, -0.3, 0.5], [np.log(5 * W), 1.4, 0.3, 15.0]))
+            except ValueError:
+                continue
+            if best is None or sol.cost < best.cost:
+                best = sol
+    cam = _gravity_cam(best.x, W, Hh)
+    r = resid(best.x)[:-2].reshape(-1, 2) * sig
+    info = {"source": "people", "samples": int(len(feet_uv)),
+            "people_resid_px": round(float(np.median(np.linalg.norm(r, axis=1))), 2)}
+    if H_img2plan is not None:
+        H = np.asarray(H_img2plan, float)
+        if calib_image is not None and len(calib_image) >= 3:
+            q = np.asarray(calib_image, float)
+            from matplotlib.path import Path as _P
+            gu, gv = np.meshgrid(np.linspace(q[:, 0].min(), q[:, 0].max(), 12), np.linspace(q[:, 1].min(), q[:, 1].max(), 8))
+            img = np.c_[gu.ravel(), gv.ravel()]
+            img = np.r_[img[_P(q).contains_points(img, radius=1e-6)], q]
+        else:
+            gu, gv = np.meshgrid(np.linspace(0, W, 9), np.linspace(0.6 * Hh, Hh, 5))
+            img = np.c_[gu.ravel(), gv.ravel()]
+        g = cam.backproject_to_height(img, 0.0)[:, :2]
+        hp = np.c_[img, np.ones(len(img))] @ H.T
+        pl = hp[:, :2] / hp[:, 2:3]
+        ok = np.isfinite(g).all(1) & np.isfinite(pl).all(1) & (cam.depth(np.c_[g, np.zeros(len(g))]) > 0)
+        g, pl = g[ok], pl[ok]
+        if len(g) >= 3:
+            gm, pm = g.mean(0), pl.mean(0)
+            U, S, Vt = np.linalg.svd((pl - pm).T @ (g - gm))
+            A = U @ Vt                       # orthogonal, det may be -1 (plan drawn mirrored w.r.t. the world)
+            scale = float(S.sum() / ((g - gm) ** 2).sum())
+            b = pm - A @ gm
+            Mg = cam._M()
+            Ap = np.eye(3)
+            Ap[:2, :2] = A
+            Mp = Mg @ Ap.T
+            flip = float(np.sign(np.linalg.det(A)))
+            C = np.r_[A @ cam.C[:2] + b, cam.C[2]]
+            cam = PinholeCamera(cam.f, cam.cx, cam.cy, Mp @ np.diag([1, 1, flip]), C, W, Hh, flip)
+            res = np.linalg.norm((g @ A.T + b) - pl, axis=1)
+            info.update(plan_scale=round(scale, 3), plan_fit_m=round(float(np.median(res)), 2))
+    cam.info = info
+    return cam
