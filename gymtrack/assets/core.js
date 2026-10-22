@@ -625,6 +625,33 @@ class ServerSource {
    ReplaySource: real recorded footage + GymTrack's tracking of it, played back in sync.
    assets/replay/manifest.json lists cameras; each has an annotated video and a per-second log.
    ================================================================ */
+/* A long recording split into several files (hosts cap file sizes): one <video> element that plays the parts
+   back to back and maps currentTime to/from the whole recording's timeline. */
+class PartedVideo {
+  constructor(parts, {autoplay = true} = {}) { // parts: [{src, start, dur}] in recording seconds
+    this.parts = parts; this.i = 0; this.rate = 1; this.pending = 0; this.wantPlay = autoplay;
+    const v = this.el = document.createElement("video");
+    Object.assign(v, {muted: true, playsInline: true, preload: "auto"}); v.setAttribute("muted", ""); v.setAttribute("playsinline", "");
+    v.addEventListener("ended", () => this._load((this.i + 1) % parts.length, 0));
+    v.addEventListener("loadedmetadata", () => { v.playbackRate = this.rate; if (this.pending != null) { try { v.currentTime = this.pending; } catch {} this.pending = null; } if (this.wantPlay) v.play().catch(() => {}); });
+    this._load(0, 0);
+  }
+  _load(i, off) { this.i = i; this.pending = off; this.el.src = this.parts[i].src; this.el.load(); }
+  get currentTime() { return this.parts[this.i].start + (this.pending != null ? this.pending : (this.el.currentTime || 0)); }
+  set currentTime(t) {
+    let k = this.parts.findIndex(p => t >= p.start && t < p.start + p.dur); if (k < 0) k = t <= 0 ? 0 : this.parts.length - 1;
+    const off = Math.max(0, Math.min(this.parts[k].dur - 0.05, t - this.parts[k].start));
+    if (k === this.i && this.el.readyState >= 1 && this.pending == null) this.el.currentTime = off; else this._load(k, off);
+  }
+  get readyState() { return this.el.readyState; }
+  get paused() { return this.el.paused; }
+  get videoWidth() { return this.el.videoWidth; }
+  play() { this.wantPlay = true; return this.el.play(); }
+  pause() { this.wantPlay = false; this.el.pause(); }
+  set playbackRate(r) { this.rate = r; this.el.playbackRate = r; }
+  get playbackRate() { return this.rate; }
+}
+
 class ReplaySource {
   constructor(manifest, base) {
     this.mode = "replay"; this.base = base; this.speed = 1; this.weights = {};
@@ -635,6 +662,7 @@ class ReplaySource {
       this.cfg.machines.push(...c.machines);
       this.cfg.cameras.push({id: c.id, name: c.name, source: c.source, fps: 10, zones: c.zones, exercise_names: c.exercise_names !== false});
       for (const p of c.data.people.rows.filter(p => p.seen_s >= 20)) this.cfg.members.push({id: `${c.id}-${p.id}`, name: `${c.short} #${p.id}`, tag: p.id, cam: c.id, pid: p.id});
+      if (c.parts?.length) { c.pv = new PartedVideo(c.parts.map(p => ({src: base + p.file, start: p.start, dur: p.dur}))); c.el = c.pv.el; continue; }
       const v = document.createElement("video");
       Object.assign(v, {muted: true, loop: true, playsInline: true, autoplay: true, preload: "auto"});
       for (const [f, type] of [[c.video, "video/mp4"], [c.video_webm, "video/webm"]]) if (f) v.append(Object.assign(document.createElement("source"), {src: base + f, type}));
@@ -642,12 +670,13 @@ class ReplaySource {
       v.addEventListener("canplay", () => v.play().catch(() => {}), {once: true});
       c.el = v;
     }
-    const kick = () => this.cams.forEach(c => c.el.play().catch(() => {}));
+    const kick = () => this.cams.forEach(c => (c.pv || c.el).play().catch(() => {}));
     addEventListener("pointerdown", kick, {once: true});
   }
-  set speed(v) { this._speed = v; this.cams?.forEach(c => c.el.playbackRate = v); }
+  set speed(v) { this._speed = v; this.cams?.forEach(c => (c.pv || c.el).playbackRate = v); }
   get speed() { return this._speed; }
-  ct(c) { return c.el.currentTime || 0; }
+  ct(c) { return (c.pv ? c.pv.currentTime : c.el.currentTime) || 0; }
+  seek(camId, t) { const c = this.cams.find(x => x.id === camId); if (c) (c.pv || c.el).currentTime = t; }
   at(c, ct) { const tl = c.data.timeline; let lo = 0, hi = tl.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (tl[m].t <= ct) lo = m; else hi = m - 1; } return tl[lo]; }
   abs(c, x) { return Date.now() / 1000 - this.ct(c) + x; }   // video seconds -> wall clock for display
   personTrack(memberId) { // everything recorded about one tracked person, for the profile's replay and time breakdown
@@ -657,7 +686,8 @@ class ReplaySource {
     if (!samples.length) return null;
     const sets = c.data.sets.filter(s => s.pid === m.pid).sort((a, b) => a.t0 - b.t0);
     const sources = (c.video_clean ? [[c.video_clean, "video/mp4"]] : [[c.video, "video/mp4"], [c.video_webm, "video/webm"]]).filter(([f]) => f).map(([f, type]) => ({src: this.base + f, type}));
-    return {camera: c.name, camId: c.id, pid: m.pid, samples, sets, sources, duration: c.data.duration, pose: t => this.poseAt(c, m.pid, t)};
+    const parts = (c.clean_parts?.length ? c.clean_parts : c.parts?.length ? c.parts : null)?.map(p => ({src: this.base + p.file, start: p.start, dur: p.dur})) || null;
+    return {camera: c.name, camId: c.id, pid: m.pid, samples, sets, sources, parts, duration: c.data.duration, pose: t => this.poseAt(c, m.pid, t)};
   }
   personStats(c, pid, ct, full = false) { // full: the whole recording (totals, history); otherwise up to playback time
     const lim = full ? Infinity : ct;

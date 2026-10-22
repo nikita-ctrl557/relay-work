@@ -252,8 +252,10 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
   host.innerHTML = `<div class="prp"><div class="prp-stage"><canvas></canvas><div class="prp-cap"></div><div class="prp-wait">Loading video…</div></div>
     <div class="prp-side"><div class="eyebrow">Chapters</div><div class="prp-ch"></div></div></div>
     <div class="skp-bar"><button class="btn secondary sm" data-pp aria-label="Pause">${IC.pause}</button><input type="range" min="0" max="1000" value="0" aria-label="Position"><span class="num skp-t"></span><button class="btn ghost sm" data-sp>1×</button><label class="prp-tog"><input type="checkbox" checked data-sk> Skeleton</label></div>`;
-  const v = document.createElement("video"); Object.assign(v, {muted: true, playsInline: true, preload: "auto", crossOrigin: "anonymous"}); v.setAttribute("muted", ""); v.setAttribute("playsinline", "");
-  for (const s of tr.sources) v.append(Object.assign(document.createElement("source"), s));
+  const pv = tr.parts ? new PartedVideo(tr.parts, {autoplay: false}) : null;
+  const v = pv ? pv.el : document.createElement("video");
+  if (!pv) { Object.assign(v, {muted: true, playsInline: true, preload: "auto", crossOrigin: "anonymous"}); v.setAttribute("muted", ""); v.setAttribute("playsinline", ""); for (const s of tr.sources) v.append(Object.assign(document.createElement("source"), s)); }
+  const V = pv || v; // the recording-timeline view of the video
   const cv = host.querySelector("canvas"), ctx = cv.getContext("2d"), cap = host.querySelector(".prp-cap"), range = host.querySelector("input[type=range]"), tEl = host.querySelector(".skp-t");
   const T0 = bd.first, T1 = bd.last + 1, span = Math.max(1, T1 - T0);
   // chapters: each set, and each stay at a station of 4 s or more
@@ -262,17 +264,17 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
   host.querySelector(".prp-ch").innerHTML = ch.map(c => `<button data-seek="${c.t}"><i style="background:${segColor(c.state)}"></i><span><b>${esc(c.label)}</b><small>${esc(c.sub)} · ${clockFmt(c.t - T0)}</small></span></button>`).join("") || `<div class="muted small">Walking and standing only: no sets or station stays.</div>`;
   let playing = true, speed = 1, crop = null, raf, showSk = true;
   let want = T0;
-  const seek = t => { want = Math.max(T0, Math.min(T1, t)); v.currentTime = want; crop = null; };
-  v.addEventListener("loadeddata", () => { host.querySelector(".prp-wait")?.remove(); v.currentTime = want; v.play().catch(() => {}); }, {once: true});
+  const seek = t => { want = Math.max(T0, Math.min(T1, t)); V.currentTime = want; crop = null; };
+  v.addEventListener("loadeddata", () => { host.querySelector(".prp-wait")?.remove(); V.currentTime = want; V.play().catch(() => {}); }, {once: true});
   function frame() {
     raf = requestAnimationFrame(frame);
     if (v.readyState < 2) return;
-    let t = v.currentTime;
+    let t = V.currentTime;
     if (t < T0 - 0.5 || t > T1) { seek(T0); t = T0; }
     const inR = bd.ranges.find(r => t >= r[0] && t <= r[1]);
     if (!inR) { const nx = bd.ranges.find(r => r[0] > t); seek(nx ? nx[0] : T0); return; } // skip time they're off camera
-    if (playing && v.paused) v.play().catch(() => {}); if (!playing && !v.paused) v.pause();
-    v.playbackRate = speed;
+    if (playing && V.paused) V.play().catch(() => {}); if (!playing && !V.paused) V.pause();
+    V.playbackRate = speed;
     const dpr = devicePixelRatio || 1, cw = cv.clientWidth, chh = cv.clientHeight; if (!cw || !chh) return;
     const W = v.videoWidth, H = v.videoHeight, [bx, by, bw, bh] = boxAt(tr, t), A = cw / chh; // crop has the canvas's aspect, so nothing stretches
     let h = Math.max(bh * H * 1.9, H * 0.6), w = h * A; if (w < bw * W * 1.8) { w = bw * W * 1.8; h = w / A; }
@@ -296,7 +298,7 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
   host.querySelector("[data-sk]").onchange = e => { showSk = e.target.checked; };
   range.oninput = () => seek(T0 + range.value / 1000 * span);
   host.querySelector(".prp-ch").onclick = e => { const b = e.target.closest("[data-seek]"); if (b) seek(+b.dataset.seek); };
-  return {seek, destroy() { cancelAnimationFrame(raf); v.pause(); v.removeAttribute("src"); v.innerHTML = ""; v.load(); }};
+  return {seek, destroy() { cancelAnimationFrame(raf); V.pause(); v.removeAttribute("src"); v.innerHTML = ""; v.load(); }};
 }
 function stationTimesHTML(bd) {
   const mx = Math.max(1, ...bd.stations.map(s => s.all), bd.floor);
