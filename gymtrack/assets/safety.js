@@ -61,7 +61,7 @@ function safetyTick(cams) {
   safetyBanner();
 }
 function safetyAnnounce(a) {
-  toast(`⚠ ${a.title}. ${a.detail}`, true);
+  toast(`${a.title}. ${a.detail}`, true);
   audit?.("Safety alert", `${a.title} — ${a.detail}`);
 }
 function safetyBanner() {
