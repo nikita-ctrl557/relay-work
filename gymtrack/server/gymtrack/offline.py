@@ -49,7 +49,7 @@ def pose_vector(kp, W: int, H: int) -> list[int]:
     out = []
     for j in JOINTS13:
         x, y, v = kp[j]
-        out += [-1, -1] if v < 0.3 else [int(round(x / W * 1000)), int(round(y / H * 1000))]
+        out += [-1, -1] if v < 0.05 else [int(round(x / W * 1000)), int(round(y / H * 1000))]
     return out
 
 
@@ -79,10 +79,10 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         people = DEFAULT_MODEL.exists()
     tracker = None
     if people:
-        from .pose import POSE_MODEL, PoseEstimator
+        from .pose import make_pose_estimator
         plan = (cfg.plan["width"], cfg.plan["depth"]) if cfg.plan else None
-        tracker = PeopleTracker(cam.zones, PersonDetector(), detect_every_s=detect_every_s, pose=PoseEstimator() if POSE_MODEL.exists() else None,
-                                homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names)
+        tracker = PeopleTracker(cam.zones, PersonDetector(), detect_every_s=detect_every_s, pose=make_pose_estimator(),
+                                homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names, ignore=cam.ignore)
     names = {m.id: m.name for m in cfg.members}
     tag_names = {m.tag: m.name for m in cfg.members}
     writer, background = None, None
@@ -97,14 +97,16 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
             continue  # decode-only skip: much cheaper than retrieving every frame
         next_t += 1.0 / sample_fps
         ok, frame = cap.retrieve()
+        full = None
         if not ok:
             break
         if frame.shape[1] != width:
+            full = frame
             frame = cv2.resize(frame, (width, int(frame.shape[0] * width / frame.shape[1])), interpolation=cv2.INTER_AREA)
         reading = analyser.analyze(frame, start_ts + t)
         tracks = []
         if tracker:
-            tracks = tracker.update(frame, start_ts + t, reading.tags, cfg.member_by_tag)
+            tracks = tracker.update(frame, start_ts + t, reading.tags, cfg.member_by_tag, full=full)
             reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity) for tr in tracks]
             reading.tracking = True
         engine.ingest(reading)

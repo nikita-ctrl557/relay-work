@@ -305,6 +305,6 @@ def test_pose_vector_encodes_13_joints_and_hides_unseen():
     import numpy as np
     from gymtrack.offline import pose_vector
     kp = np.zeros((33, 3)); kp[:, 0], kp[:, 1], kp[:, 2] = 320, 180, 0.9
-    kp[27, 2] = 0.1  # left ankle not visible
+    kp[27, 2] = 0.02  # left ankle not visible
     v = pose_vector(kp, 640, 360)
     assert len(v) == 26 and v[:2] == [500, 500] and v[22:24] == [-1, -1]

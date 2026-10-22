@@ -79,10 +79,10 @@ class CameraWorker(threading.Thread):
             try:
                 from .tracking import DEFAULT_MODEL, PeopleTracker, PersonDetector
                 if DEFAULT_MODEL.exists():
-                    from .pose import POSE_MODEL, PoseEstimator
+                    from .pose import make_pose_estimator
                     plan = (cfg.plan["width"], cfg.plan["depth"]) if cfg.plan else None
-                    self.tracker = PeopleTracker(cam.zones, PersonDetector(), pose=PoseEstimator() if POSE_MODEL.exists() else None,
-                                                 homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names)
+                    self.tracker = PeopleTracker(cam.zones, PersonDetector(), pose=make_pose_estimator(),
+                                                 homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names, ignore=cam.ignore)
             except Exception as exc:  # no model / no DNN support: zone tracking still works
                 self.error = f"people tracking off: {exc}"
         self._tracks = []
@@ -122,12 +122,14 @@ class CameraWorker(threading.Thread):
                         self.stop_evt.wait(period - (now - last))
                         now = time.time()
                     last = now
+                    full = None
                     if frame.shape[1] != self.cam.width:
                         h = int(frame.shape[0] * self.cam.width / frame.shape[1])
+                        full = frame
                         frame = cv2.resize(frame, (self.cam.width, h), interpolation=cv2.INTER_AREA)
                     reading = self.analyzer.analyze(frame, now)
                     if self.tracker:
-                        self._tracks = self.tracker.update(frame, now, reading.tags, self.cfg.member_by_tag)
+                        self._tracks = self.tracker.update(frame, now, reading.tags, self.cfg.member_by_tag, full=full)
                         reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity) for tr in self._tracks]
                         reading.tracking = True
                     self.engine.ingest(reading)

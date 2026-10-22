@@ -223,6 +223,96 @@ function MembersPage() {
   };
 }
 
+/* ---------------- person detail: replay, time by station, timeline ---------------- */
+function personBreakdown(tr) { // time per station (in a set vs not), time moving, and state segments, from the per-second log
+  const S = tr.samples, inSet = t => tr.sets.find(x => t >= x.t0 && t <= x.t1), st = {}, segs = [];
+  let floor = 0, total = 0;
+  for (let i = 0; i < S.length; i++) {
+    const a = S[i], dt = i + 1 < S.length ? Math.min(2, S[i + 1].t - a.t) : 1; total += dt;
+    const set = inSet(a.t), zone = a.zone || set?.m || null, state = set ? "lift" : zone ? "rest" : "move";
+    if (zone) { const r = st[zone] ||= {lift: 0, idle: 0}; r[set ? "lift" : "idle"] += dt; } else floor += dt;
+    const last = segs[segs.length - 1];
+    if (last && last.state === state && last.zone === zone && a.t - last.t1 <= 2.5) last.t1 = a.t + dt;
+    else segs.push({state, zone, t0: a.t, t1: a.t + dt});
+  }
+  const ranges = []; // when they're on camera at all
+  for (const a of S) { const r = ranges[ranges.length - 1]; if (r && a.t - r[1] <= 2.5) r[1] = a.t + 1; else ranges.push([a.t, a.t + 1]); }
+  return {stations: Object.entries(st).map(([id, r]) => ({id, ...r, all: r.lift + r.idle})).sort((a, b) => b.all - a.all), floor, total, segs, ranges, first: S[0].t, last: S[S.length - 1].t};
+}
+function boxAt(tr, t) {
+  const S = tr.samples; let lo = 0, hi = S.length - 1;
+  if (t <= S[0].t) return S[0].box; if (t >= S[hi].t) return S[hi].box;
+  while (lo < hi - 1) { const m = (lo + hi) >> 1; if (S[m].t <= t) lo = m; else hi = m; }
+  const a = S[lo], b = S[hi]; if (b.t - a.t > 2.5) return t - a.t < b.t - t ? a.box : b.box;
+  const k = (t - a.t) / (b.t - a.t); return a.box.map((v, j) => v + (b.box[j] - v) * k);
+}
+const segLabel = sg => sg.state === "lift" ? `Set on ${machineName(sg.zone)}` : sg.state === "rest" ? `At ${machineName(sg.zone)}, not lifting` : "Moving / on the floor";
+const segColor = st => st === "lift" ? "var(--lift)" : st === "rest" ? "var(--rest)" : "var(--other)";
+function personReplay(host, tr, bd) { // video that follows one person, with skeleton, captions and chapters
+  host.innerHTML = `<div class="prp"><div class="prp-stage"><canvas></canvas><div class="prp-cap"></div><div class="prp-wait">Loading video…</div></div>
+    <div class="prp-side"><div class="eyebrow">Chapters</div><div class="prp-ch"></div></div></div>
+    <div class="skp-bar"><button class="btn secondary sm" data-pp aria-label="Pause">${IC.pause}</button><input type="range" min="0" max="1000" value="0" aria-label="Position"><span class="num skp-t"></span><button class="btn ghost sm" data-sp>1×</button><label class="prp-tog"><input type="checkbox" checked data-sk> Skeleton</label></div>`;
+  const v = document.createElement("video"); Object.assign(v, {muted: true, playsInline: true, preload: "auto", crossOrigin: "anonymous"}); v.setAttribute("muted", ""); v.setAttribute("playsinline", "");
+  for (const s of tr.sources) v.append(Object.assign(document.createElement("source"), s));
+  const cv = host.querySelector("canvas"), ctx = cv.getContext("2d"), cap = host.querySelector(".prp-cap"), range = host.querySelector("input[type=range]"), tEl = host.querySelector(".skp-t");
+  const T0 = bd.first, T1 = bd.last + 1, span = Math.max(1, T1 - T0);
+  // chapters: each set, and each stay at a station of 4 s or more
+  const ch = [...tr.sets.map((x, i) => ({t: x.t0, label: `Set ${i + 1} · ${x.reps} reps`, sub: machineName(x.m), state: "lift"})),
+    ...bd.segs.filter(g => g.state === "rest" && g.t1 - g.t0 >= 4).map(g => ({t: g.t0, label: `At ${machineName(g.zone)}`, sub: `${fmtDur(g.t1 - g.t0)}, not lifting`, state: "rest"}))].sort((a, b) => a.t - b.t);
+  host.querySelector(".prp-ch").innerHTML = ch.map(c => `<button data-seek="${c.t}"><i style="background:${segColor(c.state)}"></i><span><b>${esc(c.label)}</b><small>${esc(c.sub)} · ${clockFmt(c.t - T0)}</small></span></button>`).join("") || `<div class="muted small">Walking and standing only: no sets or station stays.</div>`;
+  let playing = true, speed = 1, crop = null, raf, showSk = true;
+  let want = T0;
+  const seek = t => { want = Math.max(T0, Math.min(T1, t)); v.currentTime = want; crop = null; };
+  v.addEventListener("loadeddata", () => { host.querySelector(".prp-wait")?.remove(); v.currentTime = want; v.play().catch(() => {}); }, {once: true});
+  function frame() {
+    raf = requestAnimationFrame(frame);
+    if (v.readyState < 2) return;
+    let t = v.currentTime;
+    if (t < T0 - 0.5 || t > T1) { seek(T0); t = T0; }
+    const inR = bd.ranges.find(r => t >= r[0] && t <= r[1]);
+    if (!inR) { const nx = bd.ranges.find(r => r[0] > t); seek(nx ? nx[0] : T0); return; } // skip time they're off camera
+    if (playing && v.paused) v.play().catch(() => {}); if (!playing && !v.paused) v.pause();
+    v.playbackRate = speed;
+    const dpr = devicePixelRatio || 1, cw = cv.clientWidth, chh = cv.clientHeight; if (!cw || !chh) return;
+    const W = v.videoWidth, H = v.videoHeight, [bx, by, bw, bh] = boxAt(tr, t), A = cw / chh; // crop has the canvas's aspect, so nothing stretches
+    let h = Math.max(bh * H * 1.9, H * 0.6), w = h * A; if (w < bw * W * 1.8) { w = bw * W * 1.8; h = w / A; }
+    h = Math.min(h, H); w = Math.min(w, W, h * A); h = w / A;
+    const tgt = {x: Math.max(0, Math.min(W - w, (bx + bw / 2) * W - w / 2)), y: Math.max(0, Math.min(H - h, (by + bh / 2) * H - h / 2)), w, h};
+    crop = crop ? {x: crop.x + (tgt.x - crop.x) * 0.18, y: crop.y + (tgt.y - crop.y) * 0.18, w: crop.w + (tgt.w - crop.w) * 0.18, h: crop.h + (tgt.h - crop.h) * 0.18} : tgt;
+    if (cv.width !== Math.round(cw * dpr)) { cv.width = Math.round(cw * dpr); cv.height = Math.round(chh * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.drawImage(v, crop.x, crop.y, crop.w, crop.h, 0, 0, cw, chh);
+    const map = p => [(p[0] * W - crop.x) / crop.w * cw, (p[1] * H - crop.y) / crop.h * chh];
+    const set = tr.sets.find(x => t >= x.t0 && t <= x.t1), si = set ? tr.sets.indexOf(set) : -1, smp = tr.samples.reduce((a, b) => Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a);
+    // outline the person so it's clear who this is in a crowd
+    const [qx, qy] = map([bx, by]), [rx, ry] = map([bx + bw, by + bh]); ctx.strokeStyle = set ? "#5b8af0" : "rgba(255,255,255,.85)"; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(qx, qy, rx - qx, ry - qy); ctx.setLineDash([]);
+    if (showSk) { const pose = tr.pose(t); if (pose) drawSkeleton(ctx, pose, map, {color: set ? "#3d7cf0" : "#ffb347", width: 3, joint: 3}); }
+    cap.innerHTML = set ? `<b>Set ${si + 1} · ${set.reps} reps</b><span>${esc(machineName(set.m))}</span>` : smp.zone ? `<b>${esc(machineName(smp.zone))}</b><span>between sets</span>` : `<b>On the floor</b><span>moving</span>`;
+    cap.className = "prp-cap " + (set ? "lift" : smp.zone ? "rest" : "");
+    range.value = String(Math.round((t - T0) / span * 1000)); tEl.textContent = `${clockFmt(t - T0)} / ${clockFmt(span)}`;
+  }
+  raf = requestAnimationFrame(frame);
+  host.querySelector("[data-pp]").onclick = e => { playing = !playing; e.currentTarget.innerHTML = playing ? IC.pause : IC.play; };
+  host.querySelector("[data-sp]").onclick = e => { speed = speed === 1 ? 2 : speed === 2 ? 4 : 1; e.currentTarget.textContent = speed + "×"; };
+  host.querySelector("[data-sk]").onchange = e => { showSk = e.target.checked; };
+  range.oninput = () => seek(T0 + range.value / 1000 * span);
+  host.querySelector(".prp-ch").onclick = e => { const b = e.target.closest("[data-seek]"); if (b) seek(+b.dataset.seek); };
+  return {seek, destroy() { cancelAnimationFrame(raf); v.pause(); v.removeAttribute("src"); v.innerHTML = ""; v.load(); }};
+}
+function stationTimesHTML(bd) {
+  const mx = Math.max(1, ...bd.stations.map(s => s.all), bd.floor);
+  const row = (name, lift, idle, tip) => `<div class="stn" data-tip="${esc(tip)}"><span class="nm">${esc(name)}</span><div class="bar3"><i style="width:${(lift / mx * 100).toFixed(1)}%;background:var(--lift)"></i><i style="width:${(idle / mx * 100).toFixed(1)}%;background:var(--rest)"></i></div><span class="muted num">${fmtDur(lift + idle)}</span></div>`;
+  return `<div class="stn-facts"><div><span class="eyebrow">On camera</span><b class="num">${fmtDur(bd.total)}</b></div><div><span class="eyebrow">First seen</span><b class="num">${clockFmt(bd.first)}</b></div><div><span class="eyebrow">Last seen</span><b class="num">${clockFmt(bd.last)}</b></div><div><span class="eyebrow">At stations</span><b class="num">${bd.total ? Math.round(bd.stations.reduce((a, s) => a + s.all, 0) / bd.total * 100) : 0}%</b></div></div>
+    ${bd.stations.map(s => row(machineName(s.id), s.lift, s.idle, `${machineName(s.id)}\nIn a set ${fmtDur(s.lift)}\nThere, not lifting ${fmtDur(s.idle)}`)).join("")}
+    ${row("On the floor / walking", 0, 0, `Moving or standing away from equipment\n${fmtDur(bd.floor)}`).replace('<div class="bar3">', `<div class="bar3"><i style="width:${(bd.floor / mx * 100).toFixed(1)}%;background:var(--other)"></i>`).replace(/<span class="muted num">[^<]*<\/span>/, `<span class="muted num">${fmtDur(bd.floor)}</span>`)}
+    <div class="legend" style="margin-top:8px"><span><i style="background:var(--lift)"></i>In a set</span><span><i style="background:var(--rest)"></i>At the station, not lifting</span><span><i style="background:var(--other)"></i>Floor / walking</span></div>
+    <p class="muted small" style="margin:8px 0 0">Estimated from where the cameras placed them each second; gaps over 2 s (out of view) aren't counted.</p>`;
+}
+function stateStripHTML(bd) {
+  const span = Math.max(1, bd.last + 1 - bd.first);
+  return `<div class="sstrip">${bd.segs.map(g => `<i data-seek="${g.t0}" data-tip="${esc(segLabel(g))}\n${clockFmt(g.t0 - bd.first)}–${clockFmt(g.t1 - bd.first)} (${fmtDur(g.t1 - g.t0)})" style="left:${((g.t0 - bd.first) / span * 100).toFixed(2)}%;width:${Math.max(0.3, (g.t1 - g.t0) / span * 100).toFixed(2)}%;background:${segColor(g.state)}"></i>`).join("")}</div>
+    <div class="sstrip-ax"><span>${clockFmt(0)}</span><span>${clockFmt(span / 2)}</span><span>${clockFmt(span)}</span></div>`;
+}
+
 function MemberPage(id) {
   let prog = null, trendM = null, metric = "reps", built = false;
   return {
@@ -234,13 +324,25 @@ function MemberPage(id) {
     mount(v) {
       v.append(el(`<div class="profile"><section class="card ph" id="ph"></section><section class="tiles" id="ptiles"></section>
         <section class="card"><div class="card-h"><h2>Today's session</h2><span class="right legend"><span><i style="background:var(--lift)"></i>Set</span><span><i style="background:var(--rest)"></i>Rest between sets</span></span></div><div class="card-b" id="pstrip"></div></section>
+        <section class="card" id="preplay"><div class="card-h"><h2>Activity replay</h2><span class="hint" id="preplayT"></span><span class="right hint">follows this person · click a chapter to jump</span></div><div class="card-b" id="preplayB"></div></section>
+        <section class="card" id="pstate" hidden><div class="card-h"><h2>Timeline</h2><span class="hint">every second on camera</span><span class="right legend"><span><i style="background:var(--lift)"></i>In a set</span><span><i style="background:var(--rest)"></i>At a station</span><span><i style="background:var(--other)"></i>Moving</span></span></div><div class="card-b" id="pstateB"></div></section>
+        <section class="card" id="pstations" hidden><div class="card-h"><h2>Time by station</h2><span class="hint">estimated from the cameras</span></div><div class="card-b" id="pstationsB"></div></section>
         <section class="card" id="ppose" hidden><div class="card-h"><h2>Posture</h2><span class="hint" id="pposeT"></span><span class="right hint">skeleton from the cameras · drag to scrub</span></div><div class="card-b" id="pposeB"></div></section>
         <div id="phist"><div class="card empty">Loading history…</div></div></div>`));
       const clip = src.poseClip?.(id);
       if (src.poseClip) { $("#ppose").hidden = false; $("#pposeT").textContent = clip ? `${clip.title} · ${clip.camera}` : ""; this.player = skeletonPlayer($("#pposeB"), clip); }
+      const tr = src.personTrack?.(id);
+      if (tr) {
+        const bd = personBreakdown(tr);
+        $("#preplayT").textContent = `${tr.camera} · ${fmtDur(bd.total)} on camera · ${tr.sets.length} set${tr.sets.length === 1 ? "" : "s"}`;
+        this.replay = personReplay($("#preplayB"), tr, bd);
+        $("#pstate").hidden = $("#pstations").hidden = false;
+        $("#pstateB").innerHTML = stateStripHTML(bd); $("#pstationsB").innerHTML = stationTimesHTML(bd);
+        $("#pstateB").onclick = e => { const g = e.target.closest("[data-seek]"); if (g) { this.replay.seek(+g.dataset.seek); $("#preplay").scrollIntoView({behavior: "smooth", block: "start"}); } };
+      } else $("#preplayB").innerHTML = `<div class="empty" style="padding:20px">${src.mode === "server" ? "Video replay is available for analysed recordings; live cameras aren't recorded, so there's no video to replay." : "No camera footage for this member."}</div>`;
       this.load();
     },
-    unmount() { this.player?.destroy(); },
+    unmount() { this.player?.destroy(); this.replay?.destroy(); },
     async load() {
       prog = await src.progress(id).catch(() => null); built = false; this.update();
     },
@@ -419,6 +521,7 @@ function MapPage() {
         if (scenes[key] !== token) return;
         view = mountTwin(box.querySelector(".p3"), {plan: p, machines: cfg.machines, cams, layer: () => layer, labelOf,
           people: () => (p.cameras || [{id: p.id}]).flatMap(c => src.peopleNow?.(c.id) || []), states: () => lastStates, heat: () => src.heat?.(p.id) || lastFloor[p.id]?.heat,
+          usage: () => Object.fromEntries(Object.values(util).map(u => [u.machine, {busy_s: u.busy, sets: u.n}])),
           onHover: markHover, onOpen: openPerson, onMachine: openMachine});
       } else {
         const sc = src.sceneFor(p.id), [{mountScene}, meta] = await Promise.all([import("./scene3d.js"), sc.meta()]);
@@ -762,6 +865,10 @@ function SettingsPage() {
       ${field("units", "Weight units", "", sel("units", [["kg", "Kilograms"], ["lb", "Pounds"]], "kg"))}
       ${field("week", "Week starts on", "For weekly goals and reports", sel("week", [["mon", "Monday"], ["sun", "Sunday"]], "mon"))}
     </div></section>
+    <section class="card"><div class="card-h"><h2>Safety alerts</h2><span class="hint">emergency spotter</span></div><div class="card-b sform">
+      ${field("safety", "Spotter alerts", "Alert staff when someone lies still under a bar or on the floor for 20 seconds", tog("safety", true))}
+      <div class="sfield"><div><label>Test</label><small>Shows the alert staff would see, without a real event</small></div><div><button class="btn secondary sm" id="safetytest">Send test alert</button></div></div>
+    </div></section>
     <section class="card"><div class="card-h"><h2>Sites</h2><span class="hint">each site is a GymTrack server on that gym's network</span></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>Site</th><th>Cameras</th><th>Stations</th><th>Status</th></tr></thead><tbody>
       <tr><td><b>${esc(cfg.gym)}</b></td><td class="num">${cfg.cameras.length}</td><td class="num">${cfg.machines.length}</td><td>${(live?.camera_status || []).every(c => c.status === "live") ? '<span class="pill good"><i></i>Online</span>' : '<span class="pill warn"><i></i>Degraded</span>'}</td></tr></tbody></table></div>
       <p class="muted small">Add a site by installing GymTrack on a mini-PC at that location and connecting it to this organisation with an API key.</p></div></section>`,
@@ -807,6 +914,7 @@ function SettingsPage() {
         }
         const rm = e.target.closest("[data-urm]"); if (rm) { const u = users(), [x] = u.splice(+rm.dataset.urm, 1); store.set("users", u); audit("Removed user", x.email); return draw(); }
         const ig = e.target.closest("[data-int]"); if (ig) { store.set("set:int:" + ig.dataset.int, true); audit("Requested integration", ig.dataset.int); ig.textContent = "Requested"; toast(`Request for ${ig.dataset.int} recorded`); return; }
+        if (e.target.closest("#safetytest")) { safetyTest(); return; }
         if (e.target.closest("#auditcsv")) downloadCSV("audit-log.csv", [["When", "Who", "Action", "Details"], ...store.get("audit", []).map(x => [new Date(x.t).toISOString(), x.who, x.action, x.detail])]);
       };
       root.onchange = e => {
@@ -827,7 +935,7 @@ function popover(anchor, html, onClick) {
 }
 document.addEventListener("click", e => { const pop = $("#pop"); if (!pop.hidden && !pop.contains(e.target) && !e.target.closest("#" + pop.dataset.for)) pop.hidden = true; });
 function alerts() {
-  const out = [];
+  const out = [...(typeof SAFETY !== "undefined" ? SAFETY.active : [])];
   for (const c of live?.camera_status || []) if (c.status !== "live") out.push({level: "bad", title: `${c.name || c.id} is ${c.status}`, detail: "Check power and the network connection to the camera.", href: "#cameras"});
   const obs = Object.values(util).reduce((a, u) => Math.max(a, u.busy), 0);
   for (const u of Object.values(util)) if (obs > 0 && u.n >= 3 && u.busy >= obs && cfg.machines.length > 2) out.push({level: "warn", title: `${machineName(u.machine)} is the busiest station`, detail: `${u.n} sets, ${fmtDur(u.busy)} under load today. See Insights for layout suggestions.`, href: "#insights"});
@@ -895,6 +1003,7 @@ let failures = 0;
 async function refresh() {
   try { live = await src.live(); failures = 0; }
   catch { if (++failures === 3) toast("Lost connection to the GymTrack server. Retrying…", true); return; }
+  if (typeof safetyTick === "function") safetyTick(cfg.cameras);
   renderSys(); renderChrome();
   if (document.querySelector(".scrim")) return; // don't move things under an open dialog
   page?.update?.();

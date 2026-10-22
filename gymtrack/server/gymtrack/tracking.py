@@ -24,7 +24,7 @@ DEFAULT_MODEL = Path(__file__).resolve().parents[1] / "models" / "yolox.onnx"
 class PersonDetector:
     """YOLOX-S person detector (COCO class 0)."""
 
-    def __init__(self, model: str | Path = DEFAULT_MODEL, conf: float = 0.45, nms: float = 0.45):
+    def __init__(self, model: str | Path = DEFAULT_MODEL, conf: float = 0.25, nms: float = 0.45):
         if not Path(model).exists():
             raise FileNotFoundError(f"person model not found at {model}; run: python -m gymtrack models")
         self.net = cv2.dnn.readNet(str(model))
@@ -169,8 +169,10 @@ class PeopleTracker:
     """Per-camera multi-person tracker with zone dwell times."""
 
     def __init__(self, zones, detector: PersonDetector, detect_every_s: float = 0.34, max_age_s: float = 6.0, min_hits: int = 3,
-                 pose=None, homography=None, plan_size: tuple[float, float] | None = None, exercise_names: bool = True):
+                 pose=None, homography=None, plan_size: tuple[float, float] | None = None, exercise_names: bool = True,
+                 ignore: list | None = None):
         self.exercise_names = exercise_names
+        self.ignore = [np.array(p, np.float32) for p in (ignore or [])]
         self.zones = [(z.machine, np.array(z.polygon, np.float32)) for z in zones]
         self.det = detector
         self.every, self.max_age, self.min_hits = detect_every_s, max_age_s, min_hits
@@ -198,15 +200,20 @@ class PeopleTracker:
         return None
 
     def update(self, frame: np.ndarray, t: float, tags: dict[int, tuple[float, float]] | None = None,
-               member_by_tag=None) -> list[Track]:
+               member_by_tag=None, full: np.ndarray | None = None) -> list[Track]:
+        """frame: the analysis frame (zones are in its pixels). full: optional higher-resolution copy of the
+        same frame, used for pose so small and distant people get a usable skeleton."""
         dt = 0.0 if self.last_t is None else max(0.0, min(1.0, t - self.last_t))
         self.last_t = t
         if t - self.last_detect >= self.every:
             self.last_detect = t
             self._frame = frame
-            self._associate(self.det.detect(frame), t)
+            dets = self.det.detect(frame)
+            if self.ignore:  # drop reflections in mirrors etc.: feet inside an ignore area
+                dets = [d for d in dets if not any(cv2.pointPolygonTest(poly, (d[0] + d[2] / 2, d[1] + d[3]), False) >= 0 for poly in self.ignore)]
+            self._associate(dets, t)
             if self.pose is not None:
-                self._update_poses(frame, t)
+                self._update_poses(frame, t, full)
             self.count_hist = [c for c in self.count_hist if t - c[0] <= 10] + [(t, len(self.visible(t)))]
         # identity from tags inside a box
         for tag, (tx, ty) in (tags or {}).items():
@@ -248,14 +255,24 @@ class PeopleTracker:
     def visible(self, t: float) -> list[Track]:
         return [tr for tr in self.tracks.values() if tr.hits >= self.min_hits and t - tr.last <= self.every * 1.5 and tr.is_person]
 
-    def _update_poses(self, frame: np.ndarray, t: float):
+    def _update_poses(self, frame: np.ndarray, t: float, full: np.ndarray | None = None):
         from .activity import classify
+        k = full.shape[1] / frame.shape[1] if full is not None else 1.0
+        src = full if full is not None else frame
+        min_h = 0.07 if hasattr(self.pose, "sess") else 0.12  # RTMPose copes with smaller people
         for tr in self.tracks.values():
             if tr.last != t:
                 continue  # not detected this round
-            if tr.box[3] < 0.12 * frame.shape[0]:
+            if tr.box[3] < min_h * frame.shape[0]:
                 continue  # too small/far for a reliable pose
-            kp = self.pose.estimate(frame, tr.box)
+            # steady crop: smooth the box the pose model sees, so detector jitter doesn't shake the skeleton
+            pb = getattr(tr, "pose_box", None)
+            tr.pose_box = tr.box if pb is None or t - getattr(tr, "pose_t", -9) > 1.0 else tuple(0.6 * a + 0.4 * b for a, b in zip(pb, tr.box))
+            kp = self.pose.estimate(src, tuple(v * k for v in tr.pose_box))
+            if kp is not None and k != 1.0:
+                kp = kp.copy(); kp[:, :2] /= k
+            if kp is not None:
+                kp = self._smooth_pose(tr, kp, t)
             tr.pose_tries += 1
             if kp is None:
                 continue
@@ -267,8 +284,44 @@ class PeopleTracker:
                 tr.act_raw = (tr.act_raw + [(raw, conf)])[-3:]
                 tr.activity, tr.act_conf = gate_activity(tr.act_raw, tr.stationary)
 
+    HIGH = 0.45  # detections above this can start tracks; weaker ones only keep existing tracks alive
+
+    @staticmethod
+    def _smooth_pose(tr, kp: np.ndarray, t: float) -> np.ndarray:
+        """Adaptive temporal smoothing per joint (One-Euro style): still joints are heavily smoothed,
+        fast-moving joints follow quickly. Also keeps the whole body: joints the model is unsure of stay
+        in place (with low weight) instead of disappearing, clamped to the person's box."""
+        x, y, w, h = tr.box
+        kp = kp.copy()
+        kp[:, 0] = np.clip(kp[:, 0], x - 0.1 * w, x + 1.1 * w)
+        kp[:, 1] = np.clip(kp[:, 1], y - 0.05 * h, y + 1.05 * h)
+        prev, pt = getattr(tr, "kp_s", None), getattr(tr, "pose_t", None)
+        tr.pose_t = t
+        if prev is None or pt is None or t - pt > 1.0:
+            tr.kp_s = kp
+            return kp
+        scale = max(h, 1.0)
+        speed = np.linalg.norm(kp[:, :2] - prev[:, :2], axis=1) / scale / max(t - pt, 1e-3)  # body heights per second
+        alpha = np.clip(0.3 + 0.6 * speed, 0.3, 0.95)[:, None]
+        conf = kp[:, 2:3]
+        alpha = alpha * np.clip(conf / 0.5, 0.25, 1.0)  # unsure joints move less
+        out = prev.copy()
+        out[:, :2] = prev[:, :2] + alpha * (kp[:, :2] - prev[:, :2])
+        out[:, 2] = np.maximum(kp[:, 2], 0.6 * prev[:, 2])
+        tr.kp_s = out
+        return out
+
     def _associate(self, dets, t: float):
-        """Match detections to tracks: overlap first, then distance (gated by size and time since seen)."""
+        """Match detections to tracks (ByteTrack-style two stages).
+
+        1. confident detections: overlap first, then distance (gated by size and time since seen), with a
+           clothing-colour term so two people crossing don't swap IDs;
+        2. weak detections (partly hidden people) may only extend tracks left unmatched by stage 1.
+        """
+        frame = getattr(self, "_frame", None)
+        low = [d for d in dets if d[4] < self.HIGH]
+        dets = [d for d in dets if d[4] >= self.HIGH]
+        looks = [appearance(frame, d[:4]) if frame is not None else None for d in dets]
         cands = []
         for tid, tr in self.tracks.items():
             gap = t - tr.last
@@ -282,10 +335,13 @@ class PeopleTracker:
                 size = (ph + d[3]) / 2
                 dist = ((fx - dfx) ** 2 + (fy - dfy) ** 2) ** 0.5 / max(size, 1)
                 ratio = d[3] / max(ph, 1)
+                pen = 0.0
+                if tr.look is not None and looks[j] is not None:
+                    pen = 0.6 * max(0.0, 0.85 - float(np.dot(tr.look, looks[j])))  # different clothes: costlier
                 if iou >= 0.15:
-                    cands.append((1 - iou, tid, j))
+                    cands.append((1 - iou + pen, tid, j))
                 elif dist <= 0.5 + 0.35 * min(gap, 4) and 0.6 <= ratio <= 1.6:
-                    cands.append((1 + dist, tid, j))
+                    cands.append((1 + dist + pen, tid, j))
         used_t, used_d = set(), set()
         for _, tid, j in sorted(cands):
             if tid in used_t or j in used_d:
@@ -299,7 +355,20 @@ class PeopleTracker:
             tr.box, tr.last, tr.hits = tuple(d[:4]), t, tr.hits + 1
             tr.trail = (tr.trail + [tuple(map(int, tr.feet))])[-20:]
             tr.feet_hist = [p for p in tr.feet_hist if t - p[0] <= 2.5] + [(t, *tr.feet)]
-        frame = getattr(self, "_frame", None)
+        # stage 2: weak detections only extend unmatched, recently seen tracks with clear overlap
+        for tid, tr in self.tracks.items():
+            if tid in used_t or t - tr.last > 1.0:
+                continue
+            best, bi = 0.3, None
+            for j, d in enumerate(low):
+                iou = _iou(tr.box, d)
+                if iou > best:
+                    best, bi = iou, j
+            if bi is not None:
+                d = low.pop(bi)
+                tr.box, tr.last, tr.hits = tuple(d[:4]), t, tr.hits + 1
+                tr.trail = (tr.trail + [tuple(map(int, tr.feet))])[-20:]
+                tr.feet_hist = [p for p in tr.feet_hist if t - p[0] <= 2.5] + [(t, *tr.feet)]
         for tid in used_t:  # refresh appearance of matched people
             tr = self.tracks[tid]
             if frame is not None:
@@ -309,7 +378,7 @@ class PeopleTracker:
         for j, d in enumerate(dets):
             if j in used_d:
                 continue
-            look = appearance(frame, d[:4]) if frame is not None else None
+            look = looks[j]
             back = self._reidentify(d, look, t)
             if back is not None:  # someone we lost a moment ago: give them their old ID back
                 tr = self.lost.pop(back)

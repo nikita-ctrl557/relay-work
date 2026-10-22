@@ -76,3 +76,61 @@ def draw_pose(img: np.ndarray, kp: np.ndarray, color=(255, 210, 120)) -> None:
     for i in (L_SH, R_SH, L_EL, R_EL, L_WR, R_WR, L_HIP, R_HIP, L_KN, R_KN, L_AN, R_AN):
         if kp[i, 2] > .4:
             cv2.circle(img, (int(kp[i, 0]), int(kp[i, 1])), 3, (255, 255, 255), -1, cv2.LINE_AA)
+
+
+RTM_MODEL = Path(__file__).resolve().parents[1] / "models" / "rtmpose-m.onnx"
+RTM_URL = "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.zip"
+# COCO-17 keypoints (RTMPose) -> the BlazePose indices the rest of GymTrack uses
+_COCO_TO_BP = [NOSE, 2, 5, 7, 8, L_SH, R_SH, L_EL, R_EL, L_WR, R_WR, L_HIP, R_HIP, L_KN, R_KN, L_AN, R_AN]
+
+
+class RTMPoseEstimator:
+    """RTMPose-m (Apache-2.0, OpenMMLab) via onnxruntime: far more accurate than BlazePose on small,
+    distant or partly hidden people, which is what a gym's wall camera sees. Same interface as PoseEstimator."""
+    W, H = 192, 256
+    MEAN = np.array([123.675, 116.28, 103.53], np.float32)
+    STD = np.array([58.395, 57.12, 57.375], np.float32)
+
+    def __init__(self, model: str | Path = RTM_MODEL, conf: float = 0.3, threads: int = 2):
+        import onnxruntime as ort
+        o = ort.SessionOptions(); o.intra_op_num_threads = threads
+        self.sess = ort.InferenceSession(str(model), o, providers=["CPUExecutionProvider"])
+        self.conf = conf
+
+    def estimate(self, img: np.ndarray, box) -> np.ndarray | None:
+        x, y, w, h = box
+        if w < 6 or h < 12:
+            return None
+        cx, cy = x + w / 2, y + h / 2
+        bw, bh = w * 1.25, h * 1.25
+        if bw / bh > self.W / self.H:
+            bh = bw * self.H / self.W
+        else:
+            bw = bh * self.W / self.H
+        # affine: box -> 192x256 input
+        sx, sy = self.W / bw, self.H / bh
+        M = np.array([[sx, 0, self.W / 2 - cx * sx], [0, sy, self.H / 2 - cy * sy]], np.float32)
+        crop = cv2.warpAffine(img, M, (self.W, self.H), flags=cv2.INTER_LINEAR, borderValue=(0, 0, 0))
+        inp = ((cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32) - self.MEAN) / self.STD).transpose(2, 0, 1)[None]
+        sx_out, sy_out = self.sess.run(None, {"input": inp})
+        px, py = sx_out[0].argmax(1), sy_out[0].argmax(1)
+        vx, vy = sx_out[0].max(1), sy_out[0].max(1)
+        score = np.minimum(vx, vy)
+        if float(np.mean(score[[5, 6, 11, 12]])) < self.conf:
+            return None
+        u, v = px / 2.0, py / 2.0  # SimCC split ratio 2
+        X, Y = (u - M[0, 2]) / sx, (v - M[1, 2]) / sy
+        out = np.zeros((33, 3), np.float32)
+        for k, j in enumerate(_COCO_TO_BP):
+            out[j] = (X[k], Y[k], float(np.clip(score[k], 0, 1)))
+        return out
+
+
+def make_pose_estimator():
+    """Best available pose model: RTMPose if installed (python -m gymtrack models), else BlazePose, else None."""
+    try:
+        if RTM_MODEL.exists():
+            return RTMPoseEstimator()
+    except Exception:
+        pass
+    return PoseEstimator() if POSE_MODEL.exists() else None

@@ -650,6 +650,15 @@ class ReplaySource {
   ct(c) { return c.el.currentTime || 0; }
   at(c, ct) { const tl = c.data.timeline; let lo = 0, hi = tl.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (tl[m].t <= ct) lo = m; else hi = m - 1; } return tl[lo]; }
   abs(c, x) { return Date.now() / 1000 - this.ct(c) + x; }   // video seconds -> wall clock for display
+  personTrack(memberId) { // everything recorded about one tracked person, for the profile's replay and time breakdown
+    const m = this.cfg.members.find(x => x.id === memberId), c = m && this.cams.find(x => x.id === m.cam); if (!c) return null;
+    const samples = [];
+    for (const e of c.data.timeline) for (const p of e.p) if (p[0] === m.pid) samples.push({t: e.t, box: [p[4], p[5], p[6], p[7]], zone: p[2], planted: !!p[3], act: p[8]});
+    if (!samples.length) return null;
+    const sets = c.data.sets.filter(s => s.pid === m.pid).sort((a, b) => a.t0 - b.t0);
+    const sources = [[c.video, "video/mp4"], [c.video_webm, "video/webm"]].filter(([f]) => f).map(([f, type]) => ({src: this.base + f, type}));
+    return {camera: c.name, camId: c.id, pid: m.pid, samples, sets, sources, duration: c.data.duration, pose: t => this.poseAt(c, m.pid, t)};
+  }
   personStats(c, pid, ct) {
     const done = c.data.sets.filter(s => s.pid === pid && s.t1 <= ct), seen = c.data.timeline.filter(e => e.t <= ct && e.p.some(p => p[0] === pid));
     if (!seen.length) return null;
