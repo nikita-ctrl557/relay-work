@@ -102,7 +102,7 @@ export function mountScene(host, {meta, base, cam, peopleNow, heat, plan, layer 
   // people: a capsule standing on the floor + an HTML label you can hover and click
   const body = new THREE.CapsuleGeometry(M(0.24), M(1.25), 4, 12), people = new Map();
   const upQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), N);
-  const mats = {move: 0x9aa4b2, station: 0xf26b2e, lift: 0x3d7cf0};
+  const mats = {move: 0x9aa4b2, station: 0xe4572e, lift: 0x4b56f0};
   const boneGeo = new THREE.CylinderGeometry(M(0.035), M(0.035), 1, 8), jointGeo = new THREE.SphereGeometry(M(0.045), 10, 8), headGeo = new THREE.SphereGeometry(M(0.11), 16, 12);
   const jointMat = new THREE.MeshBasicMaterial({color: 0xffffff}), Y = new THREE.Vector3(0, 1, 0);
   const O3 = new THREE.Vector3(), poseTo3D = (pose, F) => { // 2D joints -> upright plane through the feet, facing the camera

@@ -40,7 +40,7 @@ const PLATES = ["#1d5bd8", "#c9352b", "#c99200", "#1f8a4c", "#4b5563", "#7a3fd1"
 const hash = s => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const plateFor = id => PLATES[hash(id) % PLATES.length];
 const initials = n => { const m = String(n || "").match(/#(\d+)/); return m ? "#" + m[1] : String(n || "?").split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase(); };
-const avatar = (m, cls = "") => `<span class="avatar ${cls}" style="--a:${plateFor(m.id)}">${esc(initials(m.name))}</span>`;
+const avatar = (m, cls = "") => `<span class="avatar ${cls}">${esc(initials(m.name))}</span>`;
 const clockFmt = s => { s = Math.max(0, Math.round(s || 0)); const m = Math.floor(s / 60); return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${m}:${String(s % 60).padStart(2, "0")}`; };
 const hm = ts => new Date(ts * 1000).toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"});
 const ago = s => s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
@@ -213,7 +213,7 @@ function poseAngles(p) { // knee bend, hip angle, torso lean from vertical (degr
   return {knee: knee.length ? Math.min(...knee) : null, hip: hip.length ? Math.min(...hip) : null, lean};
 }
 // draw on a 2D canvas; map(p) -> [x, y] in canvas pixels
-function drawSkeleton(ctx, pts, map, {color = "#3d7cf0", width = 3, joint = 3.2, alpha = 1, outline = true} = {}) {
+function drawSkeleton(ctx, pts, map, {color = "#4b56f0", width = 3, joint = 3.2, alpha = 1, outline = true} = {}) {
   ctx.save(); ctx.globalAlpha = alpha; ctx.lineCap = "round"; ctx.lineJoin = "round";
   const P = pts.map(p => p && map(p));
   const lines = (w, c) => { ctx.lineWidth = w; for (const [a, b] of SKEL_EDGES) if (P[a] && P[b]) { ctx.strokeStyle = typeof c === "function" ? c(a, b) : c; ctx.beginPath(); ctx.moveTo(...P[a]); ctx.lineTo(...P[b]); ctx.stroke(); } };
@@ -247,8 +247,8 @@ function skeletonPlayer(host, clip) {
     const floorY = oy + bh * s + 4; ctx.strokeStyle = "rgba(127,127,127,.35)"; ctx.lineWidth = 1; ctx.setLineDash([4, 5]); ctx.beginPath(); ctx.moveTo(12, floorY); ctx.lineTo(w - 12, floorY); ctx.stroke(); ctx.setLineDash([]);
     const pts = at(t);
     trail.push(pts); if (trail.length > 7) trail.shift();
-    trail.slice(0, -1).forEach((p, i) => drawSkeleton(ctx, p, map, {color: clip.color || "#3d7cf0", width: 2, joint: 0, alpha: 0.06 + i * 0.03, outline: false}));
-    drawSkeleton(ctx, pts, map, {color: clip.color || "#3d7cf0", width: Math.min(7, Math.max(3, s * 0.012)), joint: Math.min(5, Math.max(3, s * 0.01))});
+    trail.slice(0, -1).forEach((p, i) => drawSkeleton(ctx, p, map, {color: clip.color || "#4b56f0", width: 2, joint: 0, alpha: 0.06 + i * 0.03, outline: false}));
+    drawSkeleton(ctx, pts, map, {color: clip.color || "#4b56f0", width: Math.min(7, Math.max(3, s * 0.012)), joint: Math.min(5, Math.max(3, s * 0.01))});
     const a = poseAngles(pts), row = (k, l, help) => a[k] == null ? "" : `<div data-tip="${help}"><span class="eyebrow">${l}</span><b class="num">${Math.round(a[k])}°</b><small class="muted">range ${Math.round(lo.min[k])}–${Math.round(lo.max[k])}°</small></div>`;
     ang.innerHTML = row("knee", "Knee", "Angle at the knee: 180° is straight, under 90° is below parallel on a squat") + row("hip", "Hip", "Angle between torso and thigh") + row("lean", "Torso lean", "Torso angle from vertical");
     range.value = String(Math.round((t - t0) / dur * 1000)); tEl.textContent = `${clockFmt(t - t0)} / ${clockFmt(dur)}`;

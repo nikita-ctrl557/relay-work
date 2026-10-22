@@ -15,7 +15,7 @@ let src, cfg, live, me, prog = null, progAt = 0, range = "7";
 
 const ring = (frac, color, value, label) => {
   const r = 42, c = 2 * Math.PI * r, f = Math.max(0, Math.min(1, frac || 0));
-  return `<div class="ring"><svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="${r}" fill="none" stroke="rgba(140,150,165,.25)" stroke-width="8"/><circle cx="50" cy="50" r="${r}" fill="none" stroke="${color}" stroke-width="8" stroke-linecap="round" stroke-dasharray="${c * f} ${c}"/></svg><div class="v">${value}${label ? `<small>${label}</small>` : ""}</div></div>`;
+  return `<div class="ring"><svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="${r}" fill="none" style="stroke:var(--hair)" stroke-width="7"/><circle cx="50" cy="50" r="${r}" fill="none" style="stroke:${color}" stroke-width="7" stroke-linecap="butt" stroke-dasharray="${c * f} ${c}"/></svg><div class="v">${value}${label ? `<small>${label}</small>` : ""}</div></div>`;
 };
 const dur = s => { s = Math.max(0, Math.round(s || 0)); return s >= 3600 ? `${Math.floor(s / 3600)}h ${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}m` : clockFmt(s); };
 const meRow = () => live?.members.find(m => m.id === me) || {id: me, name: memberOf(me)?.name || "", status: "away"};
@@ -43,14 +43,14 @@ function heroHTML(m) {
   const foot = `<div class="foot"><div><b>${clockFmt(m.elapsed_s || 0)}</b><span>in the gym</span></div><div><b>${clockFmt(m.lifting_s || 0)}</b><span>lifting</span></div><div><b>${m.sets || 0}</b><span>sets</span></div><div><b>${m.reps || 0}</b><span>reps</span></div></div>`;
   if (m.status === "lifting" && mach) {
     const setNo = todaySets.filter(s => s[2] === mach.id).length + 1;
-    return `<section class="hero"><div class="lbl"><i></i>Lifting now</div><div class="hmain">${ring(mach.set_elapsed / 40, "#3d7cf0", mach.reps, "reps")}<div><div class="what">${esc(mach.name)}</div><div class="detail">Set ${setNo} · ${clockFmt(mach.set_elapsed)} so far</div></div></div>${foot}</section>`;
+    return `<section class="hero"><div class="lbl"><i></i>Lifting now</div><div class="hmain">${ring(mach.set_elapsed / 40, "var(--blue)", mach.reps, "reps")}<div><div class="what">${esc(mach.name)}</div><div class="detail">Set ${setNo} · ${clockFmt(mach.set_elapsed)} so far</div></div></div>${foot}</section>`;
   }
   if (m.status === "resting") {
     const rest = m.current_rest_s ?? 0, avg = m.avg_rest_s || 90, last = todaySets[todaySets.length - 1];
-    return `<section class="hero resting"><div class="lbl"><i></i>Resting${mach ? " at " + esc(mach.name) : ""}</div><div class="hmain">${ring(rest / Math.max(avg, 30), rest > avg * 1.3 ? "#ef6a5f" : "#ef7a35", clockFmt(rest), "rest")}<div><div class="what">${rest > avg * 1.3 ? "Time for the next set" : "Recover"}</div><div class="detail">Your usual rest is ${clockFmt(avg)}${last ? ` · last set ${last[3]} reps on ${esc(machineName(last[2]))}` : ""}</div></div></div>${foot}</section>`;
+    return `<section class="hero resting"><div class="lbl"><i></i>Resting${mach ? " at " + esc(mach.name) : ""}</div><div class="hmain">${ring(rest / Math.max(avg, 30), rest > avg * 1.3 ? "var(--bad)" : "var(--rest)", clockFmt(rest), "rest")}<div><div class="what">${rest > avg * 1.3 ? "Time for the next set" : "Recover"}</div><div class="detail">Your usual rest is ${clockFmt(avg)}${last ? ` · last set ${last[3]} reps on ${esc(machineName(last[2]))}` : ""}</div></div></div>${foot}</section>`;
   }
   if (m.status === "on floor") {
-    return `<section class="hero"><div class="lbl"><i></i>In the gym</div><div class="hmain">${ring((m.elapsed_s || 0) / 3600, "#3d7cf0", clockFmt(m.elapsed_s || 0), "today")}<div><div class="what">Checked in ${hm(m.session_start)}</div><div class="detail">Between machines. Your next set will show up here as it happens.</div></div></div>${foot}</section>`;
+    return `<section class="hero"><div class="lbl"><i></i>In the gym</div><div class="hmain">${ring((m.elapsed_s || 0) / 3600, "var(--blue)", clockFmt(m.elapsed_s || 0), "today")}<div><div class="what">Checked in ${hm(m.session_start)}</div><div class="detail">Between machines. Your next set will show up here as it happens.</div></div></div>${foot}</section>`;
   }
   const lastS = prog?.session_list?.[0];
   return `<section class="hero away"><div class="lbl"><i></i>Not in the gym</div><div class="hmain"><div><div class="what">${lastS ? "Last visit " + longDate(lastS.start) : "No visits yet"}</div><div class="detail">${lastS ? `${clockFmt(lastS.elapsed_s || 0)} in the gym · ${lastS.sets} sets · ${lastS.reps} reps` : "Wear your tag and your workouts appear here automatically."}</div></div></div></section>`;
