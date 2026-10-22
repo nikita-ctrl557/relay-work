@@ -63,6 +63,10 @@ class FrameAnalyzer:
             for z in self.cam.zones:
                 pts = np.array(z.polygon, dtype=np.int32)
                 x, y, w, h = cv2.boundingRect(pts)
+                # a zone may stick out of the frame (camera nudged, zones carried over): keep the visible part
+                x0, y0 = max(0, x), max(0, y)
+                x1, y1 = min(shape[1], x + w), min(shape[0], y + h)
+                x, y, w, h = x0, y0, max(0, x1 - x0), max(0, y1 - y0)
                 m = np.zeros(shape, np.uint8)
                 cv2.fillPoly(m, [pts], 255)
                 self._masks[z.machine] = (m[y:y + h, x:x + w] > 0, int(np.count_nonzero(m)), (x, y, w, h))
