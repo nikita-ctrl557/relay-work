@@ -331,6 +331,8 @@ class PeopleTracker:
 
     RECENT_S = 1.0       # tracks seen this recently are matched on motion first
     REID_SIM = 0.86      # clothing similarity needed to give a long-lost person their ID back
+    MOVE_SIM = 0.84      # clothing similarity required when a match implies a big move
+    APP_KEEP_MIN_H = 55  # px (analysis frame): smaller people's colours are mostly background and floor
     APP_KEEP_S = 1.0     # one stored signature per track per second, for offline stitching
 
     def __init__(self, zones, detector: PersonDetector, detect_every_s: float = 0.34, max_age_s: float = 6.0, min_hits: int = 3,
@@ -578,11 +580,56 @@ class PeopleTracker:
             v = look if tr.look is None else a * tr.look + (1 - a) * look
             tr.look = v / (np.linalg.norm(v) + 1e-6)
             tr.look_n += 1
-            if not tr.looks or t - tr.looks[-1][0] >= self.APP_KEEP_S:
+            if d[3] >= self.APP_KEEP_MIN_H and (not tr.looks or t - tr.looks[-1][0] >= self.APP_KEEP_S):
                 tr.looks.append((t, look))
         if tr.hits >= self.min_hits and tr.id == 0:
-            tr.id = self.next_id  # public ID only once confirmed: no gaps from one-off false detections
-            self.next_id += 1
+            if not self._adopt(tr, t):
+                tr.id = self.next_id  # public ID only once confirmed: no gaps from one-off false detections
+                self.next_id += 1
+
+    def _adopt(self, tr: Track, t: float) -> bool:
+        """A track about to be confirmed may be someone we lost a moment ago whose first sightings were too
+        unclear to match (half hidden, odd box). Now that it has a few observations, compare again and, if
+        one missing person fits unambiguously, continue their ID instead of starting a new one."""
+        if tr.look is None:
+            return False
+        fm = self.floor
+        best, second = None, None
+        for c in list(self.tracks.values()) + list(self.lost.values()):
+            if c is tr or c.id == 0 or c.last >= tr.first or c.look is None or c.look_n < 3:
+                continue  # coexisted with this track: a different person
+            gap = tr.first - c.last
+            if gap > self.reid_s:
+                continue
+            dm, _ = fm.distance(c.kf.last_obs, tr.kf.last_obs)
+            sim = float(c.look @ tr.look)
+            near = gap <= self.max_age and dm <= 0.5 + 0.9 * gap
+            if not (near and sim >= 0.8) and not (dm <= 0.6 + 1.5 * gap and sim >= self.REID_SIM):
+                continue
+            score = sim - 0.05 * dm / (0.5 + 0.9 * gap)
+            if best is None or score > best[0]:
+                best, second = (score, c), best
+            elif second is None or score > second[0]:
+                second = (score, c)
+        if best is None or (second is not None and best[0] - second[0] < 0.04):
+            return False
+        c = best[1]
+        if c.uid in self.lost:
+            self.lost.pop(c.uid)
+        else:
+            self.tracks.pop(c.uid, None)
+        tr.id, tr.first, tr.member = c.id, c.first, tr.member or c.member
+        tr.merged = c.merged + 1
+        for k, v in c.dwell.items():
+            tr.dwell[k] = tr.dwell.get(k, 0.0) + v
+        for k, v in c.activities.items():
+            tr.activities[k] = tr.activities.get(k, 0.0) + v
+        tr.pose_tries += c.pose_tries
+        tr.pose_hits += c.pose_hits
+        tr.looks = c.looks + tr.looks
+        v = 0.7 * c.look + 0.3 * tr.look
+        tr.look, tr.look_n = v / (np.linalg.norm(v) + 1e-6), c.look_n + tr.look_n
+        return True
 
     def _associate(self, dets, t: float):
         """Match detections to tracks.
@@ -622,9 +669,15 @@ class PeopleTracker:
                     g = self._geo_cost(pb, d, gap)
                     if g is None:
                         continue
-                    G[i, j] = g
                     if tr.look is not None and looks[j] is not None:
                         S[i, j] = float(tr.look @ looks[j])
+                        # a big move since the last real sighting must look like the same clothes: this is how
+                        # an ID slides onto someone walking in front of (or standing behind) its owner
+                        lo = tr.kf.last_obs
+                        moved = math.hypot(lo[0] + lo[2] / 2 - d[0] - d[2] / 2, lo[1] + lo[3] - d[1] - d[3]) / max(lo[3], d[3], 1.0)
+                        if tr.look_n >= 3 and moved > 0.25 and S[i, j] < self.MOVE_SIM:
+                            continue
+                    G[i, j] = g
             # adaptive appearance weight (Deep OC-SORT): trusted detection, established track signature,
             # and only as much as the colours tell the candidates apart. Appearance re-ranks the candidates;
             # it vetoes a match only when a clean view clearly shows someone else.
@@ -672,11 +725,15 @@ class PeopleTracker:
                     g = self._geo_cost(lo, high[j], t - tr.last)
                     if g is None:
                         continue
+                    d = high[j]
+                    moved = math.hypot(lo[0] + lo[2] / 2 - d[0] - d[2] / 2, lo[1] + lo[3] - d[1] - d[3]) / max(lo[3], d[3], 1.0)
                     if tr.look is not None and looks[j] is not None:
                         sim = float(tr.look @ looks[j])
-                        if clean[j] and tr.look_n >= 3 and sim < 0.66:
+                        if (clean[j] and tr.look_n >= 3 and sim < 0.66) or (moved > 0.25 and tr.look_n >= 3 and sim < self.MOVE_SIM):
                             continue
                         g += 0.4 * trust_det[j] * self._app_cost(sim)
+                    elif moved > 0.25:
+                        continue
                     C[i, k] = g
             for i, k in assign(C, 1.3):
                 self._observe(left[i], high[fd[k]], t, looks[fd[k]], clean[fd[k]])

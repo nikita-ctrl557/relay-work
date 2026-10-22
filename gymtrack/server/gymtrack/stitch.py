@@ -25,7 +25,8 @@ import numpy as np
 from .floor import FloorMap
 from .motion import assign
 
-GAP_S = 25.0          # position-only linking (no appearance): at most this long a gap
+GAP_S = 6.0           # position-only linking (no usable appearance): at most this long a gap. Stations get
+                      # re-occupied: after longer, "someone is standing where X was" is often somebody else
 MAX_GAP_S = 120.0     # with matching clothes: long enough to rest out of view, or behind a rack
 WALK = 1.5            # m/s
 SLACK = 0.7           # m: detector box noise, feet hidden by a bench
@@ -71,6 +72,16 @@ def _mean_look(seq):
         return None
     v = np.mean([np.asarray(s, np.float32) for _, s in seq], 0)
     return v / (np.linalg.norm(v) + 1e-6)
+
+
+def _edge_look(seq, start: bool, n: int = 6, span_s: float = 30.0):
+    """Mean signature of a tracklet's first (or last) few clean views, if there are enough of them close to that end."""
+    if len(seq) < 3:
+        return None
+    part = seq[:n] if start else seq[-n:]
+    ref = seq[0][0] if start else seq[-1][0]
+    part = [x for x in part if abs(x[0] - ref) <= span_s]
+    return _mean_look(part) if len(part) >= 3 else None
 
 
 def _sim(a, b):
@@ -130,16 +141,20 @@ def _link_cost(A, B, geo: _Geo, doors, gap_max: float):
     sim = _sim(A["look_end"], B["look_start"])
     edge = _at_edge(A["b1"]) or _at_edge(B["b0"])
     if sim is None:
-        near = SLACK + 0.25 * gap
-        if gap > GAP_S or d > near or not 0.6 < hr < 1.6 or edge:
+        if A.get("crowded") or B.get("crowded"):
+            return None  # someone else was right there: "re-appeared at the same spot" proves nothing
+        near = SLACK + 0.15 * gap
+        if gap > GAP_S or d > near or not 0.67 < hr < 1.5 or edge:
             return None
         return 0.5 * d / near + 0.3 * gap / GAP_S
-    if not 0.5 < hr < 2.0:
+    if not 0.6 < hr < 1.67:
         return None
-    near = d <= SLACK + 0.3 * gap and gap <= 15
-    need = 0.80 if near else 0.87
+    # colour signatures of two different people agree above ~0.90 in 1% of pairs on our footage
+    # (bench/eval_tracking.py data), so far / long links need near-identical clothes
+    near = d <= SLACK + 0.2 * gap and gap <= 15
+    need = 0.86 if near else 0.93
     if edge:
-        need = max(need, 0.9)  # walked out of the picture and back in: clothes must agree strongly
+        need = max(need, 0.94)  # walked out of the picture and back in: clothes must agree strongly
     if sim < need:
         return None
     return _app_cost(sim) + 0.4 * d / (SLACK + WALK * gap) + 0.2 * gap / gap_max
@@ -216,7 +231,24 @@ def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap
         members = {m for _, _, m in seq if m}
         trk[pid] = {"id": pid, "t0": seq[0][0], "t1": seq[-1][0], "b0": seq[0][1], "b1": seq[-1][1],
                     "member": next(iter(members)) if len(members) == 1 else None,
-                    "look_start": _mean_look(lk[:6]), "look_end": _mean_look(lk[-6:])}
+                    "look_start": _edge_look(lk, True), "look_end": _edge_look(lk, False)}
+    # crowded ends: another person within ~1 m when a tracklet ends or starts (where IDs get swapped)
+    by_t: dict[float, list] = {}
+    for e in tl:
+        by_t[e["t"]] = [(p[0], p[4:8]) for p in e["p"]]
+    times = sorted(by_t)
+
+    def crowded(pid, t, box):
+        k = int(np.searchsorted(times, t))
+        for tt in times[max(0, k - 2):k + 3]:
+            if abs(tt - t) > 2.0:
+                continue
+            for q, b in by_t[tt]:
+                if q != pid and geo.dist(box, b) < 1.0:
+                    return True
+        return False
+    for pid, x in trk.items():
+        x["crowded"] = crowded(pid, x["t1"], x["b1"]) or crowded(pid, x["t0"], x["b0"])
     ids = sorted(trk)
     n = len(ids)
     C = np.full((n, n), 1e6)
@@ -227,8 +259,12 @@ def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap
                 if c is not None:
                     C[i, j] = c
     remap: dict[int, int] = {}
+    links = []
     for i, j in assign(C, 1.0):
         remap[ids[j]] = ids[i]
+        A, B = trk[ids[i]], trk[ids[j]]
+        links.append({"a": A["id"], "b": B["id"], "t1": A["t1"], "b1": A["b1"], "t0": B["t0"], "b0": B["b0"],
+                      "cost": round(float(C[i, j]), 3), "sim": _sim(A["look_end"], B["look_start"])})
 
     def root(x):
         seen = set()
@@ -268,7 +304,7 @@ def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap
                     m.setdefault("dwell", {})[k] = m.get("dwell", {}).get(k, 0) + v
         data["people"]["rows"] = list(merged.values())
         data["people"]["tracked"] = len(merged)
-    data["stitch"] = {"merged": len(final), "split": sum(len(v) - 1 for v in split_of.values())}
+    data["stitch"] = {"merged": len(final), "split": sum(len(v) - 1 for v in split_of.values()), "links": links}
     return final
 
 
