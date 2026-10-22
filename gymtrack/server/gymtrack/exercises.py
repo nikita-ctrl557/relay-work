@@ -123,3 +123,50 @@ def refine_sets(sets: list[dict], machines: list[dict], poses: list[dict]) -> No
         ex, conf = pick(c, win)
         if ex:
             s["ex"], s["ex_conf"] = ex, conf
+
+
+def movement(poses: list[list[float]]) -> dict | None:
+    """How much the lifter's body actually moved during a set (hand travel, hip travel, repetitiveness)."""
+    if len(poses) < 5:
+        return None
+    P = np.array([[(np.nan, np.nan) if v[2 * i] < 0 else (v[2 * i] * 1.6, v[2 * i + 1] * 0.9) for i in range(13)] for v in poses], float)
+    sh, hp, wr = np.nanmean(P[:, [1, 2]], 1), np.nanmean(P[:, [7, 8]], 1), np.nanmean(P[:, [5, 6]], 1)
+    torso = np.nanmedian(np.linalg.norm(sh - hp, axis=1))
+    if not np.isfinite(torso) or torso < 1e-3:
+        return None
+    rng = lambda a: float(np.nanpercentile(a, 90) - np.nanpercentile(a, 10)) if np.isfinite(a).sum() >= 4 else 0.0  # noqa: E731
+    x = (wr[:, 1] - sh[:, 1]); x = x[~np.isnan(x)]
+    per = 0.0
+    if len(x) >= 10:
+        x = x - x.mean(); ac = np.correlate(x, x, "full")[len(x) - 1:]; ac = ac / (ac[0] + 1e-9)
+        per = float(ac[3:min(len(ac), 20)].max()) if len(ac) > 4 else 0.0
+    return {"hands": max(rng(wr[:, 1] - sh[:, 1]), rng(wr[:, 0] - sh[:, 0])) / torso, "hips": rng(hp[:, 1]) / torso, "rhythm": per}
+
+
+def looks_like_a_set(poses: list[list[float]]) -> bool | None:
+    """False when the person credited with a 'set' barely moved: standing, chatting, on their phone.
+
+    Zone motion alone can't tell a lifter from someone fiddling with a phone next to the machine; the
+    lifter's own skeleton can. None = not enough pose data to judge (keep the set)."""
+    m = movement(poses)
+    if m is None:
+        return None
+    if m["hands"] < 0.15 and m["hips"] < 0.25:
+        return False                                  # neither arms nor hips moved
+    if m["hands"] < 0.25 and m["hips"] < 0.25 and m["rhythm"] < 0.2:
+        return False                                  # small, non-repetitive fidgeting
+    return True
+
+
+def drop_fake_sets(sets: list[dict], poses: list[dict]) -> list[dict]:
+    """Remove sets whose credited person didn't move like a lifter. Returns the removed sets."""
+    by_pid: dict[int, list] = {}
+    for e in poses:
+        for pid, vec in e["k"]:
+            by_pid.setdefault(pid, []).append((e["t"], vec))
+    keep, gone = [], []
+    for s in sets:
+        win = [v for t, v in by_pid.get(s.get("pid"), []) if s["t0"] <= t <= s["t1"]]
+        (gone if looks_like_a_set(win) is False else keep).append(s)
+    sets[:] = keep
+    return gone

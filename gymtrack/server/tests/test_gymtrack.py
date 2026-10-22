@@ -308,3 +308,15 @@ def test_pose_vector_encodes_13_joints_and_hides_unseen():
     kp[27, 2] = 0.02  # left ankle not visible
     v = pose_vector(kp, 640, 360)
     assert len(v) == 26 and v[:2] == [500, 500] and v[22:24] == [-1, -1]
+
+
+def test_person_standing_still_is_not_a_set():
+    from gymtrack.exercises import looks_like_a_set
+    still = [[500, 200, 480, 300, 520, 300, 470, 400, 530, 400, 470, 450, 530, 450, 485, 500, 515, 500, 485, 650, 515, 650, 485, 800, 515, 800]] * 20
+    assert looks_like_a_set(still) is False
+    rowing = []
+    for i in range(20):
+        dx = 60 if i % 4 < 2 else 0  # hands travel forward and back
+        rowing.append([500, 200, 480, 300, 520, 300, 470 + dx, 360, 530 + dx, 360, 460 + 2 * dx, 380, 540 + 2 * dx, 380, 485, 500, 515, 500, 485, 650, 515, 650, 485, 800, 515, 800])
+    assert looks_like_a_set(rowing) is True
+    assert looks_like_a_set([]) is None
