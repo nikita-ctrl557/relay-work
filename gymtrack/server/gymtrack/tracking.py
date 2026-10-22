@@ -330,7 +330,8 @@ class PeopleTracker:
     """Per-camera multi-person tracker with zone dwell times."""
 
     RECENT_S = 1.0       # tracks seen this recently are matched on motion first
-    REID_SIM = 0.86      # clothing similarity needed to give a long-lost person their ID back
+    REID_SIM = 0.95      # clothing similarity needed to give a long-lost person their ID back (colour is weak:
+                         # two people in black kit often score > 0.9, so only near-identical and nearby)
     MOVE_SIM = 0.84      # clothing similarity required when a match implies a big move
     APP_KEEP_MIN_H = 55  # px (analysis frame): smaller people's colours are mostly background and floor
     APP_KEEP_S = 1.0     # one stored signature per track per second, for offline stitching
@@ -604,7 +605,8 @@ class PeopleTracker:
             dm, _ = fm.distance(c.kf.last_obs, tr.kf.last_obs)
             sim = float(c.look @ tr.look)
             near = gap <= self.max_age and dm <= 0.5 + 0.9 * gap
-            if not (near and sim >= 0.8) and not (dm <= 0.6 + 1.5 * gap and sim >= self.REID_SIM):
+            same_spot = dm <= 0.5 + 0.1 * gap and sim >= 0.85
+            if not (near and sim >= 0.8) and not same_spot and not (dm <= 0.6 + 0.5 * gap and sim >= self.REID_SIM):
                 continue
             score = sim - 0.05 * dm / (0.5 + 0.9 * gap)
             if best is None or score > best[0]:
@@ -763,8 +765,11 @@ class PeopleTracker:
                             continue
                         C[i, k] = 0.6 * dm / allowed + (0.6 * self._app_cost(sim) if sim is not None else 0.3)
                     else:
-                        allowed = 0.6 + 1.5 * gap   # walking speed, then clothes must agree
-                        if sim is None or sim < self.REID_SIM or dm > allowed or tr.look_n < 3:
+                        # back at the same spot (hidden behind a rack or a crowd) with similar clothes, or
+                        # nearby with near-identical clothes; colour alone can't carry a walk across the room
+                        allowed = 0.6 + 0.5 * gap
+                        same_spot = dm <= 0.5 + 0.1 * gap and sim is not None and sim >= 0.85
+                        if sim is None or tr.look_n < 3 or dm > allowed or not (same_spot or sim >= self.REID_SIM):
                             continue
                         C[i, k] = 0.3 + 0.3 * dm / allowed + self._app_cost(sim)
             # a re-identification must be unambiguous: drop detections that two lost people fit about equally

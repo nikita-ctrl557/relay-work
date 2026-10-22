@@ -4,6 +4,8 @@
     python bench/eval_sets.py --footage <dir with <clip>.mp4 + <clip>-config.json> --out runs/new
     # score saved results only (replay-format JSON: {"sets": [...], "timeline": [...]})
     python bench/eval_sets.py --pred "runs/base/{clip}.json"
+    # re-run sets/crediting/reps/post-processing on traces saved by a --footage run with --save-trace (seconds)
+    python bench/eval_sets.py --footage <dir> --trace "runs/new/{clip}.pkl"
 
 Metrics (only zones listed per clip are scored; predicted sets mostly inside an 'ignore' stretch are skipped):
   sets     precision / recall / F1, a prediction matches a label on the same machine with temporal IoU >= --iou
@@ -102,20 +104,41 @@ def summarise(results: list[dict]) -> dict:
     }
 
 
-def run_pipeline(footage: str, clip: str, out: str, **kw) -> dict:
-    """Run the server's offline pipeline (analyse + post-processing) on one clip and save replay-format JSON."""
+def _camera(footage: str, clip: str):
     from gymtrack.config import Camera, GymConfig
-    from gymtrack.offline import analyse
     cfg = GymConfig.load(os.path.join(footage, f"{clip}-config.json"))
     c = cfg.cameras[0]
     src = os.path.join(footage, f"{clip}.mp4")
-    cam = Camera(c.id, c.name, src, c.fps, c.width, c.zones, calib=c.calib, exercise_names=c.exercise_names, ignore=c.ignore)
-    tl, poses = [], []
-    rep = analyse(src, cfg, cam, None, start_ts=0, timeline=tl, poses=poses, **kw)
+    return cfg, Camera(c.id, c.name, src, c.fps, c.width, c.zones, calib=c.calib, exercise_names=c.exercise_names, ignore=c.ignore)
+
+
+def run_pipeline(footage: str, clip: str, out: str, save_trace: bool = False, **kw) -> dict:
+    """Run the server's offline pipeline (analyse + post-processing) on one clip and save replay-format JSON."""
+    import pickle
+
+    from gymtrack.offline import analyse
+    cfg, cam = _camera(footage, clip)
+    tl, poses, trace = [], [], ([] if save_trace else None)
+    rep = analyse(cam.source, cfg, cam, None, start_ts=0, timeline=tl, poses=poses, trace=trace, **kw)
     data = {"sets": rep.get("replay_sets") or [], "timeline": tl, "duration": rep["video_s"], "speed_x": rep.get("speed_x")}
     with open(out, "w") as f:
-        json.dump(data, f, separators=(",", ":"))
+        json.dump(data, f, separators=(",", ":"), default=str)
+    if save_trace:
+        with open(out[:-5] + ".pkl", "wb") as f:
+            pickle.dump({"trace": trace, "timeline": tl, "poses": poses}, f)
     return data
+
+
+def replay_pipeline(footage: str, clip: str, trace_path: str) -> dict:
+    """Re-run engine + post-processing on a saved trace (no video, no models)."""
+    import pickle
+
+    from gymtrack.offline import replay_trace
+    cfg, cam = _camera(footage, clip)
+    d = pickle.load(open(trace_path, "rb"))
+    rep = replay_trace(d["trace"], cfg, cam, d["timeline"], d["poses"])
+    tl = d["timeline"]
+    return {"sets": rep["replay_sets"], "timeline": tl}
 
 
 def main():
@@ -124,6 +147,8 @@ def main():
     ap.add_argument("--pred", help="pattern of saved results, e.g. runs/base/{clip}.json")
     ap.add_argument("--footage", help="directory with <clip>.mp4 and <clip>-config.json: run the pipeline")
     ap.add_argument("--out", default="eval_runs", help="where --footage runs are saved")
+    ap.add_argument("--save-trace", action="store_true", help="with --footage: also save <clip>.pkl traces for --trace")
+    ap.add_argument("--trace", help="pattern of saved traces, e.g. runs/new/{clip}.pkl (needs --footage for the configs)")
     ap.add_argument("--iou", type=float, default=0.3)
     ap.add_argument("--clips", help="comma-separated subset")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -133,9 +158,11 @@ def main():
         labels = [c for c in labels if c["clip"] in a.clips.split(",")]
     results = []
     for lab in labels:
-        if a.footage:
+        if a.trace:
+            pred = replay_pipeline(a.footage, lab["clip"], a.trace.format(clip=lab["clip"]))
+        elif a.footage:
             os.makedirs(a.out, exist_ok=True)
-            pred = run_pipeline(a.footage, lab["clip"], os.path.join(a.out, f"{lab['clip']}.json"))
+            pred = run_pipeline(a.footage, lab["clip"], os.path.join(a.out, f"{lab['clip']}.json"), a.save_trace)
         else:
             p = a.pred.format(clip=lab["clip"])
             if not os.path.exists(p):

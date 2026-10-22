@@ -27,7 +27,7 @@ from .motion import assign
 
 GAP_S = 6.0           # position-only linking (no usable appearance): at most this long a gap. Stations get
                       # re-occupied: after longer, "someone is standing where X was" is often somebody else
-MAX_GAP_S = 120.0     # with matching clothes: long enough to rest out of view, or behind a rack
+MAX_GAP_S = 120.0     # hard cap on any link (with a stronger re-ID feature, long rests out of view)
 WALK = 1.5            # m/s
 SLACK = 0.7           # m: detector box noise, feet hidden by a bench
 EDGE = 0.02           # a box this close to the frame border has left / entered the picture
@@ -149,12 +149,20 @@ def _link_cost(A, B, geo: _Geo, doors, gap_max: float):
         return 0.5 * d / near + 0.3 * gap / GAP_S
     if not 0.6 < hr < 1.67:
         return None
-    # colour signatures of two different people agree above ~0.90 in 1% of pairs on our footage
-    # (bench/eval_tracking.py data), so far / long links need near-identical clothes
-    near = d <= SLACK + 0.2 * gap and gap <= 15
-    need = 0.86 if near else 0.91 if gap <= 30 else 0.93
-    if edge:
-        need = max(need, 0.94)  # walked out of the picture and back in: clothes must agree strongly
+    # Colour signatures are weak evidence: two different people in black gym clothes often agree above
+    # 0.95, so on our footage only short, nearby re-appearances are linked (bench: links-*.jpg audits).
+    # Long-gap re-identification needs a real re-ID embedding (see docs); until then we prefer a
+    # fragment over handing one person's history to someone else.
+    if d <= SLACK + 0.2 * gap and gap <= 15:
+        need = 0.88
+    elif d <= SLACK + 0.1 * gap and gap <= 40:
+        need = 0.88   # back at the same spot after a longer occlusion
+    elif d <= SLACK + 0.5 * gap and gap <= 30:
+        need = 0.95
+    else:
+        return None
+    if edge or A.get("crowded") or B.get("crowded"):
+        need = max(need, 0.95)
     if sim < need:
         return None
     return _app_cost(sim) + 0.4 * d / (SLACK + WALK * gap) + 0.2 * gap / gap_max

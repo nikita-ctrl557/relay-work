@@ -227,7 +227,40 @@ def person_signals(obs: list, grid: np.ndarray, smooth_s: float = 0.7) -> tuple[
     return sig, info
 
 
+def _periodicity(x: np.ndarray) -> tuple[float | None, float]:
+    """(period s, strength 0..1) of a gridded signal's longest finite run, from its autocorrelation."""
+    from .reps import _autocorr_period
+    ok = np.isfinite(x)
+    if ok.sum() < 3 * GRID_HZ:
+        return None, 0.0
+    # longest finite run
+    best, i, n = (0, 0), 0, len(x)
+    while i < n:
+        if not ok[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and ok[j]:
+            j += 1
+        if j - i > best[1] - best[0]:
+            best = (i, j)
+        i = j
+    seg = x[best[0]:best[1]]
+    if len(seg) < 3 * GRID_HZ:
+        return None, 0.0
+    return _autocorr_period(seg, GRID_HZ, lo_s=0.8, hi_s=8.0)
+
+
+def _period_match(p: float | None, q: float | None) -> float:
+    """1 when two periods agree (or one is twice the other: a magnitude signal repeats twice per rep), else 0.4."""
+    if p is None or q is None:
+        return 0.7
+    r = p / q
+    return 1.0 if any(abs(r / k - 1) <= 0.25 for k in (0.5, 1.0, 2.0)) else 0.4
+
+
 def score_person(zs: dict[str, np.ndarray], obs: list, grid: np.ndarray, in_zone: float) -> Candidate:
+    """How strongly this person's joints move *periodically, together with* the zone's moving part."""
     c = Candidate(pid=-1, in_zone=in_zone)
     sig, info = person_signals(obs, grid)
     c.n_poses, c.span_s = info["n"], info["span"]
@@ -239,33 +272,27 @@ def score_person(zs: dict[str, np.ndarray], obs: list, grid: np.ndarray, in_zone
     lag = int(round(MAX_LAG_S * GRID_HZ))
     min_n = int(MIN_OVERLAP_S * GRID_HZ)
     refs = {k: highpass(v, hp) for k, v in zs.items() if k.startswith("pc") and np.isfinite(v).sum() >= min_n}
-    mot = zs.get("motion")
+    zper = {k: _periodicity(r) for k, r in refs.items()}
     best = (0.0, 0.0, 0.0, None, None)
-    speed = None
     for name, v in valid.items():
         h = highpass(v, hp)
-        amp = float(np.nanpercentile(h, 90) - np.nanpercentile(h, 10)) if np.isfinite(h).sum() > 4 else 0.0
-        w = min(1.0, amp / AMP_FULL)
-        d = np.abs(np.diff(v, prepend=np.nan)) * GRID_HZ
-        speed = d if speed is None else np.where(np.isfinite(speed) & np.isfinite(d), speed + d, np.where(np.isfinite(d), d, speed))
+        if np.isfinite(h).sum() <= 4:
+            continue
+        amp = float(np.nanpercentile(h, 90) - np.nanpercentile(h, 10))
+        w_amp = min(1.0, amp / AMP_FULL)
+        per, strength = _periodicity(h)
+        w_per = float(np.clip((strength - 0.15) / 0.35, 0.0, 1.0))  # a lift repeats; walking past or fidgeting doesn't
+        if w_amp * w_per <= best[0]:
+            continue
         for rk, r in refs.items():
             cc, _ = ncc_max(h, r, lag, min_n)
-            if cc * w > best[0]:
-                best = (cc * w, cc, amp, f"{name}~{rk}", v)
-    # how much the body moves together with how much the zone moves (both "activity level" signals)
-    if mot is not None and speed is not None:
-        sp = _savgol(speed, 5)
-        cc, _ = ncc_max(highpass(sp, hp), highpass(mot, hp), lag, min_n, signed=True)
-        amp = max((float(np.nanpercentile(highpass(valid[k], hp), 90) - np.nanpercentile(highpass(valid[k], hp), 10))
-                   for k in valid if np.isfinite(valid[k]).sum() > 4), default=0.0)
-        w = min(1.0, amp / AMP_FULL)
-        if 0.8 * cc * w > best[0]:
-            best = (0.8 * cc * w, cc, amp, "speed~motion", best[4])
+            sc = cc * w_amp * w_per * _period_match(per, zper[rk][0])
+            if sc > best[0]:
+                best = (sc, cc, amp, f"{name}~{rk}", v)
     c.score, c.corr, c.amp, c.best = best[0], best[1], best[2], best[3]
     # walking through the zone moves it too, but a lifter stays put (lunges travel a little)
     c.still = float(np.clip(1.5 - info["travel"], 0.0, 1.0))
-    c.score *= c.still
-    c.score = c.score * (0.85 + 0.15 * in_zone)
+    c.score *= c.still * (0.85 + 0.15 * in_zone)
     if best[4] is not None:
         c.signal = (grid, best[4])
     return c
