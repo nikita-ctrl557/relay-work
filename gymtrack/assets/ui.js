@@ -32,6 +32,8 @@ const IC = {
   map: SV('<path d="M3 6.5 9 4l6 2.5L21 4v13.5L15 20l-6-2.5L3 20z"/><path d="M9 4v13.5M15 6.5V20"/>'),
   insights: SV('<path d="M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z"/><path d="M9.5 19h5M10.5 21.5h3"/>'),
   expand: SV('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
+  chev: SV('<path d="m9 6 6 6-6 6"/>'),
+  dots: SV('<circle cx="5.5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="18.5" cy="12" r="1.2" fill="currentColor"/>'),
 };
 const machineIcon = m => /bench/i.test(m.id + m.name) ? IC.bench : /squat|rack|dead/i.test(m.id + m.name) ? IC.rack : /cable|lat|pull|row|press/i.test(m.id + m.name) ? IC.cable : /tread|run|bike|row/i.test(m.kind) ? IC.run : IC.machines;
 
@@ -44,7 +46,7 @@ const avatar = (m, cls = "") => `<span class="avatar ${cls}">${esc(initials(m.na
 const clockFmt = s => { s = Math.max(0, Math.round(s || 0)); const m = Math.floor(s / 60); return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${m}:${String(s % 60).padStart(2, "0")}`; };
 const hm = ts => new Date(ts * 1000).toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"});
 const ago = s => s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
-const STATUS = {lifting: ["lifting", "Lifting"], resting: ["resting", "Resting"], "on floor": ["onfloor", "On the floor"], away: ["away", "Not in"], idle: ["free", "Free"]};
+const STATUS = {lifting: ["lifting", "Lifting"], resting: ["resting", "Resting"], "on floor": ["onfloor", "On floor"], away: ["away", "Not in"], idle: ["free", "Free"]};
 const pill = s => { const [c, l] = STATUS[s] || STATUS.idle; return `<span class="pill ${c}"><i></i>${l}</span>`; };
 const machineName = id => cfg.machines.find(m => m.id === id)?.name || id;
 const memberOf = id => cfg.members.find(m => m.id === id);
@@ -85,40 +87,39 @@ document.addEventListener("pointermove", e => {
 function niceMax(v) { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)), n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; }
 function roundTop(x, y, w, h, r) { r = Math.min(r, w / 2, h); return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`; }
 function weeklyChart(weeks) {
-  if (!weeks.length) return `<div class="empty"><b>No sessions yet</b>Training time appears here after the first visit.</div>`;
+  if (!weeks.length) return `<div class="empty">No sessions yet</div>`;
   const Wd = 600, Hd = 230, L = 36, B = 26, T = 12, pw = Wd - L - 6, ph = Hd - B - T;
   const max = niceMax(Math.max(1, ...weeks.map(w => fmtMin(w.lifting_s) + fmtMin(w.resting_s))));
-  const step = pw / weeks.length, bw = Math.min(44, step * .56), y = v => T + ph - v / max * ph;
+  const step = pw / weeks.length, bw = Math.min(28, step * .42), y = v => T + ph - v / max * ph;
   let s = `<svg class="chart" viewBox="0 0 ${Wd} ${Hd}" role="img" aria-label="Minutes lifting and resting per week">`;
   for (let i = 0; i <= 4; i++) { const v = max * i / 4; s += `<line class="gl" x1="${L}" x2="${Wd}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v}</text>`; }
   weeks.forEach((w, i) => {
     const lm = fmtMin(w.lifting_s), rm = fmtMin(w.resting_s), x = L + step * i + (step - bw) / 2, hl = lm / max * ph, hr = rm / max * ph;
-    if (hl > 0) s += `<path d="${hr > 0 ? `M${x},${T + ph}V${T + ph - hl}H${x + bw}V${T + ph}Z` : roundTop(x, T + ph - hl, bw, hl, 4)}" fill="var(--lift)"/>`;
-    if (hr > 0) s += `<path d="${roundTop(x, T + ph - hl - hr - (hl > 0 ? 2 : 0), bw, hr, 4)}" fill="var(--rest)"/>`;
+    if (hl > 0) s += `<path d="${hr > 0 ? `M${x},${T + ph}V${T + ph - hl}H${x + bw}V${T + ph}Z` : roundTop(x, T + ph - hl, bw, hl, 2)}" fill="var(--lift)"/>`;
+    if (hr > 0) s += `<path d="${roundTop(x, T + ph - hl - hr - (hl > 0 ? 1 : 0), bw, hr, 2)}" fill="var(--rest)"/>`;
     s += `<text x="${x + bw / 2}" y="${Hd - 6}" text-anchor="middle">${shortDay(w.week)}</text>`;
     s += `<rect class="hit" x="${L + step * i}" y="${T}" width="${step}" height="${ph}" data-tip="Week of ${shortDay(w.week)}\nLifting  ${lm} min\nResting  ${rm} min\n${w.sets} sets · ${w.sessions} sessions"/>`;
   });
   return s + `<line class="ax" x1="${L}" x2="${Wd}" y1="${T + ph}" y2="${T + ph}"/></svg>`;
 }
 function trendChart(points, label, unit) {
-  if (points.length < 2) return `<div class="empty"><b>Not enough sessions yet</b>Progress shows after two sessions on this machine.</div>`;
+  if (points.length < 2) return `<div class="empty">Needs 2+ sessions on this station</div>`;
   const Wd = 600, Hd = 230, L = 36, B = 26, T = 18, pw = Wd - L - 20, ph = Hd - B - T;
   const vals = points.map(p => p.v), lo = Math.max(0, Math.floor(Math.min(...vals) * .85)), hi = niceMax(Math.max(...vals) * 1.05);
   const x = i => L + 10 + i * (pw - 10) / (points.length - 1), y = v => T + ph - (v - lo) / (hi - lo) * ph;
   let s = `<svg class="chart" viewBox="0 0 ${Wd} ${Hd}" role="img" aria-label="${esc(label)} over time">`;
   for (let i = 0; i <= 4; i++) { const v = lo + (hi - lo) * i / 4; s += `<line class="gl" x1="${L}" x2="${Wd}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${+v.toFixed(1)}</text>`; }
   const pts = points.map((p, i) => x(i) + "," + y(p.v)).join(" ");
-  s += `<polygon points="${x(0)},${T + ph} ${pts} ${x(points.length - 1)},${T + ph}" fill="var(--lift)" opacity=".08"/>`;
-  s += `<polyline fill="none" stroke="var(--lift)" stroke-width="2.2" stroke-linejoin="round" points="${pts}"/>`;
+  s += `<polyline fill="none" stroke="var(--lift)" stroke-width="2" stroke-linejoin="round" points="${pts}"/>`;
   const every = Math.ceil(points.length / 6), colW = (pw - 10) / Math.max(1, points.length - 1);
   points.forEach((p, i) => {
     const last = i === points.length - 1;
-    s += `<circle cx="${x(i)}" cy="${y(p.v)}" r="${last ? 5 : 3.5}" fill="${last ? "var(--lift)" : "var(--surface)"}" stroke="var(--lift)" stroke-width="2"/>`;
+    s += `<circle cx="${x(i)}" cy="${y(p.v)}" r="${last ? 4.5 : 3.5}" fill="var(--lift)" stroke="var(--surface)" stroke-width="1.5"/>`;
     if (i % every === 0) s += `<text x="${x(i)}" y="${Hd - 6}" text-anchor="middle">${shortDay(p.day)}</text>`;
     s += `<rect class="hit" x="${x(i) - colW / 2}" y="${T}" width="${colW}" height="${ph}" data-tip="${shortDay(p.day)}\n${esc(label)}: ${+p.v.toFixed(1)}${unit}\n${p.sets} sets"/>`;
   });
   const lp = points[points.length - 1];
-  s += `<text x="${x(points.length - 1)}" y="${y(lp.v) - 12}" text-anchor="end" style="fill:var(--ink);font-weight:700;font-size:13px">${+lp.v.toFixed(1)}${unit}</text>`;
+  s += `<text x="${x(points.length - 1)}" y="${y(lp.v) - 12}" text-anchor="end" style="fill:var(--ink);font-weight:600;font-size:12px">${+lp.v.toFixed(1)}${unit}</text>`;
   return s + `<line class="ax" x1="${L}" x2="${Wd}" y1="${T + ph}" y2="${T + ph}"/></svg>`;
 }
 /* today's session as a strip: blue blocks = sets, orange dashes = rests between them */
@@ -181,16 +182,15 @@ function trainingProfileHTML(prog, {compact = false} = {}) {
   const h = trainingHistory(prog), opts = {machines: cfg.machines};
   const load = bmWeekLoad(h, opts), gaps = bmGaps(load), arch = bmArchetype(h, opts);
   const recs = bmRecommendations(h, load, opts).slice(0, compact ? 3 : 6), next = bmNextSession(h, load, opts);
-  const icon = l => l === "warn" ? `<span class="pill warn" style="height:20px">Fix</span>` : l === "good" ? `<span class="pill good" style="height:20px">Good</span>` : `<span class="pill" style="height:20px">Tip</span>`;
+  const icon = l => l === "warn" ? `<span class="lvl warn" title="Needs attention"></span>` : l === "good" ? `<span class="lvl good" title="Good"></span>` : `<span class="lvl" title="Tip"></span>`;
   const acts = Object.entries(prog?.activities || {}).filter(([a]) => a !== "standing").sort((a, b) => b[1] - a[1]).slice(0, 5);
   return `<div class="tprof">
     <div class="tp-map">${bmBodyMap(load, {highlight: gaps})}</div>
     <div class="tp-side">
-      <div><div class="eyebrow">Training style</div><div class="tp-arch">${esc(arch.name)}</div><p class="muted" style="margin:4px 0 8px;font-size:13px">${esc(arch.summary || "")}</p>
-        <div class="tags2">${(arch.traits || []).slice(0, 4).map(t => `<span>${esc(t)}</span>`).join("")}</div></div>
-      ${acts.length ? `<div><div class="eyebrow" style="margin-bottom:6px">Seen doing (from pose)</div><div class="tags2">${acts.map(([a, s]) => `<span>${esc(actName(a))} · ${fmtDur(s)}</span>`).join("")}</div></div>` : ""}
+      <dl class="kv"><dt>Training style</dt><dd><b>${esc(arch.name)}</b>${(arch.traits || []).length ? `<span class="muted"> · ${(arch.traits || []).slice(0, 3).map(esc).join(", ")}</span>` : ""}</dd>
+      ${acts.length ? `<dt>Exercises seen</dt><dd>${acts.map(([a, s]) => `${esc(actName(a))} <span class="muted">${fmtDur(s)}</span>`).join(", ")}</dd>` : ""}</dl>
       <div class="tp-recs">${recs.map(r => `<div class="tp-rec">${icon(r.level)}<div><b>${esc(r.title)}</b><span>${esc(r.detail)}</span></div></div>`).join("")}</div>
-      ${next?.exercises?.length ? `<div class="tp-next"><div class="eyebrow">Next session</div><b>${esc(next.focus)}</b><div class="tags2" style="margin-top:6px">${next.exercises.map(e => `<span>${esc(exName(e))}</span>`).join("")}</div>${next.reason ? `<small class="muted">${esc(next.reason)}</small>` : ""}</div>` : ""}
+      ${next?.exercises?.length ? `<div class="tp-next"><span class="lbl">Suggested next session</span><b>${esc(next.focus)}</b><span>${next.exercises.map(e => esc(exName(e))).join(" · ")}</span></div>` : ""}
     </div></div>`;
 }
 
@@ -213,7 +213,7 @@ function poseAngles(p) { // knee bend, hip angle, torso lean from vertical (degr
   return {knee: knee.length ? Math.min(...knee) : null, hip: hip.length ? Math.min(...hip) : null, lean};
 }
 // draw on a 2D canvas; map(p) -> [x, y] in canvas pixels
-function drawSkeleton(ctx, pts, map, {color = "#4b56f0", width = 3, joint = 3.2, alpha = 1, outline = true} = {}) {
+function drawSkeleton(ctx, pts, map, {color = "#007faf", width = 3, joint = 3.2, alpha = 1, outline = true} = {}) {
   ctx.save(); ctx.globalAlpha = alpha; ctx.lineCap = "round"; ctx.lineJoin = "round";
   const P = pts.map(p => p && map(p));
   const lines = (w, c) => { ctx.lineWidth = w; for (const [a, b] of SKEL_EDGES) if (P[a] && P[b]) { ctx.strokeStyle = typeof c === "function" ? c(a, b) : c; ctx.beginPath(); ctx.moveTo(...P[a]); ctx.lineTo(...P[b]); ctx.stroke(); } };
@@ -226,8 +226,8 @@ function drawSkeleton(ctx, pts, map, {color = "#4b56f0", width = 3, joint = 3.2,
 }
 /* Posture replay: animates one person's skeleton through a clip ({frames: [{t, pts}], ...}). */
 function skeletonPlayer(host, clip) {
-  if (!clip?.frames?.length) { host.innerHTML = `<div class="empty" style="padding:20px">No clear pose yet: the camera needs to see this person's whole body for a few seconds.</div>`; return {destroy() {}}; }
-  host.innerHTML = `<div class="skp"><canvas></canvas><div class="skp-side"><div class="skp-ang"></div><small class="muted skp-cav">Angles as this camera sees them. Bending toward or away from the camera looks shallower, so a side-on view measures depth best.</small></div></div>
+  if (!clip?.frames?.length) { host.innerHTML = `<div class="empty">No full-body pose captured yet</div>`; return {destroy() {}}; }
+  host.innerHTML = `<div class="skp"><canvas></canvas><div class="skp-side"><div class="skp-ang"></div><small class="muted skp-cav">Measured from this camera's angle.</small></div></div>
     <div class="skp-bar"><button class="btn secondary sm" data-pp aria-label="Pause">${IC.pause}</button><input type="range" min="0" max="1000" value="0" aria-label="Position in clip"><span class="num skp-t"></span><button class="btn ghost sm" data-sp>1×</button></div>`;
   const cv = host.querySelector("canvas"), ctx = cv.getContext("2d"), range = host.querySelector("input"), tEl = host.querySelector(".skp-t"), ang = host.querySelector(".skp-ang");
   const F = clip.frames, t0 = F[0].t, t1 = F[F.length - 1].t, dur = Math.max(0.1, t1 - t0);
@@ -247,9 +247,9 @@ function skeletonPlayer(host, clip) {
     const floorY = oy + bh * s + 4; ctx.strokeStyle = "rgba(127,127,127,.35)"; ctx.lineWidth = 1; ctx.setLineDash([4, 5]); ctx.beginPath(); ctx.moveTo(12, floorY); ctx.lineTo(w - 12, floorY); ctx.stroke(); ctx.setLineDash([]);
     const pts = at(t);
     trail.push(pts); if (trail.length > 7) trail.shift();
-    trail.slice(0, -1).forEach((p, i) => drawSkeleton(ctx, p, map, {color: clip.color || "#4b56f0", width: 2, joint: 0, alpha: 0.06 + i * 0.03, outline: false}));
-    drawSkeleton(ctx, pts, map, {color: clip.color || "#4b56f0", width: Math.min(7, Math.max(3, s * 0.012)), joint: Math.min(5, Math.max(3, s * 0.01))});
-    const a = poseAngles(pts), row = (k, l, help) => a[k] == null ? "" : `<div data-tip="${help}"><span class="eyebrow">${l}</span><b class="num">${Math.round(a[k])}°</b><small class="muted">range ${Math.round(lo.min[k])}–${Math.round(lo.max[k])}°</small></div>`;
+    trail.slice(0, -1).forEach((p, i) => drawSkeleton(ctx, p, map, {color: clip.color || "#007faf", width: 2, joint: 0, alpha: 0.06 + i * 0.03, outline: false}));
+    drawSkeleton(ctx, pts, map, {color: clip.color || "#007faf", width: Math.min(7, Math.max(3, s * 0.012)), joint: Math.min(5, Math.max(3, s * 0.01))});
+    const a = poseAngles(pts), row = (k, l, help) => a[k] == null ? "" : `<div data-tip="${help}"><span class="lbl">${l}</span><b class="num">${Math.round(a[k])}°</b><small class="muted">${Math.round(lo.min[k])}–${Math.round(lo.max[k])}°</small></div>`;
     ang.innerHTML = row("knee", "Knee", "Angle at the knee: 180° is straight, under 90° is below parallel on a squat") + row("hip", "Hip", "Angle between torso and thigh") + row("lean", "Torso lean", "Torso angle from vertical");
     range.value = String(Math.round((t - t0) / dur * 1000)); tEl.textContent = `${clockFmt(t - t0)} / ${clockFmt(dur)}`;
   }

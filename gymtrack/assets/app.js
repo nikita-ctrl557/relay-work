@@ -4,14 +4,14 @@
 /* ---------------- app state + router ---------------- */
 let src, cfg, live = null, util = {}, utilAt = 0, page = null;
 const PAGES = [
-  {id: "floor", label: "Live floor", group: "Operations", icon: "floor", sub: () => `Live from ${cfg.cameras.length} cameras`},
-  {id: "map", label: "Floor map", group: "Operations", icon: "map", sub: () => "The gym rebuilt in 3D from the cameras"},
-  {id: "machines", label: "Equipment", group: "Operations", icon: "machines", sub: () => `${cfg.machines.length} tracked stations`},
-  {id: "members", label: "Members", group: "Members", icon: "members", sub: () => `${cfg.members.length} members · ${live ? live.members.filter(m => m.status !== "away").length : 0} in the gym`},
-  {id: "insights", label: "Insights", group: "Analytics", icon: "insights", sub: () => "Traffic, usage and what to change"},
-  {id: "recordings", label: "Recordings", group: "Analytics", icon: "recordings", sub: () => "Analyse footage exported from your cameras"},
-  {id: "cameras", label: "Cameras", group: "Administration", icon: "cameras", sub: () => `${cfg.cameras.length} connected · zones tell GymTrack where each machine is`},
-  {id: "settings", label: "Settings", group: "Administration", icon: "settings", sub: () => "Organisation, users, privacy and integrations"},
+  {id: "floor", label: "Live floor", group: "Operations", icon: "floor", sub: () => `${cfg.cameras.length} cameras`},
+  {id: "map", label: "Floor plan", group: "Operations", icon: "map", sub: () => ""},
+  {id: "machines", label: "Equipment", group: "Operations", icon: "machines", sub: () => `${cfg.machines.length} stations`},
+  {id: "members", label: "Members", group: "Members", icon: "members", sub: () => `${cfg.members.length} total · ${live ? live.members.filter(m => m.status !== "away").length : 0} in gym`},
+  {id: "insights", label: "Insights", group: "Analytics", icon: "insights", sub: () => ""},
+  {id: "recordings", label: "Recordings", group: "Analytics", icon: "recordings", sub: () => ""},
+  {id: "cameras", label: "Cameras", group: "Administration", icon: "cameras", sub: () => `${cfg.cameras.length} cameras`},
+  {id: "settings", label: "Settings", group: "Administration", icon: "settings", sub: () => ""},
 ];
 /* role-based access: which pages each role sees (enforced in the nav and the router) */
 const ROLES = {
@@ -40,7 +40,7 @@ function navHTML(grouped) {
   let html = "", g = null;
   for (const p of PAGES.filter(p => canSee(p.id))) {
     if (grouped && p.group !== g) { g = p.group; html += `<div class="nav-label">${g}</div>`; }
-    html += `<a href="#${p.id}" ${p.id === cur ? 'aria-current="page"' : ""}>${IC[p.icon]}<span>${p.label}</span>${counts[p.id] !== undefined && counts[p.id] !== "" ? `<span class="count">${counts[p.id]}</span>` : ""}</a>`;
+    html += `<a href="#${p.id}" ${grouped === "rail" ? `data-tip="${p.label}" aria-label="${p.label}"` : ""} ${p.id === cur ? 'aria-current="page"' : ""}>${IC[p.icon]}<span>${p.label}</span>${counts[p.id] !== undefined && counts[p.id] !== "" ? `<span class="count">${counts[p.id]}</span>` : ""}</a>`;
   }
   return html;
 }
@@ -50,13 +50,13 @@ function tabHTML() {
   const cur = parseRoute().id === "member" ? "members" : parseRoute().id, vis = PAGES.filter(p => canSee(p.id));
   const main = vis.length <= 5 ? vis : TAB_FIRST.map(id => vis.find(p => p.id === id)).filter(Boolean).slice(0, 4);
   const rest = vis.filter(p => !main.includes(p));
-  const short = {floor: "Floor", map: "3D map", machines: "Equipment", members: "Members", insights: "Insights", recordings: "Recordings", cameras: "Cameras", settings: "Settings"};
+  const short = {floor: "Floor", map: "Plan", machines: "Equipment", members: "Members", insights: "Insights", recordings: "Recordings", cameras: "Cameras", settings: "Settings"};
   const a = p => `<a href="#${p.id}" ${p.id === cur ? 'aria-current="page"' : ""}>${IC[p.icon]}<span>${short[p.id] || p.label}</span></a>`;
   $("#tabNav").style.setProperty("--n", main.length + (rest.length ? 1 : 0));
   return main.map(a).join("") + (rest.length ? `<button id="moreBtn" aria-haspopup="menu" ${rest.some(p => p.id === cur) ? 'aria-current="page"' : ""}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="5.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18.5" cy="12" r="1.3"/></svg><span>More</span></button>` : "");
 }
 function renderNav() {
-  $("#sideNav").innerHTML = navHTML(true); $("#tabNav").innerHTML = tabHTML();
+  $("#sideNav").innerHTML = navHTML("rail"); $("#tabNav").innerHTML = tabHTML();
   const more = $("#moreBtn"); if (more) more.onclick = () => popover(more, `<div class="pop-h">More</div><nav class="pop-nav">${navHTML(true)}</nav>`, e => { if (e.target.closest("a")) $("#pop").hidden = true; });
 }
 
@@ -66,8 +66,8 @@ function go() {
   const view = $("#view"); view.innerHTML = "";
   page = !canSee(r.id) ? NoAccessPage(r.id) : r.id === "member" ? MemberPage(r.arg) : ({floor: FloorPage, members: MembersPage, map: MapPage, machines: MachinesPage, insights: InsightsPage, recordings: RecordingsPage, cameras: CamerasPage, settings: SettingsPage})[r.id]();
   const pg = PAGES.find(p => p.id === (r.id === "member" ? "members" : r.id));
-  const day = new Date((typeof now === "function" ? now() : Date.now() / 1000) * 1000).toLocaleDateString("en-GB", {weekday: "long", day: "numeric", month: "long"});
-  $("#pageCrumb").innerHTML = r.id === "member" ? `<a href="#members">Members</a> <span>/</span> Profile` : `${esc(day)} <span>·</span> ${esc(cfg.gym || pg?.group || "")}`;
+  const chev = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>`;
+  $("#pageCrumb").innerHTML = r.id === "member" ? `<a href="#members" class="back" aria-label="Back to members"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></a><a href="#members">Members</a>${chev}` : "";
   $("#pageTitle").textContent = page.title;
   $("#pageSub").textContent = page.sub?.() || "";
   $("#pageActions").innerHTML = ""; page.actions?.($("#pageActions"));
@@ -83,10 +83,10 @@ function FloorPage() {
   let focus = null, feedKeys = new Set(), wall;
   const clock = el(`<span class="clock num"></span>`);
   return {
-    title: "Live floor", sub: () => `Live from ${cfg.cameras.length} cameras · ${cfg.machines.length} stations`,
+    title: "Live floor", sub: () => `${cfg.cameras.length} cameras · ${cfg.machines.length} stations`,
     actions(a) {
       a.append(clock);
-      if (src.mode !== "server") a.append(el(`<select class="input" id="speed" aria-label="Playback speed" style="width:auto"><option value="1">Real time</option><option value="3">3× speed</option></select>`));
+      if (src.mode !== "server") a.append(el(`<select class="input sm" id="speed" aria-label="Playback speed" style="width:auto"><option value="1">1× speed</option><option value="3">3× speed</option></select>`));
       a.querySelector("#speed") && (a.querySelector("#speed").value = String(src.speed), a.querySelector("#speed").onchange = e => src.speed = +e.target.value);
     },
     unmount() { cancelAnimationFrame(this.raf); },
@@ -101,7 +101,7 @@ function FloorPage() {
         const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, hh0);
         if (showSkel) for (const q of list) if (q.pose) {
           const lift = q.activity && q.activity !== "standing", hov = layer.querySelector(`.hit[data-pid="${q.pid}"]`)?.matches(":hover, .hl");
-          drawSkeleton(ctx, q.pose, p => [p[0] * w, p[1] * hh0], {color: lift ? "#7c86ff" : hov ? "#ffffff" : "#ff8a5c", width: Math.max(1.6, w / 420) * (hov ? 1.5 : 1), joint: Math.max(1.4, w / 520), alpha: hov ? 1 : 0.9});
+          drawSkeleton(ctx, q.pose, p => [p[0] * w, p[1] * hh0], {color: lift ? "#2bb3ea" : hov ? "#ffffff" : "#ffb020", width: Math.max(1.6, w / 420) * (hov ? 1.5 : 1), joint: Math.max(1.4, w / 520), alpha: hov ? 1 : 0.9});
         }
         for (const q of list) {
           if (!q.box || q.box[2] <= 0) continue;
@@ -126,14 +126,14 @@ function FloorPage() {
     mount(v) {
       cancelAnimationFrame(this.raf); this.drawHits();
       if (src.mode !== "server" && !store.get("banner-off-" + src.mode)) {
-        const msg = src.mode === "replay" ? `<b>Real footage.</b> Recorded video from fixed cameras in a busy commercial gym, run through GymTrack: people tracking, skeletons, sets, reps and rest, played back in sync. People without a member tag show as #ID.` : `<b>Simulation.</b> Synthetic cameras for testing. Remove ?sim from the address to see real footage.`;
-        v.append(el(`<div class="banner"><span>${msg}</span><a class="btn sm" href="#cameras">Connect your cameras</a><button class="x" aria-label="Dismiss">${IC.x.replace("<svg", '<svg style="width:16px;height:16px"')}</button></div>`));
+        const msg = src.mode === "replay" ? `<b>Demo site.</b> Recorded footage from a commercial gym, played back in sync. Untagged people show as #ID.` : `<b>Simulation.</b> Synthetic cameras. Remove ?sim from the URL for recorded footage.`;
+        v.append(el(`<div class="banner">${IC.info}<span>${msg}</span><a class="btn secondary sm" href="#cameras">Connect cameras</a><button class="x" aria-label="Dismiss">${IC.x.replace("<svg", '<svg style="width:16px;height:16px"')}</button></div>`));
         v.querySelector(".banner .x").onclick = e => { store.set("banner-off-" + src.mode, true); e.target.closest(".banner").remove(); };
       }
       v.append(el(`<section class="kpis" id="kpis"></section>`));
-      const fl = el(`<div class="floor"><div class="wall" id="wall"></div><div style="display:flex;flex-direction:column;gap:20px;min-width:0">
-        <section class="card"><div class="card-h"><h2>Equipment</h2><span class="right hint" id="eqHint"></span></div><div class="equip" id="equip" style="margin-top:8px"></div></section>
-        <section class="card"><div class="card-h"><h2>Activity</h2><span class="right hint">Sets as they finish</span></div><div class="feed" id="feed" style="margin-top:8px"><div class="empty" style="padding:24px">${IC.machines}<b>Waiting for the first set</b>Finished sets appear here.</div></div></section></div></div>`);
+      const fl = el(`<div class="floor"><div class="wall" id="wall"></div><div class="col">
+        <section class="card"><div class="card-h"><h2>Equipment</h2><span class="right hint" id="eqHint"></span></div><div class="equip" id="equip"></div></section>
+        <section class="card"><div class="card-h"><h2>Recent sets</h2></div><div class="feed" id="feed"><div class="empty">No sets yet</div></div></section></div></div>`);
       v.append(fl); wall = fl.querySelector("#wall"); this.buildWall();
       const eq = fl.querySelector("#equip"), mark = id => wall.querySelectorAll(".hit").forEach(h => h.classList.toggle("hl", !!id && h.dataset.member === id));
       eq.onmouseover = e => mark(e.target.closest("[data-member]")?.dataset.member);
@@ -141,20 +141,20 @@ function FloorPage() {
       eq.onclick = e => { const r = e.target.closest("[data-member]"); if (r && cfg.members.some(m => m.id === r.dataset.member)) location.hash = "member-" + r.dataset.member; };
     },
     buildWall() {
-      wall.innerHTML = `<div class="wall-h"><b>Cameras</b><span>${cfg.cameras.length} feeds</span><span class="right"><button data-skel aria-pressed="${store.get("skel", true)}" title="Draw each person's skeleton">${IC.skel}Skeletons</button>${focus ? '<button data-unfocus>Show all</button>' : ""}</span></div>`;
+      wall.innerHTML = `<div class="wall-h"><span class="crumbs"><b>${esc(cfg.gym || "Site")}</b>${IC.chev}<span>All cameras</span></span><span class="right"><button data-skel aria-pressed="${store.get("skel", true)}" title="Show skeletons">${IC.skel}Skeletons</button>${focus ? '<button data-unfocus>Show all</button>' : ""}</span></div>`;
       wall.classList.toggle("focus", !!focus);
       const cams = focus ? [cfg.cameras.find(c => c.id === focus), ...cfg.cameras.filter(c => c.id !== focus)] : cfg.cameras;
       const list = cams.filter(Boolean);
       list.forEach((cam, i) => {
         const hero = cam.id === focus || (!focus && list.length % 2 === 1 && i === 0);
-        const t = el(`<div class="tile ${hero ? "main" : ""}" data-cam="${esc(cam.id)}" role="button" tabindex="0" aria-label="${esc(cam.name)} camera"><div class="frame"><canvas class="skel" aria-hidden="true"></canvas><div class="hits" aria-label="People on camera"></div></div><div class="cap"><span class="rec"><i></i>LIVE</span><b>${esc(cam.name)}</b><span class="b"></span><span class="fps"></span></div></div>`);
+        const t = el(`<div class="tile ${hero ? "main" : ""}" data-cam="${esc(cam.id)}" role="button" tabindex="0" aria-label="${esc(cam.name)} camera"><div class="frame"><canvas class="skel" aria-hidden="true"></canvas><div class="hits" aria-label="People on camera"></div><div class="cap"><span class="rec"><i></i></span><b>${esc(cam.name)}</b></div><div class="cap2"><span class="b"></span><span class="fps"></span></div></div></div>`);
         t.querySelector(".frame").prepend(src.view(cam)); wall.append(t);
       });
       wall.onclick = e => {
         if (e.target.closest("[data-unfocus]")) { focus = null; return this.buildWall(); }
         const sk = e.target.closest("[data-skel]"); if (sk) { const on = !store.get("skel", true); store.set("skel", on); sk.setAttribute("aria-pressed", on); return; }
         const h = e.target.closest(".hit");
-        if (h) { e.stopPropagation(); if (h.dataset.member) location.hash = "member-" + h.dataset.member; else toast(`${h.dataset.label} was only on camera briefly, so there's no profile yet.`); return; }
+        if (h) { e.stopPropagation(); if (h.dataset.member) location.hash = "member-" + h.dataset.member; else toast(`${h.dataset.label}: no profile (not enough time on camera)`); return; }
         const t = e.target.closest(".tile"); if (!t) return;
         focus = focus === t.dataset.cam ? null : t.dataset.cam; this.buildWall();
       };
@@ -168,26 +168,26 @@ function FloorPage() {
       const setsToday = Object.values(util).reduce((a, u) => a + u.n, 0), rests = inGym.filter(m => m.avg_rest_s != null);
       const avgRest = rests.length ? rests.reduce((a, m) => a + m.avg_rest_s, 0) / rests.length : null;
       $("#kpis").innerHTML = `
-        <div class="card kpi"><span class="eyebrow">In the gym</span><div class="row"><span class="big">${inGym.length}<small>members</small></span><span class="stack">${inGym.slice(0, 5).map(m => avatar(m, "sm")).join("")}</span></div><span class="delta">${inGym.filter(m => m.status === "lifting").length} lifting right now</span></div>
-        <div class="card kpi"><span class="eyebrow">Machines in use</span><div class="row"><span class="big">${lifting + resting}<small>/ ${ms.length}</small></span></div><div class="meter" data-tip="${lifting} under load · ${resting} between sets · ${ms.length - lifting - resting} free"><span style="width:${lifting / ms.length * 100}%;background:var(--lift)"></span><span style="width:${resting / ms.length * 100}%;background:var(--rest)"></span></div></div>
-        <div class="card kpi"><span class="eyebrow">Sets today</span><div class="row"><span class="big">${setsToday}</span></div><span class="delta">${Object.values(util).reduce((a, u) => a + (u.members || 0), 0)} member-machine pairings</span></div>
-        <div class="card kpi"><span class="eyebrow">Average rest today</span><div class="row"><span class="big">${avgRest != null ? clockFmt(avgRest) : "–"}</span></div><span class="delta">between sets, members in the gym</span></div>`;
+        <div class="card kpi"><span class="eyebrow">In the gym</span><div class="row"><span class="big">${inGym.length}</span><span class="stack">${inGym.slice(0, 5).map(m => avatar(m, "sm")).join("")}</span></div><span class="delta">${inGym.filter(m => m.status === "lifting").length} lifting now</span></div>
+        <div class="card kpi"><span class="eyebrow">Stations in use</span><div class="row"><span class="big">${lifting + resting}<small>/ ${ms.length}</small></span></div><div class="meter" data-tip="${lifting} under load · ${resting} between sets · ${ms.length - lifting - resting} free"><span style="width:${lifting / ms.length * 100}%;background:var(--lift)"></span><span style="width:${resting / ms.length * 100}%;background:var(--rest)"></span></div></div>
+        <div class="card kpi"><span class="eyebrow">Sets today</span><div class="row"><span class="big">${setsToday}</span></div><span class="delta">${Object.values(util).reduce((a, u) => a + (u.members || 0), 0)} member–station pairs</span></div>
+        <div class="card kpi"><span class="eyebrow">Avg rest</span><div class="row"><span class="big">${avgRest != null ? clockFmt(avgRest) : "–"}</span></div><span class="delta">members in the gym</span></div>`;
       for (const c of live.camera_status || []) {
         const t = wall.querySelector(`.tile[data-cam="${CSS.escape(c.id)}"]`); if (!t) continue;
-        const rec = t.querySelector(".rec"); rec.classList.toggle("off", c.status !== "live"); rec.lastChild.textContent = c.status === "live" ? "LIVE" : c.status.toUpperCase();
+        const rec = t.querySelector(".rec"); rec.classList.toggle("off", c.status !== "live"); rec.title = c.status;
         t.querySelector(".fps").textContent = `${(+c.fps).toFixed(1)} fps`;
         const zs = c.zones.map(z => ms.find(m => m.id === z.machine)).filter(Boolean);
         t.querySelector(".b").innerHTML = `<span>${zs.length} zones</span><span>${zs.filter(m => m.state === "lifting").length} active</span>`;
       }
-      $("#eqHint").textContent = `${lifting} under load · ${ms.length - lifting - resting} free`;
+      $("#eqHint").textContent = `${lifting} in use · ${ms.length - lifting - resting} free`;
       const byMember = Object.fromEntries(live.members.map(m => [m.id, m]));
       $("#equip").innerHTML = ms.map(m => {
         const mach = cfg.machines.find(x => x.id === m.id) || m, st = m.state === "lifting" ? "lifting" : m.member ? "resting" : "free";
         const mem = byMember[m.member], rest = mem?.current_rest_s;
-        const who = st === "lifting" ? `${mem ? avatar(mem, "sm") : ""}<span>${esc(m.member_name || "Guest (no tag)")}${m.activity ? " · " + esc(actName(m.activity)) : ""}</span>` : st === "resting" ? `${avatar(mem || {id: m.member, name: m.member_name}, "sm")}<span>${esc(m.member_name)} · between sets</span>` : `<span>Free</span>`;
-        const meta = st === "lifting" ? `<div class="timer num">${m.reps}<span style="font-size:14px;color:var(--muted);margin-left:2px">reps</span></div><div class="timer-l num">set ${clockFmt(m.set_elapsed)}</div>`
+        const who = st === "lifting" ? `<span>${esc(m.member_name || "Guest")}${m.activity ? " · " + esc(actName(m.activity)) : ""}</span>` : st === "resting" ? `<span>${esc(m.member_name)} · resting</span>` : `<span>Free</span>`;
+        const meta = st === "lifting" ? `<div class="timer num">${m.reps} reps</div><div class="timer-l num">${clockFmt(m.set_elapsed)}</div>`
           : st === "resting" ? `<div class="timer num">${rest != null ? clockFmt(rest) : "–"}</div><div class="timer-l">rest</div>` : `<div class="timer-l">${m.cameras.length} cam${m.cameras.length === 1 ? "" : "s"}</div>`;
-        return `<div class="eq ${st}${m.member && st !== "free" ? " link" : ""}" ${m.member && st !== "free" ? `data-member="${esc(m.member)}"` : ""}><span class="ico">${machineIcon(mach)}</span><div style="min-width:0"><div class="nm">${esc(m.name)}</div><div class="who">${who}</div></div><div class="meta">${meta}</div></div>`;
+        return `<div class="eq ${st}${m.member && st !== "free" ? " link" : ""}" ${m.member && st !== "free" ? `data-member="${esc(m.member)}"` : ""}><span class="dot"></span><div style="min-width:0"><div class="nm">${esc(m.name)}</div><div class="who">${who}</div></div><div class="meta">${meta}</div></div>`;
       }).join("");
       const feed = $("#feed");
       if (live.recent_sets.length) {
@@ -195,7 +195,7 @@ function FloorPage() {
         for (const r of [...live.recent_sets].reverse()) {
           const key = r.machine + ":" + r.start.toFixed(1); if (feedKeys.has(key)) continue; feedKeys.add(key);
           const mem = memberOf(r.member);
-          feed.prepend(el(`<div class="fi ${feedKeys.size > live.recent_sets.length ? "new" : ""}">${mem ? avatar(mem, "sm") : `<span class="avatar sm" style="--a:var(--other)">G</span>`}<span class="w"><b>${esc(mem?.name || r.who || "Guest")}</b> · ${r.reps} reps${r.exercise ? " · " + esc(exName(ACT_EX[r.exercise] !== undefined ? ACT_EX[r.exercise] || r.exercise : r.exercise)) : ""} ${r.exercise ? "in" : "on"} ${esc(machineName(r.machine))}<span class="tagx">${fmtDur(r.duration)}${r.cameras.length > 1 ? ` · ${r.cameras.length} cams` : ""}</span></span><time>${hm(r.end)}</time></div>`));
+          feed.prepend(el(`<div class="fi ${feedKeys.size > live.recent_sets.length ? "new" : ""}">${mem ? avatar(mem, "sm") : `<span class="avatar sm" style="--a:var(--other)">G</span>`}<span class="w"><b>${esc(mem?.name || r.who || "Guest")}</b><span class="d">${esc(machineName(r.machine))}${r.exercise ? " · " + esc(exName(ACT_EX[r.exercise] !== undefined ? ACT_EX[r.exercise] || r.exercise : r.exercise)) : ""} · ${fmtDur(r.duration)}</span></span><span class="r"><b class="num">${r.reps}</b> reps<time>${hm(r.end)}</time></span></div>`));
         }
         while (feed.children.length > 30) feed.lastChild.remove();
       }
@@ -209,14 +209,14 @@ function MembersPage() {
   return {
     title: "Members", sub: PAGES.find(p => p.id === "members").sub,
     actions(a) {
-      a.append(el(`<button class="btn secondary">${IC.download}Export CSV</button>`)); a.lastChild.onclick = () => downloadCSV("members.csv", [["Member", "Tag", "Status", "Sets today", "Reps today", "Lifting (s)", "Avg rest (s)"], ...(live?.members || []).map(m => [m.name, m.tag ?? "", m.status, m.sets || 0, m.reps || 0, Math.round(m.lifting_s || 0), m.avg_rest_s != null ? Math.round(m.avg_rest_s) : ""])]);
+      a.append(el(`<button class="btn secondary">${IC.download}Export</button>`)); a.lastChild.onclick = () => downloadCSV("members.csv", [["Member", "Tag", "Status", "Sets today", "Reps today", "Lifting (s)", "Avg rest (s)"], ...(live?.members || []).map(m => [m.name, m.tag ?? "", m.status, m.sets || 0, m.reps || 0, Math.round(m.lifting_s || 0), m.avg_rest_s != null ? Math.round(m.avg_rest_s) : ""])]);
       a.append(el(`<button class="btn secondary">${IC.print}Print tags</button>`)); a.lastChild.onclick = printTags;
       a.append(el(`<button class="btn">${IC.plus}Add member</button>`)); a.lastChild.onclick = addMember;
     },
     mount(v) {
-      v.append(el(`<div class="toolbar"><label class="search">${IC.search}<input class="input" id="mq" placeholder="Search members" aria-label="Search members"></label><div class="chips" id="mchips"></div>
+      v.append(el(`<div class="toolbar"><div class="chips seg" id="mchips"></div><label class="search">${IC.search}<input class="input" id="mq" placeholder="Search members" aria-label="Search members"></label>
         <div class="right legend"><span><i style="background:var(--lift)"></i>Set</span><span><i style="background:var(--rest)"></i>Rest</span></div></div>`));
-      v.append(el(`<div class="roster" id="roster"></div>`));
+      v.append(el(`<section class="card tcard"><div class="tbl-wrap"><table class="mtable"><thead><tr><th>Member</th><th>Status</th><th>Location</th><th class="tl">Today</th><th class="n">Sets</th><th class="n">Reps</th><th class="n">Lifting</th><th class="n">Avg rest</th></tr></thead><tbody id="roster"></tbody></table></div></section>`));
       $("#mq").oninput = e => { q = e.target.value.toLowerCase(); this.update(); };
       $("#mchips").onclick = e => { const b = e.target.closest("[data-f]"); if (b) { filter = b.dataset.f; this.update(); } };
       $("#roster").onclick = e => { const c = e.target.closest("[data-member]"); if (c) location.hash = "member-" + c.dataset.member; };
@@ -225,15 +225,17 @@ function MembersPage() {
     update() {
       if (!live) return;
       const F = {all: () => true, in: m => m.status !== "away", lifting: m => m.status === "lifting", resting: m => m.status === "resting", away: m => m.status === "away"};
-      const L = {all: "All", in: "In the gym", lifting: "Lifting", resting: "Resting", away: "Not in"};
+      const L = {all: "All", in: "In gym", lifting: "Lifting", resting: "Resting", away: "Not in"};
       $("#mchips").innerHTML = Object.keys(F).map(k => `<button class="chip" data-f="${k}" aria-pressed="${k === filter}">${L[k]}<span class="n">${live.members.filter(F[k]).length}</span></button>`).join("");
       const list = live.members.filter(F[filter]).filter(m => !q || m.name.toLowerCase().includes(q));
       $("#roster").innerHTML = list.map(m => `
-        <article class="card mc" data-member="${esc(m.id)}" tabindex="0" role="link" aria-label="${esc(m.name)}">
-          <div class="top">${avatar(m, m.status === "lifting" ? "ring" : m.status === "resting" ? "ring resting" : "")}<div><div class="nm">${esc(m.name)}</div><div class="loc">${m.status === "away" ? "Not checked in today" : m.location ? "At " + esc(machineName(m.location)) : "Checked in " + hm(m.session_start)}</div></div>${pill(m.status)}</div>
-          ${sessionStrip(m)}
-          <div class="stats"><div><b>${m.sets || 0}</b><span>sets</span></div><div><b>${m.reps || 0}</b><span>reps</span></div><div><b>${clockFmt(m.lifting_s || 0)}</b><span>lifting</span></div><div><b>${m.avg_rest_s != null ? clockFmt(m.avg_rest_s) : "–"}</b><span>avg rest</span></div></div>
-        </article>`).join("") || `<div class="card empty" style="grid-column:1/-1">${IC.members}<b>No members match</b>Try another filter.</div>`;
+        <tr class="mc" data-member="${esc(m.id)}" tabindex="0" role="link" aria-label="${esc(m.name)}">
+          <td class="who">${avatar(m, "sm")}<span><b>${esc(m.name)}</b>${m.tag != null ? `<small>Tag ${m.tag}</small>` : ""}</span></td>
+          <td class="st">${pill(m.status)}</td>
+          <td class="loc">${m.status === "away" ? '<span class="muted">–</span>' : m.location ? esc(machineName(m.location)) : `<span class="muted">In since ${hm(m.session_start)}</span>`}</td>
+          <td class="tl">${sessionStrip(m)}</td>
+          <td class="n" data-l="Sets">${m.sets || 0}</td><td class="n" data-l="Reps">${m.reps || 0}</td><td class="n" data-l="Lifting">${clockFmt(m.lifting_s || 0)}</td><td class="n" data-l="Avg rest">${m.avg_rest_s != null ? clockFmt(m.avg_rest_s) : "–"}</td>
+        </tr>`).join("") || `<tr><td colspan="8" class="empty">No members match</td></tr>`;
     },
   };
 }
@@ -265,7 +267,7 @@ const segLabel = sg => sg.state === "lift" ? `Set on ${machineName(sg.zone)}` : 
 const segColor = st => st === "lift" ? "var(--lift)" : st === "rest" ? "var(--rest)" : "var(--other)";
 function personReplay(host, tr, bd) { // video that follows one person, with skeleton, captions and chapters
   host.innerHTML = `<div class="prp"><div class="prp-stage"><canvas></canvas><div class="prp-cap"></div><div class="prp-wait">Loading video…</div></div>
-    <div class="prp-side"><div class="eyebrow">Chapters</div><div class="prp-ch"></div></div></div>
+    <div class="prp-side"><div class="prp-h">Events</div><div class="prp-ch"></div></div></div>
     <div class="skp-bar"><button class="btn secondary sm" data-pp aria-label="Pause">${IC.pause}</button><input type="range" min="0" max="1000" value="0" aria-label="Position"><span class="num skp-t"></span><button class="btn ghost sm" data-sp>1×</button><label class="prp-tog"><input type="checkbox" checked data-sk> Skeleton</label></div>`;
   const pv = tr.parts ? new PartedVideo(tr.parts, {autoplay: false}) : null;
   const v = pv ? pv.el : document.createElement("video");
@@ -276,7 +278,7 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
   // chapters: each set, and each stay at a station of 4 s or more
   const ch = [...tr.sets.map((x, i) => ({t: x.t0, label: `Set ${i + 1} · ${x.reps} reps`, sub: machineName(x.m), state: "lift"})),
     ...bd.segs.filter(g => g.state === "rest" && g.t1 - g.t0 >= 4).map(g => ({t: g.t0, label: `At ${machineName(g.zone)}`, sub: `${fmtDur(g.t1 - g.t0)}, not lifting`, state: "rest"}))].sort((a, b) => a.t - b.t);
-  host.querySelector(".prp-ch").innerHTML = ch.map(c => `<button data-seek="${c.t}"><i style="background:${segColor(c.state)}"></i><span><b>${esc(c.label)}</b><small>${esc(c.sub)} · ${clockFmt(c.t - T0)}</small></span></button>`).join("") || `<div class="muted small">Walking and standing only: no sets or station stays.</div>`;
+  host.querySelector(".prp-ch").innerHTML = ch.map(c => `<button data-seek="${c.t}"><i style="background:${segColor(c.state)}"></i><span><b>${esc(c.label)}</b><small>${esc(c.sub)} · ${clockFmt(c.t - T0)}</small></span></button>`).join("") || `<div class="muted small">No sets or station stays</div>`;
   let playing = true, speed = 1, crop = null, raf, showSk = true;
   let want = T0;
   const seek = t => { want = Math.max(T0, Math.min(T1, t)); V.currentTime = want; crop = null; };
@@ -301,9 +303,9 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
     const map = p => [(p[0] * W - crop.x) / crop.w * cw, (p[1] * H - crop.y) / crop.h * chh];
     const set = tr.sets.find(x => t >= x.t0 && t <= x.t1), si = set ? tr.sets.indexOf(set) : -1, smp = tr.samples.reduce((a, b) => Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a);
     // outline the person so it's clear who this is in a crowd
-    const [qx, qy] = map([bx, by]), [rx, ry] = map([bx + bw, by + bh]); ctx.strokeStyle = set ? "#7c86ff" : "rgba(255,255,255,.85)"; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(qx, qy, rx - qx, ry - qy); ctx.setLineDash([]);
-    if (showSk) { const pose = tr.pose(t); if (pose) drawSkeleton(ctx, pose, map, {color: set ? "#3d7cf0" : "#ffb347", width: 3, joint: 3}); }
-    cap.innerHTML = set ? `<b>Set ${si + 1} · ${set.reps} reps</b><span>${esc(machineName(set.m))}</span>` : smp.zone ? `<b>${esc(machineName(smp.zone))}</b><span>between sets</span>` : `<b>On the floor</b><span>moving</span>`;
+    const [qx, qy] = map([bx, by]), [rx, ry] = map([bx + bw, by + bh]); ctx.strokeStyle = set ? "#2bb3ea" : "rgba(255,255,255,.85)"; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(qx, qy, rx - qx, ry - qy); ctx.setLineDash([]);
+    if (showSk) { const pose = tr.pose(t); if (pose) drawSkeleton(ctx, pose, map, {color: set ? "#2bb3ea" : "#ffb020", width: 3, joint: 3}); }
+    cap.innerHTML = set ? `<i></i><b>Set ${si + 1} · ${set.reps} reps</b><span>${esc(machineName(set.m))}</span>` : smp.zone ? `<i></i><b>${esc(machineName(smp.zone))}</b><span>between sets</span>` : `<i></i><b>On floor</b>`;
     cap.className = "prp-cap " + (set ? "lift" : smp.zone ? "rest" : "");
     range.value = String(Math.round((t - T0) / span * 1000)); tEl.textContent = `${clockFmt(t - T0)} / ${clockFmt(span)}`;
   }
@@ -318,11 +320,10 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
 function stationTimesHTML(bd) {
   const mx = Math.max(1, ...bd.stations.map(s => s.all), bd.floor);
   const row = (name, lift, idle, tip) => `<div class="stn" data-tip="${esc(tip)}"><span class="nm">${esc(name)}</span><div class="bar3"><i style="width:${(lift / mx * 100).toFixed(1)}%;background:var(--lift)"></i><i style="width:${(idle / mx * 100).toFixed(1)}%;background:var(--rest)"></i></div><span class="muted num">${fmtDur(lift + idle)}</span></div>`;
-  return `<div class="stn-facts"><div><span class="eyebrow">On camera</span><b class="num">${fmtDur(bd.total)}</b></div><div><span class="eyebrow">First seen</span><b class="num">${clockFmt(bd.first)}</b></div><div><span class="eyebrow">Last seen</span><b class="num">${clockFmt(bd.last)}</b></div><div><span class="eyebrow">At stations</span><b class="num">${bd.total ? Math.round(bd.stations.reduce((a, s) => a + s.all, 0) / bd.total * 100) : 0}%</b></div></div>
+  return `<dl class="stn-facts"><div><dt>On camera</dt><dd class="num">${fmtDur(bd.total)}</dd></div><div><dt>First seen</dt><dd class="num">${clockFmt(bd.first)}</dd></div><div><dt>Last seen</dt><dd class="num">${clockFmt(bd.last)}</dd></div><div><dt>At stations</dt><dd class="num">${bd.total ? Math.round(bd.stations.reduce((a, s) => a + s.all, 0) / bd.total * 100) : 0}%</dd></div></dl>
     ${bd.stations.map(s => row(machineName(s.id), s.lift, s.idle, `${machineName(s.id)}\nIn a set ${fmtDur(s.lift)}\nThere, not lifting ${fmtDur(s.idle)}`)).join("")}
-    ${row("On the floor / walking", 0, 0, `Moving or standing away from equipment\n${fmtDur(bd.floor)}`).replace('<div class="bar3">', `<div class="bar3"><i style="width:${(bd.floor / mx * 100).toFixed(1)}%;background:var(--other)"></i>`).replace(/<span class="muted num">[^<]*<\/span>/, `<span class="muted num">${fmtDur(bd.floor)}</span>`)}
-    <div class="legend" style="margin-top:8px"><span><i style="background:var(--lift)"></i>In a set</span><span><i style="background:var(--rest)"></i>At the station, not lifting</span><span><i style="background:var(--other)"></i>Floor / walking</span></div>
-    <p class="muted small" style="margin:8px 0 0">Estimated from where the cameras placed them each second; gaps over 2 s (out of view) aren't counted.</p>`;
+    ${row("Floor / walking", 0, 0, `Moving or standing away from equipment\n${fmtDur(bd.floor)}`).replace('<div class="bar3">', `<div class="bar3"><i style="width:${(bd.floor / mx * 100).toFixed(1)}%;background:var(--other)"></i>`).replace(/<span class="muted num">[^<]*<\/span>/, `<span class="muted num">${fmtDur(bd.floor)}</span>`)}
+    <div class="legend" style="margin-top:8px"><span><i style="background:var(--lift)"></i>In set</span><span><i style="background:var(--rest)"></i>At station</span><span><i style="background:var(--other)"></i>Floor</span></div>`;
 }
 function stateStripHTML(bd) {
   const span = Math.max(1, bd.last + 1 - bd.first);
@@ -333,19 +334,18 @@ function stateStripHTML(bd) {
 function MemberPage(id) {
   let prog = null, trendM = null, metric = "reps", built = false;
   return {
-    title: "Member profile", sub: () => memberOf(id)?.name || "",
+    title: memberOf(id)?.name || "Member", sub: () => "",
     actions(a) {
-      a.append(el(`<a class="btn secondary" href="#members">← All members</a>`));
-      a.append(el(`<button class="btn secondary">${IC.print}Tag</button>`)); a.lastChild.onclick = () => printTags(id);
+      a.append(el(`<button class="btn secondary">${IC.print}Print tag</button>`)); a.lastChild.onclick = () => printTags(id);
     },
     mount(v) {
       v.append(el(`<div class="profile"><section class="card ph" id="ph"></section><section class="tiles" id="ptiles"></section>
-        <section class="card"><div class="card-h"><h2>Today's session</h2><span class="right legend"><span><i style="background:var(--lift)"></i>Set</span><span><i style="background:var(--rest)"></i>Rest between sets</span></span></div><div class="card-b" id="pstrip"></div></section>
-        <section class="card" id="preplay"><div class="card-h"><h2>Activity replay</h2><span class="hint" id="preplayT"></span><span class="right hint">follows this person · click a chapter to jump</span></div><div class="card-b" id="preplayB"></div></section>
-        <section class="card" id="pstate" hidden><div class="card-h"><h2>Timeline</h2><span class="hint">every second on camera</span><span class="right legend"><span><i style="background:var(--lift)"></i>In a set</span><span><i style="background:var(--rest)"></i>At a station</span><span><i style="background:var(--other)"></i>Moving</span></span></div><div class="card-b" id="pstateB"></div></section>
-        <section class="card" id="pstations" hidden><div class="card-h"><h2>Time by station</h2><span class="hint">estimated from the cameras</span></div><div class="card-b" id="pstationsB"></div></section>
-        <section class="card" id="ppose" hidden><div class="card-h"><h2>Posture</h2><span class="hint" id="pposeT"></span><span class="right hint">skeleton from the cameras · drag to scrub</span></div><div class="card-b" id="pposeB"></div></section>
-        <div id="phist"><div class="card empty">Loading history…</div></div></div>`));
+        <section class="card"><div class="card-h"><h2>Today</h2><span class="right legend"><span><i style="background:var(--lift)"></i>Set</span><span><i style="background:var(--rest)"></i>Rest</span></span></div><div class="card-b" id="pstrip"></div></section>
+        <section class="card" id="preplay"><div class="card-h"><h2>Replay</h2><span class="hint" id="preplayT"></span></div><div class="card-b" id="preplayB"></div></section>
+        <div class="grid2"><section class="card" id="pstate" hidden><div class="card-h"><h2>Timeline</h2><span class="right legend"><span><i style="background:var(--lift)"></i>In set</span><span><i style="background:var(--rest)"></i>At station</span><span><i style="background:var(--other)"></i>Moving</span></span></div><div class="card-b" id="pstateB"></div></section>
+        <section class="card" id="pstations" hidden><div class="card-h"><h2>Time by station</h2></div><div class="card-b" id="pstationsB"></div></section></div>
+        <section class="card" id="ppose" hidden><div class="card-h"><h2>Posture</h2><span class="hint" id="pposeT"></span></div><div class="card-b" id="pposeB"></div></section>
+        <div id="phist"><div class="card empty">Loading…</div></div></div>`));
       const clip = src.poseClip?.(id);
       if (src.poseClip) { $("#ppose").hidden = false; $("#pposeT").textContent = clip ? `${clip.title} · ${clip.camera}` : ""; this.player = skeletonPlayer($("#pposeB"), clip); }
       const tr = src.personTrack?.(id);
@@ -356,7 +356,7 @@ function MemberPage(id) {
         $("#pstate").hidden = $("#pstations").hidden = false;
         $("#pstateB").innerHTML = stateStripHTML(bd); $("#pstationsB").innerHTML = stationTimesHTML(bd);
         $("#pstateB").onclick = e => { const g = e.target.closest("[data-seek]"); if (g) { this.replay.seek(+g.dataset.seek); $("#preplay").scrollIntoView({behavior: "smooth", block: "start"}); } };
-      } else $("#preplayB").innerHTML = `<div class="empty" style="padding:20px">${src.mode === "server" ? "Video replay is available for analysed recordings; live cameras aren't recorded, so there's no video to replay." : "No camera footage for this member."}</div>`;
+      } else $("#preplayB").innerHTML = `<div class="empty">${src.mode === "server" ? "Replay is available for analysed recordings only" : "No footage for this member"}</div>`;
       this.load();
     },
     unmount() { this.player?.destroy(); this.replay?.destroy(); },
@@ -369,18 +369,18 @@ function MemberPage(id) {
       if (!trendM || !prog.machines[trendM]) trendM = machines[0];
       const pts = (prog.machines[trendM]?.history || []).map(h => ({day: h.day, sets: h.sets, v: metric === "kg" ? h.top_kg : h.reps / h.sets})).filter(x => x.v != null);
       const weeks = weeksFrom(prog, m);
-      $("#phist").innerHTML = `<div style="display:flex;flex-direction:column;gap:20px">
-        <section class="card"><div class="card-h"><h2>Training profile</h2><span class="hint">muscles trained in the last 7 days · style · coaching</span></div><div class="card-b">${trainingProfileHTML(prog)}</div></section>
+      $("#phist").innerHTML = `<div class="stack-v">
+        <section class="card"><div class="card-h"><h2>Training profile</h2><span class="hint">Last 7 days</span></div><div class="card-b">${trainingProfileHTML(prog)}</div></section>
         <div class="grid2">
-          <section class="card"><div class="card-h"><h2>Weekly training time</h2><span class="hint">minutes</span><span class="right legend"><span><i style="background:var(--lift)"></i>Lifting</span><span><i style="background:var(--rest)"></i>Resting</span></span></div><div class="card-b">${weeklyChart(weeks)}</div></section>
-          <section class="card"><div class="card-h"><h2>Progress</h2><span class="right"><select class="input" id="tm" aria-label="Machine" style="height:30px">${machines.map(x => `<option value="${esc(x)}" ${x === trendM ? "selected" : ""}>${esc(machineName(x))}</option>`).join("")}</select><select class="input" id="tk" aria-label="Measure" style="height:30px"><option value="reps" ${metric === "reps" ? "selected" : ""}>Reps per set</option><option value="kg" ${metric === "kg" ? "selected" : ""}>Top weight</option></select></span></div><div class="card-b">${trendChart(pts, metric === "kg" ? "Top weight" : "Reps per set", metric === "kg" ? " kg" : "")}</div></section>
+          <section class="card"><div class="card-h"><h2>Weekly training time</h2><span class="hint">min</span><span class="right legend"><span><i style="background:var(--lift)"></i>Lifting</span><span><i style="background:var(--rest)"></i>Resting</span></span></div><div class="card-b">${weeklyChart(weeks)}</div></section>
+          <section class="card"><div class="card-h"><h2>Progress</h2><span class="right"><select class="input sm" id="tm" aria-label="Machine">${machines.map(x => `<option value="${esc(x)}" ${x === trendM ? "selected" : ""}>${esc(machineName(x))}</option>`).join("")}</select><select class="input sm" id="tk" aria-label="Measure"><option value="reps" ${metric === "reps" ? "selected" : ""}>Reps per set</option><option value="kg" ${metric === "kg" ? "selected" : ""}>Top weight</option></select></span></div><div class="card-b">${trendChart(pts, metric === "kg" ? "Top weight" : "Reps per set", metric === "kg" ? " kg" : "")}</div></section>
         </div>
         <div class="grid2">
-          <section class="card"><div class="card-h"><h2>Personal records</h2><span class="hint">last 90 days · ${prog.sessions} sessions</span></div><div class="card-b"><div class="prs">${machines.map(x => { const r = prog.machines[x]; return `<div class="pr" style="--pc:${plateFor(x)}"><span class="m">${esc(machineName(x))}</span><span class="v">${r.best_kg != null ? `${r.best_kg}<small>kg</small>` : `${r.best_reps}<small>reps</small>`}</span><span class="s">${r.best_kg != null ? `best ${r.best_reps} reps · ` : ""}${r.sets} sets · ${fmtDur(r.time_s)} under load</span></div>`; }).join("") || `<div class="empty"><b>No sets yet</b></div>`}</div></div></section>
-          <section class="card"><div class="card-h"><h2>Sets recorded</h2><span class="hint">${prog.recent_sets.length} sets · exercise from the equipment and pose · add your weight</span></div><div class="card-b" style="padding-top:6px"><div class="tbl-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>When</th><th>Station</th><th>Exercise</th><th>Muscles worked</th><th class="n">Reps</th><th class="n">Time</th><th class="n">Rest before</th><th class="n">kg</th></tr></thead><tbody>
+          <section class="card"><div class="card-h"><h2>Personal records</h2><span class="hint">90 days · ${prog.sessions} sessions</span></div><div class="card-b"><div class="prs">${machines.map(x => { const r = prog.machines[x]; return `<div class="pr" style="--pc:${plateFor(x)}"><span class="m">${esc(machineName(x))}</span><span class="v">${r.best_kg != null ? `${r.best_kg}<small>kg</small>` : `${r.best_reps}<small>reps</small>`}</span><span class="s">${r.best_kg != null ? `best ${r.best_reps} reps · ` : ""}${r.sets} sets · ${fmtDur(r.time_s)}</span></div>`; }).join("") || `<div class="empty">No sets yet</div>`}</div></div></section>
+          <section class="card tcard"><div class="card-h"><h2>Sets</h2><span class="hint">${prog.recent_sets.length}</span></div><div class="tbl-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>When</th><th>Station</th><th>Exercise</th><th>Muscles</th><th class="n">Reps</th><th class="n">Time</th><th class="n">Rest before</th><th class="n">kg</th></tr></thead><tbody>
             ${prog.recent_sets.map((s, i, arr) => { const ex = typeof bmExerciseFor === "function" ? bmExerciseFor({exercise: s.exercise, machine: s.machine}, cfg.machines) : s.exercise, E = typeof BM_EXERCISES !== "undefined" ? BM_EXERCISES[ex] : null, mus = E ? E.primary.map(id => BM_MUSCLES.find(m => m.id === id)?.name || id).join(", ") : "–", prev = arr[i + 1], rest = prev && s.start - prev.end > 0 && s.start - prev.end < 600 ? fmtDur(s.start - prev.end) : "–";
-              return `<tr><td>${dayKey(s.start) === dayKey(Date.now() / 1000) ? hm(s.start) : shortDay(dayKey(s.start))}</td><td>${esc(machineName(s.machine))}</td><td>${E && ex !== "unknown" ? esc(E.name) : '<span class="muted">Not sure</span>'}</td><td class="muted">${esc(mus)}</td><td class="n">${s.reps}</td><td class="n">${fmtDur(s.end - s.start)}</td><td class="n">${rest}</td><td class="n"><input class="kg" type="number" step="2.5" min="0" inputmode="decimal" aria-label="Weight in kg" data-set="${s.id}" value="${s.weight_kg ?? ""}" placeholder="–"></td></tr>`; }).join("") || `<tr><td colspan="8" class="muted">No sets recorded for this person yet.</td></tr>`}
-          </tbody></table></div></div></section>
+              return `<tr><td>${dayKey(s.start) === dayKey(Date.now() / 1000) ? hm(s.start) : shortDay(dayKey(s.start))}</td><td>${esc(machineName(s.machine))}</td><td>${E && ex !== "unknown" ? esc(E.name) : '<span class="muted">–</span>'}</td><td class="muted">${esc(mus)}</td><td class="n">${s.reps}</td><td class="n">${fmtDur(s.end - s.start)}</td><td class="n">${rest}</td><td class="n"><input class="kg" type="number" step="2.5" min="0" inputmode="decimal" aria-label="Weight in kg" data-set="${s.id}" value="${s.weight_kg ?? ""}" placeholder="–"></td></tr>`; }).join("") || `<tr><td colspan="8" class="muted">No sets yet</td></tr>`}
+          </tbody></table></div></section>
         </div></div>`;
       $("#tm") && ($("#tm").onchange = e => { trendM = e.target.value; this.build(m); });
       $("#tk") && ($("#tk").onchange = e => { metric = e.target.value; this.build(m); });
@@ -389,15 +389,15 @@ function MemberPage(id) {
     },
     update() {
       const m = live?.members.find(x => x.id === id);
-      if (!m) { $("#view").innerHTML = `<div class="card empty">${IC.members}<b>Member not found</b><a href="#members">Back to members</a></div>`; return; }
-      $("#ph").innerHTML = `${avatar(m, "lg " + (m.status === "lifting" ? "ring" : m.status === "resting" ? "ring resting" : ""))}<div><h2>${esc(m.name)}</h2><div class="facts"><span class="mono">TAG #${m.tag}</span><span>${m.status === "away" ? "Not in the gym" : `Checked in ${hm(m.session_start)}`}</span>${m.location ? `<span>At ${esc(machineName(m.location))}</span>` : ""}</div></div><div class="right">${pill(m.status)}</div>`;
+      if (!m) { $("#view").innerHTML = `<div class="card empty">Member not found · <a href="#members">Back to members</a></div>`; return; }
+      $("#ph").innerHTML = `${avatar(m, "lg")}<dl class="facts"><div><dt>Status</dt><dd>${pill(m.status)}</dd></div><div><dt>Tag</dt><dd class="num">${m.tag}</dd></div><div><dt>Checked in</dt><dd>${m.status === "away" ? "–" : hm(m.session_start)}</dd></div><div><dt>Location</dt><dd>${m.location ? esc(machineName(m.location)) : "–"}</dd></div></dl>`;
       const ratio = m.lifting_s ? (m.resting_s / m.lifting_s).toFixed(1) : null;
       $("#ptiles").innerHTML = [
         ["Lifting today", clockFmt(m.lifting_s || 0)], ["Resting today", clockFmt(m.resting_s || 0)], ["Sets", m.sets || 0], ["Reps", m.reps || 0],
         [m.current_rest_s != null ? "Resting now" : "Average rest", m.current_rest_s != null ? clockFmt(m.current_rest_s) : m.avg_rest_s != null ? clockFmt(m.avg_rest_s) : "–"],
-        ["Rest : work", ratio ? `${ratio}<small>: 1</small>` : "–"],
+        ["Rest : work", ratio ? `${ratio} : 1` : "–"],
       ].map(([k, v]) => `<div class="card kpi"><span class="eyebrow">${k}</span><span class="big">${v}</span></div>`).join("");
-      $("#pstrip").innerHTML = m.status === "away" && !m.timeline ? `<div class="muted">Not in the gym today. Their history is below.</div>` : sessionStrip(m, true) + (m.current_rest_s > 150 ? `<p class="note" style="margin:12px 0 0">${IC.info}Rest is at ${clockFmt(m.current_rest_s)}, longer than their usual ${m.avg_rest_s ? clockFmt(m.avg_rest_s) : "rest"}.</p>` : "");
+      $("#pstrip").innerHTML = m.status === "away" && !m.timeline ? `<div class="muted">Not in today</div>` : sessionStrip(m, true) + (m.current_rest_s > 150 ? `<p class="note" style="margin:12px 0 0">${IC.info}Resting ${clockFmt(m.current_rest_s)} (usual ${m.avg_rest_s ? clockFmt(m.avg_rest_s) : "–"})</p>` : "");
       if (!built && prog) this.build(m);
     },
   };
@@ -429,9 +429,9 @@ function MachinesPage() {
   let hourly = {};
   return {
     title: "Equipment", sub: PAGES.find(p => p.id === "machines").sub,
-    actions(a) { a.append(el(`<button class="btn secondary">${IC.download}Export CSV</button>`)); a.lastChild.onclick = () => downloadCSV("equipment-usage.csv", [["Station", "Type", "Sets (24 h)", "Time under load (s)", "People"], ...cfg.machines.map(m => [m.name, m.kind || "", util[m.id]?.n || 0, Math.round(util[m.id]?.busy || 0), util[m.id]?.members || 0])]); },
+    actions(a) { a.append(el(`<button class="btn secondary">${IC.download}Export</button>`)); a.lastChild.onclick = () => downloadCSV("equipment-usage.csv", [["Station", "Type", "Sets (24 h)", "Time under load (s)", "People"], ...cfg.machines.map(m => [m.name, m.kind || "", util[m.id]?.n || 0, Math.round(util[m.id]?.busy || 0), util[m.id]?.members || 0])]); },
     mount(v) {
-      v.append(el(`<div class="mgrid" id="mg"></div>`));
+      v.append(el(`<section class="card tcard"><div class="tbl-wrap"><table class="eqtable"><thead><tr><th>Station</th><th>Status</th><th>Now</th><th class="n">Sets today</th><th class="n">Under load</th><th class="n">Members</th><th class="hcol">Busiest hours (7 days)</th><th class="n">Cameras</th></tr></thead><tbody id="mg"></tbody></table></div></section>`));
       src.hourly().then(h => { hourly = h; this.update(); }).catch(() => {});
       if (Date.now() - utilAt > 3000) { utilAt = Date.now(); src.utilisation().then(u => { util = Object.fromEntries(u.map(x => [x.machine, x])); this.update(); }); }
     },
@@ -441,10 +441,11 @@ function MachinesPage() {
       $("#mg").innerHTML = live.machines.filter(m => cfg.machines.some(x => x.id === m.id)).map(m => {
         const mach = cfg.machines.find(x => x.id === m.id), u = util[m.id] || {n: 0, busy: 0, members: 0}, st = m.state === "lifting" ? "lifting" : m.member ? "resting" : "idle";
         const h = hourly[m.id] || Array(24).fill(0);
-        return `<section class="card mcard"><div class="top"><span class="ico">${machineIcon(mach)}</span><div><div class="nm">${esc(m.name)}</div><div class="kind">${esc(mach.kind || "")} · ${m.cameras.length} camera${m.cameras.length === 1 ? "" : "s"}</div></div>${pill(st)}</div>
-          <div class="nums"><div><b>${u.n}</b><span>sets today</span></div><div><b>${clockFmt(u.busy)}</b><span>under load today</span></div><div><b>${u.members}</b><span>members today</span></div></div>
-          <div><div class="eyebrow" style="margin-bottom:6px">Busiest hours · last 7 days</div><div class="heat">${h.map((n, i) => `<span style="background:${n ? `color-mix(in srgb, var(--lift) ${Math.round(18 + 82 * n / maxH)}%, var(--surface-3))` : ""}" data-tip="${String(i).padStart(2, "0")}:00–${String(i + 1).padStart(2, "0")}:00\n${n} sets"></span>`).join("")}</div><div class="heat-axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div></div>
-          <div class="muted" style="font-size:12.5px">${m.state === "lifting" ? `${esc(m.member_name || "Guest")} is on set ${clockFmt(m.set_elapsed)} · ${m.reps} reps` : m.member ? `${esc(m.member_name)} is between sets` : "Free now"}</div></section>`;
+        return `<tr><td class="who"><span class="ico">${machineIcon(mach)}</span><span><b>${esc(m.name)}</b><small>${esc(mach.kind || "")}</small></span></td><td class="st">${pill(st)}</td>
+          <td class="nowc">${m.state === "lifting" ? `${esc(m.member_name || "Guest")} · ${m.reps} reps` : m.member ? `${esc(m.member_name)} · resting` : '<span class="muted">–</span>'}</td>
+          <td class="n" data-l="Sets">${u.n}</td><td class="n" data-l="Under load">${clockFmt(u.busy)}</td><td class="n" data-l="Members">${u.members}</td>
+          <td class="hcol"><div class="heat">${h.map((n, i) => `<span style="background:${n ? `color-mix(in srgb, var(--lift) ${Math.round(18 + 82 * n / maxH)}%, var(--surface-3))` : ""}" data-tip="${String(i).padStart(2, "0")}:00–${String(i + 1).padStart(2, "0")}:00\n${n} sets"></span>`).join("")}</div></td>
+          <td class="n" data-l="Cameras">${m.cameras.length}</td></tr>`;
       }).join("");
     },
   };
@@ -455,8 +456,8 @@ function planSVG(plan, fl, layer, states, hl = null) {
   const S = 100, W = plan.width * S, D = plan.depth * S, inb = (x, y) => x != null && y != null && x > -1 && y > -1 && x < plan.width + 1 && y < plan.depth + 1;
   let g = `<svg class="plan" viewBox="-60 -60 ${W + 120} ${D + 150}" role="img" aria-label="Floor plan of ${esc(plan.name)}">`;
   const cid = "pc" + hash(plan.id);
-  g += `<defs><clipPath id="${cid}"><rect x="0" y="0" width="${W}" height="${D}" rx="12"/></clipPath></defs>`;
-  g += `<rect x="0" y="0" width="${W}" height="${D}" rx="12" fill="var(--surface)" stroke="var(--line-2)" stroke-width="4"/><g clip-path="url(#${cid})">`;
+  g += `<defs><clipPath id="${cid}"><rect x="0" y="0" width="${W}" height="${D}"/></clipPath></defs>`;
+  g += `<rect x="0" y="0" width="${W}" height="${D}" rx="0" fill="var(--surface)" stroke="var(--ink-2)" stroke-width="6"/><g clip-path="url(#${cid})">`;
   for (let x = 1; x < plan.width; x++) g += `<line x1="${x * S}" y1="0" x2="${x * S}" y2="${D}" stroke="var(--line)" stroke-width="${x % 5 ? 1.5 : 3}"/>`;
   for (let y = 1; y < plan.depth; y++) g += `<line x1="0" y1="${y * S}" x2="${W}" y2="${y * S}" stroke="var(--line)" stroke-width="${y % 5 ? 1.5 : 3}"/>`;
   const h = fl?.heat;
@@ -464,14 +465,14 @@ function planSVG(plan, fl, layer, states, hl = null) {
     let max = 0; for (const v of h.grid) max = Math.max(max, v);
     for (let i = 0; i < h.grid.length; i++) { const v = h.grid[i]; if (v <= 0) continue;
       const gx = i % h.W, gy = Math.floor(i / h.W), a = 0.1 + 0.8 * Math.sqrt(v / max);
-      g += `<rect x="${gx * h.cell * S}" y="${gy * h.cell * S}" width="${h.cell * S}" height="${h.cell * S}" fill="var(--rest)" opacity="${a.toFixed(2)}" data-tip="${fmtDur(v)} of person-time here"/>`; }
+      g += `<rect x="${gx * h.cell * S}" y="${gy * h.cell * S}" width="${h.cell * S}" height="${h.cell * S}" fill="var(--heat)" opacity="${a.toFixed(2)}" data-tip="${fmtDur(v)} person-time"/>`; }
   }
   for (const z of plan.zones) {
     const st = states[z.machine] || {}, lifting = st.state === "lifting", busy = !!st.member;
     const pts = z.poly.map(([x, y]) => `${(x * S).toFixed(0)},${(y * S).toFixed(0)}`).join(" ");
     const cl = z.poly.map(([x, y]) => [Math.max(0, Math.min(plan.width, x)), Math.max(0, Math.min(plan.depth, y))]);
     const cx = cl.reduce((a, p) => a + p[0], 0) / cl.length * S, cy = cl.reduce((a, p) => a + p[1], 0) / cl.length * S;
-    g += `<polygon points="${pts}" fill="${lifting ? "color-mix(in srgb, var(--lift) 26%, transparent)" : busy ? "color-mix(in srgb, var(--rest) 16%, transparent)" : "transparent"}" stroke="${lifting ? "var(--lift)" : "var(--ink-2)"}" stroke-width="${lifting ? 6 : 3}" ${lifting || busy ? "" : 'stroke-dasharray="14 10"'} data-tip="${esc(machineName(z.machine))}${lifting ? `\n${st.member_name || "Guest"} lifting · ${st.reps} reps` : ""}"/>`;
+    g += `<polygon points="${pts}" fill="${lifting ? "color-mix(in srgb, var(--lift) 18%, transparent)" : busy ? "color-mix(in srgb, var(--rest) 16%, transparent)" : "color-mix(in srgb, var(--line) 50%, transparent)"}" stroke="${lifting ? "var(--lift)" : busy ? "var(--rest)" : "var(--line-2)"}" stroke-width="${lifting || busy ? 6 : 3}" ${lifting || busy ? "" : 'stroke-dasharray="14 10"'} data-tip="${esc(machineName(z.machine))}${lifting ? `\n${st.member_name || "Guest"} lifting · ${st.reps} reps` : ""}"/>`;
     g += `<text class="lbl" x="${Math.max(40, Math.min(W - 40, cx)).toFixed(0)}" y="${Math.max(30, Math.min(D - 10, cy)).toFixed(0)}" text-anchor="middle">${esc(machineName(z.machine))}</text>`;
   }
   g += `</g>`;
@@ -479,9 +480,9 @@ function planSVG(plan, fl, layer, states, hl = null) {
     if (!inb(q.x, q.y)) continue;
     const tr = (q.trail || []).filter(([x, y]) => inb(x, y));
     if (tr.length > 1) g += `<polyline points="${tr.map(([x, y]) => `${(x * S).toFixed(0)},${(y * S).toFixed(0)}`).join(" ")}" fill="none" stroke="var(--ink-2)" stroke-width="4" opacity=".35" stroke-linejoin="round"/>`;
-    const act = q.activity && q.activity !== "standing", col = act ? "var(--lift)" : q.planted && q.zone ? "var(--rest)" : "var(--ink-2)";
+    const act = q.activity && q.activity !== "standing", col = act ? "var(--lift)" : q.planted && q.zone ? "var(--rest)" : "var(--idle)";
     const x = Math.max(0, Math.min(W, q.x * S)), y = Math.max(0, Math.min(D, q.y * S));
-    g += `<g class="pdot${q.member ? " link" : ""}${hl === q.pid ? " hl" : ""}" data-pid="${q.pid}" ${q.member ? `data-member="${esc(q.member)}" role="link" tabindex="0"` : ""} data-tip="${esc(q.label)}${q.activity ? "\n" + esc(actName(q.activity)) : ""}${q.zone ? "\nat " + esc(machineName(q.zone)) : ""}${q.member ? "\nClick to open profile" : ""}"><circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="30" fill="${col}" stroke="var(--surface)" stroke-width="7"/>
+    g += `<g class="pdot${q.member ? " link" : ""}${hl === q.pid ? " hl" : ""}" data-pid="${q.pid}" ${q.member ? `data-member="${esc(q.member)}" role="link" tabindex="0"` : ""} data-tip="${esc(q.label)}${q.activity ? "\n" + esc(actName(q.activity)) : ""}${q.zone ? "\nat " + esc(machineName(q.zone)) : ""}${q.member ? "\nClick to open profile" : ""}"><circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="24" fill="${col}" stroke="var(--surface)" stroke-width="6"/>
       <text class="lbl" x="${x.toFixed(0)}" y="${(y - 44).toFixed(0)}" text-anchor="middle">${esc(q.label.replace(/^\w+ /, ""))}${act ? " · " + esc(actName(q.activity)) : ""}</text></g>`;
   }
   g += `<g transform="translate(0 ${D + 50})"><line x1="0" y1="0" x2="${S}" y2="0" stroke="var(--ink-2)" stroke-width="5"/><text x="${S + 14}" y="8">1 m</text>
@@ -519,17 +520,17 @@ function MapPage() {
   const markHover = pid => { hover = pid; document.querySelectorAll(".mapgrid [data-pid]").forEach(e => e.classList.toggle("hl", pid != null && +e.dataset.pid === pid)); };
   const setHover = pid => { markHover(pid); Object.values(scenes).forEach(s => s?.highlight?.(pid)); };
   const personSheet = q => sheet(`<div class="sheet-h"><span class="avatar" style="--a:${q.activity && q.activity !== "standing" ? "var(--lift)" : "var(--muted)"}">${esc(initials(q.label))}</span><div><b>${esc(q.label)}</b><small>${esc(q.activity ? actName(q.activity) : "On the floor")}${q.zone ? " · " + esc(machineName(q.zone)) : ""}</small></div></div>
-    ${q.member ? `<a class="btn sheet-btn" href="#member-${esc(q.member)}">Open profile</a>` : `<p class="muted sheet-p">${esc(q.label)} was only on camera briefly, so there's no profile yet.</p>`}<button class="btn secondary sheet-btn" data-close>Close</button>`,
+    ${q.member ? `<a class="btn sheet-btn" href="#member-${esc(q.member)}">Open profile</a>` : `<p class="muted sheet-p">No profile (not enough time on camera)</p>`}<button class="btn secondary sheet-btn" data-close>Close</button>`,
     e => { if (e.target.closest("a")) $("#pop").hidden = true; });
-  const openPerson = q => { if (!q) return; if (isPhone()) return personSheet(q); if (q.member) location.hash = "member-" + q.member; else toast(`${q.label} was only on camera briefly, so there's no profile yet.`); };
+  const openPerson = q => { if (!q) return; if (isPhone()) return personSheet(q); if (q.member) location.hash = "member-" + q.member; else toast(`${q.label}: no profile (not enough time on camera)`); };
   const labelOf = q => q.label + (q.activity && q.activity !== "standing" ? " · " + actName(q.activity) : "");
   const openMachine = id => { const u = util[id], st = lastStates[id];
     if (isPhone()) { const who = st?.member ? cfg.members.find(m => m.id === st.member) : null;
-      return sheet(`<div class="sheet-h"><span class="avatar" style="--a:${st?.state === "lifting" ? "var(--lift)" : st?.member ? "var(--rest)" : "var(--muted)"}">${IC.machines}</span><div><b>${esc(machineName(id))}</b><small>${st?.state === "lifting" ? `In use now · ${st.reps} reps` : st?.member ? "Someone resting on it" : "Free"}</small></div></div>
+      return sheet(`<div class="sheet-h"><span class="avatar" style="--a:${st?.state === "lifting" ? "var(--lift)" : st?.member ? "var(--rest)" : "var(--muted)"}">${IC.machines}</span><div><b>${esc(machineName(id))}</b><small>${st?.state === "lifting" ? `In use · ${st.reps} reps` : st?.member ? "Resting" : "Free"}</small></div></div>
         <div class="sheet-facts"><div><small>Sets today</small><b>${u ? u.n : 0}</b></div><div><small>Under load</small><b>${u ? fmtDur(u.busy) : "–"}</b></div><div><small>People</small><b>${u?.members ?? 0}</b></div></div>
         ${who ? `<a class="btn sheet-btn" href="#member-${esc(who.id)}">Open ${esc(who.name)}'s profile</a>` : ""}<button class="btn secondary sheet-btn" data-close>Close</button>`, e => { if (e.target.closest("a")) $("#pop").hidden = true; }); }
     toast(`${machineName(id)}: ${st?.state === "lifting" ? `in use now (${st.reps} reps) · ` : st?.member ? "someone resting on it · " : "free · "}${u ? `${u.n} sets today, ${fmtDur(u.busy)} under load` : "no sets yet today"}`); };
-  const modesFor = p => [["twin", "3D gym"], ...(src.sceneFor?.(p.id) ? [["3d", "Camera 3D"]] : []), ["plan", "Plan"]];
+  const modesFor = p => [["twin", "3D"], ...(src.sceneFor?.(p.id) ? [["3d", "Camera 3D"]] : []), ["plan", "2D"]];
   const showMode = async (box, p) => {
     const avail = modesFor(p).map(m => m[0]), m = avail.includes(mode) ? mode : "twin";
     box.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === m));
@@ -555,22 +556,22 @@ function MapPage() {
         view = mountScene(box.querySelector(".p3"), {meta, base: sc.base, cam: sc.cam, plan: p, peopleNow: () => src.peopleNow(p.id), heat: () => src.heat(p.id), layer: () => layer, labelOf, onHover: markHover, onOpen: openPerson});
       }
       view.mode = m; scenes[key] = view;
-    } catch (e) { console.error(e); delete scenes[key]; box.querySelector(".p3").innerHTML = `<div class="empty" style="padding:24px">The 3D view needs WebGL. Showing the floor plan instead.</div>`; mode = "plan"; showMode(box, p); }
+    } catch (e) { console.error(e); delete scenes[key]; box.querySelector(".p3").innerHTML = `<div class="empty">3D needs WebGL</div>`; mode = "plan"; showMode(box, p); }
   };
   return {
-    title: "Floor map", sub: () => "The gym rebuilt in 3D from the cameras: equipment, live status and everyone on the floor",
+    title: "Floor plan", sub: () => "",
     actions(a) {
-      const c = el(`<div class="chips" role="group" aria-label="Layers">${[["both", "People + traffic"], ["people", "People"], ["heat", "Traffic heatmap"]].map(([k, l]) => `<button class="chip" data-l="${k}" aria-pressed="${k === layer}">${l}</button>`).join("")}</div>`);
+      const c = el(`<div class="chips" role="group" aria-label="Layers">${[["both", "People + traffic"], ["people", "People"], ["heat", "Traffic"]].map(([k, l]) => `<button class="chip" data-l="${k}" aria-pressed="${k === layer}">${l}</button>`).join("")}</div>`);
       c.onclick = e => { const b = e.target.closest("[data-l]"); if (!b) return; layer = b.dataset.l; store.set("maplayer", layer); c.querySelectorAll("[data-l]").forEach(x => x.setAttribute("aria-pressed", x.dataset.l === layer)); this.update(); };
       a.append(c);
     },
     mount(v) {
       const plans = src.plans();
-      if (!plans.length) { v.append(el(`<div class="card empty">${IC.map}<b>No calibrated cameras yet</b>Calibrate a camera (4 points on the floor and their distances) and GymTrack places everyone it sees on a floor plan.${src.mode === "demo" ? " The simulation has no floor plan; open the real-footage demo." : ""}</div>`)); return; }
-      for (const p of plans) v.append(el(`<section class="mapgrid" data-plan="${esc(p.id)}"><div class="card card-b"><div class="card-h" style="padding:0 0 10px"><h2>${esc(p.name)}</h2><div class="seg" role="group" aria-label="View">${modesFor(p).map(([k, l]) => `<button data-mode="${k}">${l}</button>`).join("")}</div><span class="right legend"><span><i style="background:var(--lift)"></i>Exercising</span><span><i style="background:var(--rest)"></i>At a station</span><span><i style="background:var(--ink-2)"></i>Moving / other</span><span><i style="background:var(--rest);opacity:.5"></i>Traffic</span></span></div><div class="pv"></div><div class="p3" hidden></div></div>
-        <div style="display:flex;flex-direction:column;gap:20px;min-width:0"><section class="card kpi"><span class="eyebrow">On camera now</span><div class="row"><span class="big pc">–</span><span class="delta pk"></span></div></section>
-        <section class="card"><div class="card-h"><h2>Right now</h2></div><div class="plist pl" style="margin-top:6px"></div></section>
-        <section class="card"><div class="card-h"><h2>Hotspots</h2><span class="right hint">most person-time</span></div><div class="plist hs" style="margin-top:6px"></div></section></div></section>`));
+      if (!plans.length) { v.append(el(`<div class="card empty">No calibrated cameras. Calibrate one under Cameras → Floor map.</div>`)); return; }
+      for (const p of plans) v.append(el(`<section class="mapgrid" data-plan="${esc(p.id)}"><div class="card mapcard"><div class="card-h"><h2>${esc(p.name)}</h2><div class="seg" role="group" aria-label="View">${modesFor(p).map(([k, l]) => `<button data-mode="${k}">${l}</button>`).join("")}</div><span class="right legend"><span><i style="background:var(--lift)"></i>In set</span><span><i style="background:var(--rest)"></i>At station</span><span><i style="background:var(--idle)"></i>Moving</span><span><i style="background:var(--heat)"></i>Traffic</span></span></div><div class="pv"></div><div class="p3" hidden></div></div>
+        <div class="col"><section class="card kpi"><span class="eyebrow">On camera</span><div class="row"><span class="big pc">–</span><span class="delta pk"></span></div></section>
+        <section class="card"><div class="card-h"><h2>People</h2></div><div class="plist pl"></div></section>
+        <section class="card"><div class="card-h"><h2>Hotspots</h2><span class="right hint">person-time</span></div><div class="plist hs"></div></section></div></section>`));
       for (const p of plans) { const box = v.querySelector(`.mapgrid[data-plan="${CSS.escape(p.id)}"]`); showMode(box, p);
         box.querySelector(".seg")?.addEventListener("click", e => { const b = e.target.closest("[data-mode]"); if (!b) return; mode = b.dataset.mode; store.set("mapmode2", mode); for (const q of plans) showMode(document.querySelector(`.mapgrid[data-plan="${CSS.escape(q.id)}"]`), q); }); }
       v.onmouseover = e => { const t = e.target.closest("[data-pid]"); setHover(t ? +t.dataset.pid : null); };
@@ -588,9 +589,9 @@ function MapPage() {
         const f = lastFloor[p.id] = fl.find(x => x.plan === p.id) || {};
         box.querySelector(".pv").innerHTML = planSVG(p, f, layer, states, hover);
         box.querySelector(".pc").textContent = f.headcount ?? "–";
-        box.querySelector(".pk").textContent = f.heat?.peak ? `peak ${f.heat.peak} so far` : "";
-        box.querySelector(".pl").innerHTML = (f.people || []).map(q => `<div class="r${q.member ? " link" : ""}${hover === q.pid ? " hl" : ""}" data-pid="${q.pid}" ${q.member ? `data-member="${esc(q.member)}" role="link" tabindex="0"` : ""}><span class="avatar sm" style="--a:${q.activity && q.activity !== "standing" ? "var(--lift)" : "var(--other)"}">${esc(initials(q.label))}</span><span>${esc(q.label)}<span class="muted"> · ${q.activity ? esc(actName(q.activity)) : "–"}</span></span><span class="muted">${q.zone ? esc(machineName(q.zone)) : "floor"}</span></div>`).join("") || `<div class="empty" style="padding:16px">Nobody on camera.</div>`;
-        box.querySelector(".hs").innerHTML = hotspots(p, f.heat).map((h, i) => `<div class="r"><span class="avatar sm" style="--a:var(--rest)">${i + 1}</span><span>${esc(h.where)}</span><span class="muted">${fmtDur(h.v)}</span></div>`).join("") || `<div class="empty" style="padding:16px">Building up…</div>`;
+        box.querySelector(".pk").textContent = f.heat?.peak ? `Peak ${f.heat.peak}` : "";
+        box.querySelector(".pl").innerHTML = (f.people || []).map(q => `<div class="r${q.member ? " link" : ""}${hover === q.pid ? " hl" : ""}" data-pid="${q.pid}" ${q.member ? `data-member="${esc(q.member)}" role="link" tabindex="0"` : ""}><span class="avatar sm" style="--a:${q.activity && q.activity !== "standing" ? "var(--lift)" : "var(--other)"}">${esc(initials(q.label))}</span><span>${esc(q.label)}<span class="muted"> · ${q.activity ? esc(actName(q.activity)) : "–"}</span></span><span class="muted">${q.zone ? esc(machineName(q.zone)) : "Floor"}</span></div>`).join("") || `<div class="empty">Nobody on camera</div>`;
+        box.querySelector(".hs").innerHTML = hotspots(p, f.heat).map((h, i) => `<div class="r"><span class="rk num">${i + 1}</span><span>${esc(h.where)}</span><span class="muted num">${fmtDur(h.v)}</span></div>`).join("") || `<div class="empty">Collecting…</div>`;
       }
     },
   };
@@ -626,13 +627,13 @@ function ownerSuggestions({util, observed, plans, floors, zstats, archetypes}) {
 function InsightsPage() {
   let archetypes = {}, archAt = 0, utilL = {};
   return {
-    title: "Insights", sub: () => "For the owner: what's busy, what's not, and what to change",
+    title: "Insights", sub: () => "",
     mount(v) {
       v.append(el(`<section class="kpis" id="ik"></section>`));
-      v.append(el(`<div class="grid2"><section class="card"><div class="card-h"><h2>Suggestions</h2><span class="right hint">from what the cameras saw</span></div><div class="card-b"><div class="sugg" id="isg"></div></div></section>
-        <section class="card"><div class="card-h"><h2>Equipment ranking</h2><span class="right hint">time under load</span></div><div class="card-b" id="irk"></div></section></div>`));
-      v.append(el(`<div class="grid2"><section class="card"><div class="card-h"><h2>Where floor time goes</h2></div><div class="card-b" id="izt"></div></section>
-        <section class="card"><div class="card-h"><h2>Training styles</h2><span class="right hint">members' archetypes</span></div><div class="card-b" id="iar"></div></section></div>`));
+      v.append(el(`<div class="grid2"><section class="card"><div class="card-h"><h2>Recommendations</h2></div><div class="sugg" id="isg"></div></section>
+        <section class="card"><div class="card-h"><h2>Equipment usage</h2><span class="right hint">Time under load</span></div><div class="card-b" id="irk"></div></section></div>`));
+      v.append(el(`<div class="grid2"><section class="card"><div class="card-h"><h2>Floor time by area</h2></div><div class="card-b" id="izt"></div></section>
+        <section class="card"><div class="card-h"><h2>Training styles</h2><span class="right hint">Members</span></div><div class="card-b" id="iar"></div></section></div>`));
     },
     async update() {
       if (!live) return;
@@ -646,21 +647,21 @@ function InsightsPage() {
         archetypes = counts;
       }
       const busyTot = Object.values(utilL).reduce((a, u) => a + u.busy, 0), peak = Math.max(0, ...floors.map(f => f.heat?.peak || 0)), nowC = floors.reduce((a, f) => a + (f.headcount || 0), 0);
-      $("#ik").innerHTML = `<div class="card kpi"><span class="eyebrow">On camera now</span><span class="big">${nowC}</span><span class="delta">peak ${peak}</span></div>
-        <div class="card kpi"><span class="eyebrow">Time under load</span><span class="big">${clockFmt(busyTot)}</span><span class="delta">all stations, observed period</span></div>
-        <div class="card kpi"><span class="eyebrow">Sets recorded</span><span class="big">${Object.values(utilL).reduce((a, u) => a + u.n, 0)}</span><span class="delta">${Object.keys(utilL).length} stations used</span></div>
-        <div class="card kpi"><span class="eyebrow">Observed</span><span class="big">${clockFmt(observed)}</span><span class="delta">${src.mode === "replay" ? "of recorded footage" : "today"}</span></div>`;
+      $("#ik").innerHTML = `<div class="card kpi"><span class="eyebrow">On camera</span><span class="big">${nowC}</span><span class="delta">Peak ${peak}</span></div>
+        <div class="card kpi"><span class="eyebrow">Time under load</span><span class="big">${clockFmt(busyTot)}</span><span class="delta">All stations</span></div>
+        <div class="card kpi"><span class="eyebrow">Sets</span><span class="big">${Object.values(utilL).reduce((a, u) => a + u.n, 0)}</span><span class="delta">${Object.keys(utilL).length} stations used</span></div>
+        <div class="card kpi"><span class="eyebrow">Observed</span><span class="big">${clockFmt(observed)}</span><span class="delta">${src.mode === "replay" ? "Recorded footage" : "Today"}</span></div>`;
       const sg = ownerSuggestions({util: utilL, observed, plans, floors, zstats, archetypes});
-      $("#isg").innerHTML = sg.map(x => `<div class="sg ${x.level}"><span class="i">${x.level === "warn" ? IC.info : x.level === "good" ? IC.check : IC.insights}</span><div><b>${esc(x.title)}</b><span>${esc(x.detail)}</span></div></div>`).join("") || `<div class="empty">Collecting data… suggestions appear after a few minutes of footage.</div>`;
+      $("#isg").innerHTML = sg.map(x => `<div class="sg ${x.level}"><span class="i">${x.level === "warn" ? IC.info : x.level === "good" ? IC.check : IC.insights}</span><div><b>${esc(x.title)}</b><span>${esc(x.detail)}</span></div></div>`).join("") || `<div class="empty">Collecting data</div>`;
       const rows = cfg.machines.map(m => utilL[m.id] || {machine: m.id, n: 0, busy: 0, members: 0}).sort((a, b) => b.busy - a.busy), mx = Math.max(1, ...rows.map(r => r.busy));
       $("#irk").innerHTML = rows.map(r => `<div class="rank"><span>${esc(machineName(r.machine))}</span><div class="b" style="width:${(r.busy / mx * 100).toFixed(1)}%" data-tip="${esc(machineName(r.machine))}\n${fmtDur(r.busy)} under load · ${r.n} sets · ${r.members} people"></div><span class="muted num" style="text-align:right">${fmtDur(r.busy)}</span></div>`).join("");
       let zt = "";
       for (const p of plans) { const f = floors.find(x => x.plan === p.id); const t = zoneTimes(p, f?.heat); if (!t.total) continue;
         const parts = [...Object.entries(t.zones).map(([z, v]) => [machineName(z), v]), ["Between stations", t.outside]].sort((a, b) => b[1] - a[1]);
-        zt += `<div class="eyebrow" style="margin:4px 0 8px">${esc(p.name)}</div>` + parts.map(([n, v]) => `<div class="rank"><span>${esc(n)}</span><div class="b" style="width:${(v / t.total * 100).toFixed(1)}%;background:${n === "Between stations" ? "var(--other)" : "var(--rest)"}"></div><span class="muted num" style="text-align:right">${Math.round(v / t.total * 100)}%</span></div>`).join(""); }
-      $("#izt").innerHTML = zt || `<div class="empty">Needs a calibrated camera (Floor map).</div>`;
+        zt += `<div class="sub-h">${esc(p.name)}</div>` + parts.map(([n, v]) => `<div class="rank"><span>${esc(n)}</span><div class="b" style="width:${(v / t.total * 100).toFixed(1)}%;background:${n === "Between stations" ? "var(--other)" : "var(--rest)"}"></div><span class="muted num" style="text-align:right">${Math.round(v / t.total * 100)}%</span></div>`).join(""); }
+      $("#izt").innerHTML = zt || `<div class="empty">Needs a calibrated camera</div>`;
       const at = Object.values(archetypes).reduce((a, b) => a + b, 0);
-      $("#iar").innerHTML = at ? Object.entries(archetypes).sort((a, b) => b[1] - a[1]).map(([n, c]) => `<div class="rank"><span>${esc(n)}</span><div class="b" style="width:${(c / at * 100).toFixed(1)}%"></div><span class="muted num" style="text-align:right">${c} · ${Math.round(c / at * 100)}%</span></div>`).join("") : `<div class="empty">Not enough sets per member yet to classify training styles.</div>`;
+      $("#iar").innerHTML = at ? Object.entries(archetypes).sort((a, b) => b[1] - a[1]).map(([n, c]) => `<div class="rank"><span>${esc(n)}</span><div class="b" style="width:${(c / at * 100).toFixed(1)}%"></div><span class="muted num" style="text-align:right">${c} · ${Math.round(c / at * 100)}%</span></div>`).join("") : `<div class="empty">Not enough data yet</div>`;
     },
   };
 }
@@ -670,17 +671,17 @@ function RecordingsPage() {
   let jobs = [], file = null;
   return {
     title: "Recordings", sub: PAGES.find(p => p.id === "recordings").sub,
-    actions(a) { a.append(el(`<button class="btn">${IC.upload}Upload recording</button>`)); a.lastChild.onclick = () => $("#rfile").click(); },
+    actions(a) { a.append(el(`<button class="btn">${IC.upload}Upload</button>`)); a.lastChild.onclick = () => $("#rfile").click(); },
     mount(v) {
       const server = src.mode === "server";
       v.append(el(`<section class="card card-b">
-        <div class="drop" id="drop"><span class="ic">${IC.upload}</span><div><h3 id="dropT">Drop a video here, or choose a file</h3><p>Export footage from your recorder (MP4, MOV, MKV). It goes through the same tracking as the live cameras, about 30× faster than real time: a 40-minute recording takes around 80 seconds.${server ? "" : " <b>In this demo uploads are off</b>: run the GymTrack server to analyse your own footage."}</p></div>
-          <div><input type="file" id="rfile" accept="video/*,.mkv" hidden><button class="btn secondary" id="pick">Choose file</button></div></div>
-        <div class="drop-opts"><label class="field"><span>Camera view</span><select class="input" id="rcam"><option value="">Whole view (no machine zones)</option>${cfg.cameras.filter(c => c.zones.length).map(c => `<option value="${esc(c.id)}">Same view as ${esc(c.name)} · ${c.zones.length} zones</option>`).join("")}</select><small>Pick the camera it was recorded on to get per-machine results.</small></label>
-          <label class="field"><span>Recorded at</span><input class="input" type="datetime-local" id="rstart"><small>So the sets land on the right day in members' history.</small></label>
-          <div class="field"><span>&nbsp;</span><button class="btn" id="rgo" ${server ? "" : "disabled"}>${IC.film}Analyse recording</button><small id="rmsg">${server ? "Choose a file to start." : "Needs the GymTrack server."}</small></div></div></section>`));
-      v.append(el(`<section class="card"><div class="card-h"><h2>Analysed recordings</h2></div><div id="jobs" style="margin-top:8px"></div></section>`));
-      const pick = f => { file = f; $("#dropT").textContent = f ? `${f.name} · ${(f.size / 1e6).toFixed(0)} MB` : "Drop a video here, or choose a file"; $("#rmsg").textContent = f ? "Ready." : ""; };
+        <div class="drop" id="drop"><span class="ic">${IC.upload}</span><div><h3 id="dropT">Drop a video file or browse</h3><p>MP4, MOV or MKV exported from your NVR. Processed at about 30× real time.${server ? "" : " Uploads are disabled in the demo."}</p></div>
+          <div><input type="file" id="rfile" accept="video/*,.mkv" hidden><button class="btn secondary" id="pick">Browse</button></div></div>
+        <div class="drop-opts"><label class="field"><span>Camera view</span><select class="input" id="rcam"><option value="">None (no zones)</option>${cfg.cameras.filter(c => c.zones.length).map(c => `<option value="${esc(c.id)}">${esc(c.name)} · ${c.zones.length} zones</option>`).join("")}</select></label>
+          <label class="field"><span>Recorded at</span><input class="input" type="datetime-local" id="rstart"></label>
+          <div class="field"><span>&nbsp;</span><button class="btn" id="rgo" ${server ? "" : "disabled"}>${IC.film}Analyze</button><small id="rmsg">${server ? "" : "Requires GymTrack server"}</small></div></div></section>`));
+      v.append(el(`<section class="card"><div class="card-h"><h2>Recordings</h2></div><div id="jobs"></div></section>`));
+      const pick = f => { file = f; $("#dropT").textContent = f ? `${f.name} · ${(f.size / 1e6).toFixed(0)} MB` : "Drop a video file or browse"; $("#rmsg").textContent = f ? "Ready" : ""; };
       $("#pick").onclick = () => $("#rfile").click();
       $("#rfile").onchange = e => pick(e.target.files[0]);
       const d = $("#drop");
@@ -700,12 +701,12 @@ function RecordingsPage() {
       $("#jobs").innerHTML = jobs.map(j => {
         const when = new Date(j.start_ts * 1000).toLocaleString(undefined, {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"});
         const name = j.name || (cfg.cameras.find(c => c.id === j.camera)?.name ? `${cfg.cameras.find(c => c.id === j.camera).name} recording` : "Recording");
-        const right = j.status === "done" && j.report_url ? `<button class="btn secondary sm" data-report="${esc(j.report_url)}" data-title="${esc(name)}">${IC.film}View report</button>`
+        const right = j.status === "done" && j.report_url ? `<button class="btn secondary sm" data-report="${esc(j.report_url)}" data-title="${esc(name)}">View report</button>`
           : j.status === "failed" ? `<span class="pill bad">Failed</span>` : `<span class="pill warn"><i></i>${(j.progress * 100).toFixed(0)}%</span>`;
-        return `<div class="job"><span class="ic">${IC.film}</span><div style="min-width:0"><div class="t">${esc(name)}${j.sample ? ' <span class="pill" style="margin-left:6px">Example</span>' : ""}</div>
-          <div class="d"><span>${esc(when)}</span><span>${fmtDur(j.video_s)} of video</span>${j.status === "done" ? `<span>${j.totals?.sets ?? 0} sets · ${j.totals?.reps ?? 0} reps</span><span>analysed at ${Math.round(j.speed)}× real time</span>` : j.status === "failed" ? `<span style="color:var(--bad)">${esc(j.error || "")}</span>` : `<span>${Math.round(j.speed || 0)}× real time</span>`}</div>
+        return `<div class="job"><span class="ic">${IC.film}</span><div style="min-width:0"><div class="t">${esc(name)}${j.sample ? ' <span class="badge-s">Sample</span>' : ""}</div>
+          <div class="d"><span>${esc(when)}</span><span>${fmtDur(j.video_s)} of video</span>${j.status === "done" ? `<span>${j.totals?.sets ?? 0} sets · ${j.totals?.reps ?? 0} reps</span><span>${Math.round(j.speed)}× real time</span>` : j.status === "failed" ? `<span style="color:var(--bad)">${esc(j.error || "")}</span>` : `<span>${Math.round(j.speed || 0)}× real time</span>`}</div>
           ${j.status === "running" || j.status === "queued" ? `<div class="bar"><span style="width:${(j.progress * 100).toFixed(1)}%"></span></div>` : ""}</div>${right}</div>`;
-      }).join("") || `<div class="empty">${IC.film}<b>No recordings yet</b>Upload footage above to see sets, reps and rest times for everyone in it.</div>`;
+      }).join("") || `<div class="empty">No recordings</div>`;
     },
     update() { if (jobs.some(j => j.status === "running" || j.status === "queued")) this.refresh(); },
   };
@@ -723,8 +724,7 @@ function CamerasPage() {
     actions(a) { a.append(el(`<button class="btn">${IC.plus}Add camera</button>`)); a.lastChild.onclick = addCamera; },
     mount(v) {
       v.append(el(`<div class="cgrid" id="cg"></div>`));
-      v.append(el(`<section class="card"><div class="card-h"><h2>Run GymTrack on your gym's network</h2></div><div class="card-b" style="display:flex;flex-direction:column;gap:12px">
-        <p class="muted" style="margin:0;max-width:70ch">Any PC or mini-PC on the same network as your cameras handles 8 to 12 cameras. Video is analysed in memory and never recorded or sent anywhere; only sets, reps and times are stored.</p>
+      v.append(el(`<section class="card"><div class="card-h"><h2>Site server</h2><span class="hint">Any PC on the camera network · 8–12 cameras · video is not stored</span></div><div class="card-b">
         <div class="code">pip install -r gymtrack/server/requirements.txt
 python -m gymtrack probe "rtsp://admin:PASSWORD@192.168.1.64:554/Streaming/Channels/102"   # test a camera
 GYMTRACK_TOKEN=choose-a-password python -m gymtrack run my-gym.json                     # go live
@@ -741,14 +741,14 @@ python -m gymtrack analyse cam1-export.mp4 --report report.html                 
     render() {
       $("#cg").innerHTML = "";
       for (const cam of cfg.cameras) {
-        const card = el(`<article class="card ccard" data-cam="${esc(cam.id)}"><div class="thumb"></div><div class="body"><div class="row"><span class="nm">${esc(cam.name)}</span><span class="st" style="margin-left:auto"></span></div><div class="src">${esc(cam.source)}</div><div class="muted" style="font-size:12.5px">${cam.zones.length} machine zone${cam.zones.length === 1 ? "" : "s"}${cam.zones.length ? ": " + cam.zones.map(z => esc(machineName(z.machine))).join(", ") : ""}</div>${cam.exercise_names === false ? `<div class="muted" style="font-size:12.5px" data-tip="This camera is too far or steep to name exercises reliably from body pose. Sets, reps, rest and time per station are still tracked.">Exercise names off for this camera</div>` : ""}</div>
-          <div class="foot"><button class="btn secondary sm" data-act="zones" data-cam="${esc(cam.id)}">${IC.zones}Edit zones</button><button class="btn secondary sm" data-act="calib" data-cam="${esc(cam.id)}">${IC.map}Floor map</button><button class="btn ghost sm" data-act="remove" data-cam="${esc(cam.id)}" style="margin-left:auto">${IC.trash}Remove</button></div></article>`);
+        const card = el(`<article class="card ccard" data-cam="${esc(cam.id)}"><div class="thumb"><span class="tlabel"><i></i>${esc(cam.name)}</span></div><div class="body"><div class="row"><span class="nm">${esc(cam.name)}</span><span class="st" style="margin-left:auto"></span></div><div class="src">${esc(cam.source)}</div><div class="muted small">${cam.zones.length} zone${cam.zones.length === 1 ? "" : "s"}${cam.zones.length ? ": " + cam.zones.map(z => esc(machineName(z.machine))).join(", ") : ""}</div>${cam.exercise_names === false ? `<div class="muted small" data-tip="Camera angle too steep to name exercises. Sets, reps and rest are still tracked.">Exercise names off</div>` : ""}</div>
+          <div class="foot"><button class="btn secondary sm" data-act="zones" data-cam="${esc(cam.id)}">Zones</button><button class="btn secondary sm" data-act="calib" data-cam="${esc(cam.id)}">Calibrate</button><button class="btn ghost sm icon-btn" data-act="remove" data-cam="${esc(cam.id)}" style="margin-left:auto" aria-label="Remove camera" data-tip="Remove">${IC.trash}</button></div></article>`);
         let t;
         if (src.mode !== "server") { t = document.createElement("canvas"); t.width = 320; t.height = 180; }
         else { t = document.createElement("img"); t.alt = cam.name; }
         thumbs[cam.id] = t; card.querySelector(".thumb").append(t); $("#cg").append(card);
       }
-      $("#cg").append(el(`<button class="card ccard add">${IC.plus}<div><b style="display:block;color:inherit;margin-top:8px">Add a camera</b><span style="font-size:12.5px">IP camera, NVR channel, USB or this device</span></div></button>`));
+      $("#cg").append(el(`<button class="card ccard add">${IC.plus}<b>Add camera</b></button>`));
       this.update(true);
     },
     update(force) {
@@ -757,14 +757,14 @@ python -m gymtrack analyse cam1-export.mp4 --report report.html                 
         if (t.tagName === "CANVAS") { const v = src.view(cam); try { t.getContext("2d").drawImage(v, 0, 0, 320, 180); } catch {} }
         else if (force || Date.now() % 4000 < 1000) t.src = src.base + "api/cameras/" + encodeURIComponent(cam.id) + "/frame.jpg?_=" + Date.now();
         const c = (live?.camera_status || []).find(x => x.id === cam.id), st = document.querySelector(`.ccard[data-cam="${CSS.escape(cam.id)}"] .st`);
-        if (st && c) st.innerHTML = `<span class="pill ${c.status === "live" ? "good" : c.status === "offline" ? "bad" : "warn"}"><i></i>${esc(c.status)} · ${(+c.fps).toFixed(1)} fps</span>`;
+        if (st && c) st.innerHTML = `<span class="pill ${c.status === "live" ? "good" : c.status === "offline" ? "bad" : "warn"}"><i></i>${c.status === "live" ? "Online" : esc(c.status[0].toUpperCase() + c.status.slice(1))}</span><span class="muted small num" style="margin-left:8px">${(+c.fps).toFixed(1)} fps</span>`;
       }
     },
   };
 }
 function confirmRemove(cam, done) {
-  const md = modal({title: "Remove camera", body: `<p style="margin:0">Remove <b>${esc(cam.name)}</b>? GymTrack stops reading this camera. Its history stays.</p>`,
-    foot: `<button class="btn secondary x">Cancel</button><button class="btn danger" id="rm">${IC.trash}Remove camera</button>`});
+  const md = modal({title: "Remove camera", body: `<p style="margin:0">Remove <b>${esc(cam.name)}</b>? History is kept.</p>`,
+    foot: `<button class="btn secondary x">Cancel</button><button class="btn danger" id="rm">Remove</button>`});
   md.root.querySelector("#rm").onclick = async () => { try { await src.removeCamera(cam.id); cfg = await src.config(); md.close(); toast(`${cam.name} removed`); done(); renderNav(); } catch (e) { toast(e.message, true); } };
 }
 
@@ -874,7 +874,7 @@ function calibEditor(cam) {
 /* ---------------- access + settings (administration) ---------------- */
 function NoAccessPage(id) {
   return {title: PAGES.find(p => p.id === id)?.label || "No access", sub: () => "",
-    mount(v) { v.append(el(`<div class="card empty">${IC.lock || ""}<b>Your role can't open this page</b>You're signed in as <b>${ROLES[role()].label}</b> (${esc(ROLES[role()].desc.toLowerCase())}). Ask an owner for access, or switch role from the account menu in this demo.</div>`)); }};
+    mount(v) { v.append(el(`<div class="card empty">No access. Your role (${ROLES[role()].label}) can't view this page.</div>`)); }};
 }
 function SettingsPage() {
   const TABS = [["general", "General"], ["users", "Users & roles"], ["privacy", "Privacy & data"], ["integrations", "Integrations"], ["api", "API & webhooks"], ["audit", "Audit log"]];
@@ -886,47 +886,46 @@ function SettingsPage() {
   const users = () => store.get("users", [{name: "You", email: "you@your-gym.com", role: "owner", status: "Active"}]);
   const views = {
     general: () => `<section class="card"><div class="card-h"><h2>Organisation</h2></div><div class="card-b sform">
-      ${field("org", "Organisation name", "Shown in the member app and reports", `<input class="input" id="s-org" data-set="org" value="${esc(S("org", cfg.gym))}">`)}
-      ${field("tz", "Time zone", "Used for opening hours, reports and the audit log", sel("tz", ["Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Australia/Brisbane", "Asia/Singapore"].map(z => [z, z.replace("_", " ")]), Intl.DateTimeFormat().resolvedOptions().timeZone))}
+      ${field("org", "Organization name", "", `<input class="input" id="s-org" data-set="org" value="${esc(S("org", cfg.gym))}">`)}
+      ${field("tz", "Time zone", "", sel("tz", ["Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Australia/Brisbane", "Asia/Singapore"].map(z => [z, z.replace("_", " ")]), Intl.DateTimeFormat().resolvedOptions().timeZone))}
       ${field("units", "Weight units", "", sel("units", [["kg", "Kilograms"], ["lb", "Pounds"]], "kg"))}
-      ${field("week", "Week starts on", "For weekly goals and reports", sel("week", [["mon", "Monday"], ["sun", "Sunday"]], "mon"))}
+      ${field("week", "Week starts on", "", sel("week", [["mon", "Monday"], ["sun", "Sunday"]], "mon"))}
     </div></section>
-    <section class="card"><div class="card-h"><h2>Safety alerts</h2><span class="hint">emergency spotter</span></div><div class="card-b sform">
-      ${field("safety", "Spotter alerts", "Alert staff when someone lies still under a bar or on the floor for 20 seconds", tog("safety", true))}
-      <div class="sfield"><div><label>Test</label><small>Shows the alert staff would see, without a real event</small></div><div><button class="btn secondary sm" id="safetytest">Send test alert</button></div></div>
+    <section class="card"><div class="card-h"><h2>Safety alerts</h2></div><div class="card-b sform">
+      ${field("safety", "Spotter alerts", "Person lying still under a bar or on the floor for 20 s", tog("safety", true))}
+      <div class="sfield"><div><label>Test alert</label></div><div><button class="btn secondary sm" id="safetytest">Send test</button></div></div>
     </div></section>
-    <section class="card"><div class="card-h"><h2>Sites</h2><span class="hint">each site is a GymTrack server on that gym's network</span></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>Site</th><th>Cameras</th><th>Stations</th><th>Status</th></tr></thead><tbody>
-      <tr><td><b>${esc(cfg.gym)}</b></td><td class="num">${cfg.cameras.length}</td><td class="num">${cfg.machines.length}</td><td>${(live?.camera_status || []).every(c => c.status === "live") ? '<span class="pill good"><i></i>Online</span>' : '<span class="pill warn"><i></i>Degraded</span>'}</td></tr></tbody></table></div>
-      <p class="muted small">Add a site by installing GymTrack on a mini-PC at that location and connecting it to this organisation with an API key.</p></div></section>`,
-    users: () => `<section class="card"><div class="card-h"><h2>Users</h2><span class="right"><button class="btn sm" id="invite">${IC.plus}Invite user</button></span></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
+    <section class="card tcard"><div class="card-h"><h2>Sites</h2></div><div class="tbl-wrap"><table><thead><tr><th>Site</th><th>Cameras</th><th>Stations</th><th>Status</th></tr></thead><tbody>
+      <tr><td><b>${esc(cfg.gym)}</b></td><td class="num">${cfg.cameras.length}</td><td class="num">${cfg.machines.length}</td><td>${(live?.camera_status || []).every(c => c.status === "live") ? '<span class="pill good"><i></i>Online</span>' : '<span class="pill warn"><i></i>Degraded</span>'}</td></tr></tbody></table></div></section>`,
+    users: () => `<section class="card tcard"><div class="card-h"><h2>Users</h2><span class="right"><button class="btn sm" id="invite">${IC.plus}Invite</button></span></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
       ${users().map((u, i) => `<tr><td><b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${i === 0 ? ROLES[u.role].label : `<select class="input sm" data-urole="${i}">${Object.entries(ROLES).map(([k, r]) => `<option value="${k}" ${k === u.role ? "selected" : ""}>${r.label}</option>`).join("")}</select>`}</td><td><span class="pill ${u.status === "Active" ? "good" : "warn"}"><i></i>${u.status}</span></td><td>${i ? `<button class="btn ghost sm" data-urm="${i}">Remove</button>` : ""}</td></tr>`).join("")}
-      </tbody></table></div><p class="muted small">Single sign-on (SAML / OIDC) is on the integrations roadmap.</p></div></section>
-      <section class="card"><div class="card-h"><h2>Roles and permissions</h2></div><div class="card-b"><div class="tbl-wrap"><table class="perm"><thead><tr><th>Page</th>${Object.values(ROLES).map(r => `<th>${r.label}</th>`).join("")}</tr></thead><tbody>
+      </tbody></table></div></section>
+      <section class="card tcard"><div class="card-h"><h2>Roles</h2></div><div class="tbl-wrap"><table class="perm"><thead><tr><th>Page</th>${Object.values(ROLES).map(r => `<th>${r.label}</th>`).join("")}</tr></thead><tbody>
       ${PAGES.map(p => `<tr><td>${p.label}</td>${Object.values(ROLES).map(r => `<td>${r.pages.includes(p.id) ? '<span class="ok">✓</span>' : '<span class="no">–</span>'}</td>`).join("")}</tr>`).join("")}
-      </tbody></table></div></div></section>`,
+      </tbody></table></div></section>`,
     privacy: () => `<section class="card"><div class="card-h"><h2>Video</h2></div><div class="card-b sform">
-      <div class="note">${IC.lock || ""}<span>Camera video is analysed in memory on the gym's own server and is never recorded or uploaded. GymTrack stores sets, reps, times, positions on the floor plan and body-joint positions, not images.</span></div>
-      ${field("preview", "Live camera previews in the dashboard", "Turn off to show only the floor map and stats to staff", tog("preview", true))}
+      <div class="note">${IC.lock || ""}<span>Video is processed on-site and never stored. Only sets, reps, times and joint positions are kept.</span></div>
+      ${field("preview", "Show camera previews", "", tog("preview", true))}
     </div></section>
     <section class="card"><div class="card-h"><h2>Members</h2></div><div class="card-b sform">
-      ${field("consent", "Member tracking", "Who gets a personal profile", sel("consent", [["optin", "Only members who opt in (tag on their bag or keys)"], ["all", "All members, with opt-out"]], "optin"))}
-      ${field("anon", "People without a tag", "Untagged people still count in traffic and equipment stats", sel("anon", [["anon", "Anonymous: no profile, no history"], ["session", "Temporary ID for the visit only"]], "anon"))}
-      ${field("ret", "Keep training history for", "How long sets and floor positions are kept on the site server", sel("ret", [["6", "6 months"], ["12", "12 months"], ["24", "24 months"], ["0", "Until the member leaves"]], "24"))}
+      ${field("consent", "Member tracking", "", sel("consent", [["optin", "Only members who opt in (tag on their bag or keys)"], ["all", "All members, with opt-out"]], "optin"))}
+      ${field("anon", "Untagged people", "", sel("anon", [["anon", "Anonymous: no profile, no history"], ["session", "Temporary ID for the visit only"]], "anon"))}
+      ${field("ret", "Data retention", "", sel("ret", [["6", "6 months"], ["12", "12 months"], ["24", "24 months"], ["0", "Until the member leaves"]], "24"))}
     </div></section>`,
     integrations: () => `<div class="igrid">${[["Mindbody", "Sync members and check-ins", "members"], ["Glofox", "Sync members and class bookings", "members"], ["ABC Ignite", "Member records and access control", "members"], ["Zapier", "Send sets and alerts to 6,000 apps", "zap"], ["Slack", "Equipment and camera alerts to a channel", "alert"], ["Okta / Azure AD", "Single sign-on for staff (SAML, OIDC)", "lock"], ["Google Workspace", "Single sign-on for staff", "lock"], ["Power BI / Tableau", "Usage data through the reporting API", "insights"]].map(([n, d]) => `<section class="card icard"><div><b>${n}</b><small>${d}</small></div><button class="btn secondary sm" data-int="${esc(n)}">${S("int:" + n, false) ? "Requested" : "Request"}</button></section>`).join("")}</div>
-      <p class="muted small">These are planned integrations, not live connections yet. Requesting one records it in the audit log so it can be prioritised; today, data leaves GymTrack through the REST API and webhooks.</p>`,
+      <p class="muted small">Planned integrations. Use the REST API and webhooks today.</p>`,
     api: () => `<section class="card"><div class="card-h"><h2>REST API</h2></div><div class="card-b sform">
-      <p class="muted" style="margin:0">Every number in this dashboard is available over the site server's REST API: <code>/api/members</code>, <code>/api/members/{id}/progress</code>, <code>/api/machines/utilisation</code>, <code>/api/floor</code>, <code>/api/cameras/{id}/people</code>. Requests need the site's API token in the <code>X-Token</code> header (set with <code>GYMTRACK_TOKEN</code> when the server starts).</p>
-      ${field("hook", "Webhook URL", "GymTrack POSTs finished sets and camera alerts here as JSON", `<input class="input" id="s-hook" data-set="hook" placeholder="https://example.com/gymtrack" value="${esc(S("hook", ""))}">`)}
+      ${field("apiep", "Endpoints", "", `<span class="muted small"><code>/api/members</code> <code>/api/members/{id}/progress</code> <code>/api/machines/utilisation</code> <code>/api/floor</code> · header <code>X-Token</code></span>`)}
+      ${field("hook", "Webhook URL", "", `<input class="input" id="s-hook" data-set="hook" placeholder="https://example.com/gymtrack" value="${esc(S("hook", ""))}">`)}
       ${field("hookev", "Events", "", sel("hookev", [["sets", "Finished sets"], ["alerts", "Camera and equipment alerts"], ["all", "Everything"]], "all"))}
     </div></section>`,
-    audit: () => { const log = store.get("audit", []); return `<section class="card"><div class="card-h"><h2>Audit log</h2><span class="hint">who changed what, in this browser</span><span class="right"><button class="btn secondary sm" id="auditcsv">${IC.download}Export</button></span></div><div class="card-b"><div class="tbl-wrap" style="max-height:520px;overflow:auto"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody>
-      ${log.map(e => `<tr><td class="num">${new Date(e.t).toLocaleString()}</td><td>${esc(e.who)}</td><td>${esc(e.action)}</td><td class="muted">${esc(e.detail)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Nothing yet. Settings changes, exports, role changes and invites appear here.</td></tr>`}
-      </tbody></table></div></div></section>`; },
+    audit: () => { const log = store.get("audit", []); return `<section class="card tcard"><div class="card-h"><h2>Audit log</h2><span class="right"><button class="btn secondary sm" id="auditcsv">${IC.download}Export</button></span></div><div class="tbl-wrap" style="max-height:520px;overflow:auto"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody>
+      ${log.map(e => `<tr><td class="num">${new Date(e.t).toLocaleString()}</td><td>${esc(e.who)}</td><td>${esc(e.action)}</td><td class="muted">${esc(e.detail)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No events</td></tr>`}
+      </tbody></table></div></section>`; },
   };
   let root;
   const draw = () => {
-    root.innerHTML = `${src.mode !== "server" ? `<div class="note demo">${IC.lock}<span>Demo workspace: changes here are saved in this browser only. On a real deployment they're stored on the site server and apply to all staff.</span></div>` : ""}<div class="stabs" role="tablist">${TABS.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div><div class="spane">${views[tab]()}</div>`;
+    root.innerHTML = `<div class="stabs" role="tablist">${TABS.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div><div class="spane">${src.mode !== "server" ? `<div class="note demo">${IC.info}<span>Demo: settings are saved in this browser only.</span></div>` : ""}${views[tab]()}</div>`;
   };
   return {title: "Settings", sub: () => PAGES.find(p => p.id === "settings").sub(),
     mount(v) {
@@ -975,18 +974,18 @@ const isPhone = () => matchMedia("(max-width: 860px)").matches;
 document.addEventListener("click", e => { const pop = $("#pop"); if (Date.now() - (+pop.dataset.at || 0) < 450) return; if (!pop.hidden && !pop.contains(e.target) && !e.target.closest("#" + pop.dataset.for)) pop.hidden = true; });
 function alerts() {
   const out = [...(typeof SAFETY !== "undefined" ? SAFETY.active : [])];
-  for (const c of live?.camera_status || []) if (c.status !== "live") out.push({level: "bad", title: `${c.name || c.id} is ${c.status}`, detail: "Check power and the network connection to the camera.", href: "#cameras"});
+  for (const c of live?.camera_status || []) if (c.status !== "live") out.push({level: "bad", title: `${c.name || c.id} is ${c.status}`, detail: "Check power and network.", href: "#cameras"});
   const obs = Object.values(util).reduce((a, u) => Math.max(a, u.busy), 0);
-  for (const u of Object.values(util)) if (obs > 0 && u.n >= 3 && u.busy >= obs && cfg.machines.length > 2) out.push({level: "warn", title: `${machineName(u.machine)} is the busiest station`, detail: `${u.n} sets, ${fmtDur(u.busy)} under load today. See Insights for layout suggestions.`, href: "#insights"});
+  for (const u of Object.values(util)) if (obs > 0 && u.n >= 3 && u.busy >= obs && cfg.machines.length > 2) out.push({level: "warn", title: `${machineName(u.machine)} is the busiest station`, detail: `${u.n} sets, ${fmtDur(u.busy)} under load today`, href: "#insights"});
   const inGym = live?.members.filter(m => m.status !== "away").length || 0;
-  out.push({level: "info", title: `${inGym} member${inGym === 1 ? "" : "s"} in the gym`, detail: `${(live?.machines || []).filter(m => m.state === "lifting").length} stations under load right now`, href: "#floor"});
+  out.push({level: "info", title: `${inGym} member${inGym === 1 ? "" : "s"} in the gym`, detail: `${(live?.machines || []).filter(m => m.state === "lifting").length} stations in use`, href: "#floor"});
   return out;
 }
 function renderChrome() {
   const a = alerts(), n = a.filter(x => x.level !== "info").length, b = $("#bellN");
   b.hidden = !n; b.textContent = n;
   const liveCams = (live?.camera_status || []).filter(c => c.status === "live").length, total = cfg.cameras.length;
-  $("#gstatus").innerHTML = `<i class="${liveCams === total ? "ok" : "warn"}"></i>${liveCams === total ? "All systems operational" : `${total - liveCams} camera${total - liveCams === 1 ? "" : "s"} offline`}`;
+  $("#gstatus").innerHTML = `<i class="${liveCams === total ? "ok" : "warn"}"></i>${liveCams}/${total} cameras online`;
   const r = ROLES[role()], name = store.get("set:org", null) ? "Gym owner" : "Gym owner";
   $("#userRole").textContent = r.label; $("#userName").textContent = role() === "owner" ? name : `${r.label} (demo)`; $("#userAv").textContent = initials(r.label === "Owner" ? "Gym Owner" : r.label);
 }
@@ -994,13 +993,13 @@ $("#bellBtn").onclick = () => popover($("#bellBtn"), `<div class="pop-h">Notific
 $("#userBtn").onclick = () => popover($("#userBtn"), `<div class="pop-h">Signed in as <b>${ROLES[role()].label}</b></div>
   <div class="pop-sec">View as role <small>(demo)</small></div>${Object.entries(ROLES).map(([k, r]) => `<button class="pop-i" data-role="${k}" aria-pressed="${k === role()}"><i class="radio"></i><span><b>${r.label}</b><small>${esc(r.desc)}</small></span></button>`).join("")}
   <div class="pop-sec">Theme</div><div class="theme-switch" role="group" aria-label="Theme">${["light", "auto", "dark"].map(t => `<button data-theme-set="${t}" aria-pressed="${store.get("theme", "auto") === t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join("")}</div>
-  <div class="pop-sep"></div><a class="pop-i" href="#settings"><span><b>Settings</b></span></a><a class="pop-i" href="member.html" target="_blank" rel="noopener"><span><b>Member app preview</b></span></a><button class="pop-i" data-signout><span><b>Sign out</b></span></button>`, e => {
+  <div class="pop-sep"></div><a class="pop-i" href="#settings"><span><b>Settings</b></span></a><a class="pop-i" href="member.html" target="_blank" rel="noopener"><span><b>Member app</b></span></a><button class="pop-i" data-signout><span><b>Sign out</b></span></button>`, e => {
   const r = e.target.closest("[data-role]"); if (r) { store.set("role", r.dataset.role); audit("Switched role", ROLES[r.dataset.role].label); $("#pop").hidden = true; renderChrome(); renderNav(); go(); toast(`Viewing as ${ROLES[r.dataset.role].label}`); return; }
   const t = e.target.closest("[data-theme-set]"); if (t) { applyTheme(t.dataset.themeSet); return; }
-  if (e.target.closest("[data-signout]")) { $("#pop").hidden = true; toast("Sign-in is handled by your organisation's single sign-on; this demo has no accounts."); }
+  if (e.target.closest("[data-signout]")) { $("#pop").hidden = true; toast("Demo has no accounts"); }
   if (e.target.closest("a")) $("#pop").hidden = true;
 });
-$("#siteBtn").onclick = () => popover($("#siteBtn"), `<div class="pop-h">Sites</div><button class="pop-i" aria-pressed="true"><i class="radio"></i><span><b>${esc(cfg.gym)}</b><small>${cfg.cameras.length} cameras · ${cfg.machines.length} stations</small></span></button><div class="pop-sep"></div><a class="pop-i" href="#settings"><span><b>Manage sites</b><small>Add a location in Settings → General</small></span></a>`, e => { if (e.target.closest("a")) { store.set("settab", "general"); $("#pop").hidden = true; } });
+$("#siteBtn").onclick = () => popover($("#siteBtn"), `<div class="pop-h">Sites</div><button class="pop-i" aria-pressed="true"><i class="radio"></i><span><b>${esc(cfg.gym)}</b><small>${cfg.cameras.length} cameras · ${cfg.machines.length} stations</small></span></button><div class="pop-sep"></div><a class="pop-i" href="#settings"><span><b>Manage sites</b></span></a>`, e => { if (e.target.closest("a")) { store.set("settab", "general"); $("#pop").hidden = true; } });
 /* global search: members, equipment, pages */
 (() => {
   const inp = $("#gsearch"), res = $("#gres"); let items = [], sel = 0;
@@ -1057,7 +1056,7 @@ async function refresh() {
   src = await pickSource(params, base);
   cfg = await src.config();
   $("#gymName").textContent = cfg.gym; $("#gymInitial").textContent = initials(cfg.gym)[0];
-  $("#gymMeta").textContent = src.mode === "replay" ? `${cfg.cameras.length} cameras · recorded footage` : src.mode === "demo" ? "Simulation" : `${cfg.cameras.length} cameras · ${cfg.members.length} members`;
+  $("#gymMeta").textContent = src.mode === "replay" ? "Demo" : src.mode === "demo" ? "Simulation" : "";
   live = await src.live().catch(() => null);
   if (store.get("set:org", null)) $("#gymName").textContent = store.get("set:org");
   if (store.get("set:preview", true) === false) document.documentElement.classList.add("no-preview");
