@@ -17,6 +17,7 @@ const SAFETY = {
   people: new Map(),       // key -> {since, lastPos, lyingSince, zone, cam, label}
   active: [],              // current alerts
   dismissed: new Set(),
+  tests: [],              // test alerts from Settings (kept separate so the live check doesn't wipe them)
 };
 const SAFE_LIFT_ZONES = /bench|rack|press|smith|squat|platform/i;
 function _lying(q) {
@@ -32,7 +33,7 @@ function _lying(q) {
   return q.box ? q.box[2] * 16 / 9 > q.box[3] * 1.3 : false;  // wide box: lying down
 }
 function safetyTick(cams) {
-  if (!SAFETY.enabled() || !src?.peopleNow) { SAFETY.active = []; return; }
+  if (!SAFETY.enabled() || !src?.peopleNow) { SAFETY.active = [...SAFETY.tests]; safetyBanner(); return; }
   const now = Date.now() / 1000, seen = new Set(), out = [];
   for (const cam of cams) {
     for (const q of src.peopleNow(cam.id) || []) {
@@ -55,7 +56,7 @@ function safetyTick(cams) {
   }
   for (const k of [...SAFETY.people.keys()]) if (!seen.has(k)) SAFETY.people.delete(k);
   const before = new Set(SAFETY.active.map(a => a.key));
-  SAFETY.active = out;
+  SAFETY.active = [...SAFETY.tests, ...out];
   for (const a of out) if (!before.has(a.key)) safetyAnnounce(a);
   safetyBanner();
 }
@@ -70,12 +71,12 @@ function safetyBanner() {
   const a = SAFETY.active[0];
   b.innerHTML = `<b>${esc(a.title)}</b><span>${esc(a.detail)}</span><a class="btn sm" href="#floor" data-safety-cam="${esc(a.cam)}">View camera</a><button class="btn sm secondary" data-safety-ok="${esc(a.key)}">I'm on it</button>${SAFETY.active.length > 1 ? `<small>+${SAFETY.active.length - 1} more</small>` : ""}`;
   b.onclick = e => {
-    const ok = e.target.closest("[data-safety-ok]"); if (ok) { SAFETY.dismissed.add(ok.dataset.safetyOk); audit?.("Safety alert handled", a.title); SAFETY.active = SAFETY.active.filter(x => x.key !== ok.dataset.safetyOk); safetyBanner(); }
+    const ok = e.target.closest("[data-safety-ok]"); if (ok) { SAFETY.dismissed.add(ok.dataset.safetyOk); SAFETY.tests = SAFETY.tests.filter(x => x.key !== ok.dataset.safetyOk); audit?.("Safety alert handled", a.title); SAFETY.active = SAFETY.active.filter(x => x.key !== ok.dataset.safetyOk); safetyBanner(); }
   };
 }
 function safetyTest() { // shows exactly what staff see, without a real event
   const cam = cfg.cameras[0];
   const a = {key: "test:" + Date.now(), level: "bad", cam: cam?.id, title: "TEST — Possible lifter in trouble: Flat bench", detail: `Test alert on ${cam?.name || "camera"}. No one is in trouble; this is what staff would see.`, href: "#floor"};
-  SAFETY.active = [a, ...SAFETY.active]; safetyAnnounce(a); safetyBanner();
-  setTimeout(() => { SAFETY.active = SAFETY.active.filter(x => x.key !== a.key); safetyBanner(); }, 15000);
+  SAFETY.tests.push(a); SAFETY.active = [a, ...SAFETY.active]; safetyAnnounce(a); safetyBanner();
+  setTimeout(() => { SAFETY.tests = SAFETY.tests.filter(x => x.key !== a.key); SAFETY.active = SAFETY.active.filter(x => x.key !== a.key); safetyBanner(); }, 20000);
 }

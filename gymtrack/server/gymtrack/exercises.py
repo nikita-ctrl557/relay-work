@@ -16,7 +16,7 @@ import numpy as np
 
 # (pattern on "id name kind", candidate exercises in order of prior likelihood)
 RULES = [
-    (r"\b(squat|power|half) ?rack\b|\brack\b|\bplatform\b", ["squat", "overhead_press", "deadlift", "lunge"]),
+    (r"\b(squat|power|half) ?racks?\b|\bracks?\b|\bplatform\b", ["squat", "overhead_press", "deadlift", "lunge"]),
     (r"\bsmith\b", ["squat", "bench_press", "overhead_press"]),
     (r"\bseated (cable )?row\b|\bcable row\b|\blow row\b", ["cable_row"]),
     (r"\b(plate.?loaded|iso.?lateral|hammer).*row\b|\brow machine\b|\bt.?bar\b", ["row"]),

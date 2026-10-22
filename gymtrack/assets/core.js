@@ -656,7 +656,7 @@ class ReplaySource {
     for (const e of c.data.timeline) for (const p of e.p) if (p[0] === m.pid) samples.push({t: e.t, box: [p[4], p[5], p[6], p[7]], zone: p[2], planted: !!p[3], act: p[8]});
     if (!samples.length) return null;
     const sets = c.data.sets.filter(s => s.pid === m.pid).sort((a, b) => a.t0 - b.t0);
-    const sources = [[c.video, "video/mp4"], [c.video_webm, "video/webm"]].filter(([f]) => f).map(([f, type]) => ({src: this.base + f, type}));
+    const sources = (c.video_clean ? [[c.video_clean, "video/mp4"]] : [[c.video, "video/mp4"], [c.video_webm, "video/webm"]]).filter(([f]) => f).map(([f, type]) => ({src: this.base + f, type}));
     return {camera: c.name, camId: c.id, pid: m.pid, samples, sets, sources, duration: c.data.duration, pose: t => this.poseAt(c, m.pid, t)};
   }
   personStats(c, pid, ct) {

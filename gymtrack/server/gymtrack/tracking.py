@@ -265,6 +265,9 @@ class PeopleTracker:
                 continue  # not detected this round
             if tr.box[3] < min_h * frame.shape[0]:
                 continue  # too small/far for a reliable pose
+            bx, by, bw, bh = tr.box
+            if by + bh >= 0.985 * frame.shape[0] or bx <= 0.015 * frame.shape[1] or bx + bw >= 0.985 * frame.shape[1]:
+                continue  # body cut off by the frame edge: a skeleton would be guesswork
             # steady crop: smooth the box the pose model sees, so detector jitter doesn't shake the skeleton
             pb = getattr(tr, "pose_box", None)
             tr.pose_box = tr.box if pb is None or t - getattr(tr, "pose_t", -9) > 1.0 else tuple(0.6 * a + 0.4 * b for a, b in zip(pb, tr.box))
