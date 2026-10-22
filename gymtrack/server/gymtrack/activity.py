@@ -24,7 +24,10 @@ import numpy as np
 
 from .pose import L_AN, L_EL, L_HIP, L_KN, L_SH, L_WR, NOSE, R_AN, R_EL, R_HIP, R_KN, R_SH, R_WR
 
-WINDOW = 30  # 6 s of poses at 5 per second
+RATE_HZ = 5.0     # poses are resampled to this rate by timestamp before computing features...
+WINDOW_S = 6.0    # ...over windows of this many seconds, whatever rate the pose model actually ran at
+WINDOW = int(RATE_HZ * WINDOW_S)  # = 30 samples
+FEATURE_VERSION = 2  # 2: time-based windows, timestamp velocities, no visibility features
 LABELS = ["situp", "battle_rope", "squat", "hinge", "lunge", "press", "pull_up", "raise", "curl", "row", "push_up", "bench_press",
           "plank", "burpee", "jumping", "standing"]
 # GymTrack exercise ids used by the app's muscle model
@@ -38,6 +41,39 @@ def _angle(a, b, c) -> np.ndarray:
     v1, v2 = a - b, c - b
     cos = (v1 * v2).sum(1) / (np.linalg.norm(v1, axis=1) * np.linalg.norm(v2, axis=1) + 1e-6)
     return np.degrees(np.arccos(np.clip(cos, -1, 1)))
+
+
+def resample(times, kps, hz: float = RATE_HZ, max_gap_s: float = 1.0) -> list[np.ndarray]:
+    """Resample a pose sequence to a fixed rate by timestamp (linear interpolation per joint coordinate).
+
+    times: seconds; kps: list of (33, 3) arrays. Gaps longer than max_gap_s are not bridged: the output
+    then only covers the longest stretch without such a gap. This is what makes training (close-up clips
+    at 5 Hz, BlazePose) and inference (gym footage at 2.5-10 Hz, RTMPose) see the same window length."""
+    t = np.asarray(times, float)
+    if len(t) < 2:
+        return [np.asarray(k, np.float32) for k in kps]
+    order = np.argsort(t)
+    t = t[order]
+    K = np.stack([np.asarray(kps[i], np.float32) for i in order])
+    cut = np.flatnonzero(np.diff(t) > max_gap_s)
+    bounds = np.r_[0, cut + 1, len(t)]
+    a, b = max(zip(bounds[:-1], bounds[1:]), key=lambda ab: t[ab[1] - 1] - t[ab[0]])
+    t, K = t[a:b], K[a:b]
+    if len(t) < 2:
+        return list(K)
+    g = np.arange(t[0], t[-1] + 1e-9, 1.0 / hz)
+    flat = K.reshape(len(t), -1)
+    out = np.stack([np.interp(g, t, flat[:, j]) for j in range(flat.shape[1])], 1).reshape(len(g), *K.shape[1:])
+    return list(out.astype(np.float32))
+
+
+def windows(times, kps, hz: float = RATE_HZ, window_s: float = WINDOW_S, step_s: float = 2.0) -> list[list[np.ndarray]]:
+    """Fixed-length (in seconds) windows over a resampled pose sequence; a short sequence gives one shorter window."""
+    seq = resample(times, kps, hz)
+    n, step = int(round(window_s * hz)), max(1, int(round(step_s * hz)))
+    if len(seq) <= n:
+        return [seq] if len(seq) >= n // 2 else []
+    return [seq[a:a + n] for a in range(0, len(seq) - n + 1, step)]
 
 
 def features(window: list[np.ndarray]) -> dict | None:
@@ -79,11 +115,14 @@ def features(window: list[np.ndarray]) -> dict | None:
 _JOINTS = [NOSE, L_SH, R_SH, L_EL, R_EL, L_WR, R_WR, L_HIP, R_HIP, L_KN, R_KN, L_AN, R_AN]
 
 
-def window_vector(window: list[np.ndarray]) -> np.ndarray | None:
-    """Fixed-length numbers describing a pose window, for the learned classifier.
+def window_vector(window: list[np.ndarray], hz: float = RATE_HZ) -> np.ndarray | None:
+    """Fixed-length numbers describing a pose window (sampled at `hz`, see `resample`), for the learned classifier.
 
     Joints are centred on the hips and scaled by torso length, then summarised (mean, spread, range)
-    per joint, plus joint-angle and motion statistics from `features`.
+    per joint, joint speed per second (from the sample rate, not an assumed window length), plus
+    joint-angle and motion statistics from `features`. Visibility is deliberately not a feature: it is
+    a sigmoid score in BlazePose clips and 0/1 in gym replays, so it told the classifier which *dataset*
+    a window came from rather than what the person was doing.
     """
     f = features(window)
     if f is None:
@@ -95,35 +134,76 @@ def window_vector(window: list[np.ndarray]) -> np.ndarray | None:
     torso = np.median(np.linalg.norm(sh - hip, axis=1)) + 1e-6
     rel = (P - hip[:, None, :]) / torso                       # (n, 13, 2)
     stats = [rel.mean(0), rel.std(0), np.percentile(rel, 90, axis=0) - np.percentile(rel, 10, axis=0)]
-    vel = np.abs(np.diff(rel, axis=0)).sum(0) / max(1, len(rel) - 1) * (len(rel) / 6.0) if len(rel) > 1 else np.zeros_like(rel[0])  # ~per second over a 6 s window
-    vis = K[:, _JOINTS, 2].mean(0)
-    return np.concatenate([np.concatenate([x.ravel() for x in stats]), vel.ravel(), vis, np.array(list(f.values()), np.float32)]).astype(np.float32)
+    vel = np.abs(np.diff(rel, axis=0)).sum(0) / max(1, len(rel) - 1) * hz if len(rel) > 1 else np.zeros_like(rel[0])  # per second
+    fv = {k: v for k, v in f.items() if k != "n"}  # window length in samples isn't a property of the movement
+    return np.concatenate([np.concatenate([x.ravel() for x in stats]), vel.ravel(), np.array(list(fv.values()), np.float32)]).astype(np.float32)
 
 
 _MODEL = None
 
 
+MODEL_FILE = "exercise_gym.joblib"
+
+
 def _model():
+    """The learned classifier, only if it is safe to use in the product.
+
+    Models trained on RepCount-A (academic use only; models/exercise.joblib and the old exercise_gym.joblib)
+    are never loaded: a model must say it was trained without research-only data (research_only False)
+    and on the current features (feature_version). See bench/train_gym.py."""
     global _MODEL
     if _MODEL is None:
         from pathlib import Path
-        p = Path(__file__).resolve().parents[1] / "models" / "exercise.joblib"
+        p = Path(__file__).resolve().parents[1] / "models" / MODEL_FILE
         _MODEL = False
         if p.exists():
             try:
                 import joblib
-                _MODEL = joblib.load(p)
+                m = joblib.load(p)
+                if m.get("research_only") is False and m.get("feature_version") == FEATURE_VERSION:
+                    _MODEL = m
             except Exception:
                 _MODEL = False
     return _MODEL
 
 
-def classify(window: list[np.ndarray]) -> tuple[str | None, float, dict | None]:
+# classifier labels -> the exercise ids they can stand for (GymTrack ids, see exercises.py)
+LABEL_EXERCISES = {"cable_row": ["cable_row", "row"], "row": ["row", "cable_row"], "press": ["bench_press", "incline_press", "shoulder_press_machine", "overhead_press"],
+                   "squat": ["squat"], "hinge": ["deadlift"], "pull_up": ["pull_up", "lat_pulldown"], "curl": ["curl"], "raise": ["lateral_raise"]}
+
+
+def classify_among(times, kps, candidates: list[str]) -> tuple[str | None, float]:
+    """P(exercise | the station's candidates, pose): average the learned classifier over time-based windows,
+    keep only labels that map to one of the candidates, renormalise. (None, 0) without a usable model or data."""
+    m = _model()
+    if not m or len(candidates) < 2:
+        return None, 0.0
+    vecs = [v for w in windows(times, kps) for v in [window_vector(w)] if v is not None]
+    if not vecs:
+        return None, 0.0
+    proba = m["model"].predict_proba(np.stack(vecs)).mean(0)
+    score: dict[str, float] = {}
+    for cls, p in zip(m["classes"], proba):
+        for ex in LABEL_EXERCISES.get(str(cls), []):
+            if ex in candidates:
+                score[ex] = score.get(ex, 0.0) + float(p)
+                break
+    if not score:
+        return None, 0.0
+    tot = sum(score.values())
+    best = max(score, key=score.get)
+    return best, round(score[best] / tot, 2) if tot > 0 else 0.0
+
+
+def classify(window: list[np.ndarray], times=None) -> tuple[str | None, float, dict | None]:
     """Return (label, confidence 0..1, features). label None = not enough pose data.
 
-    Uses the learned classifier (models/exercise.joblib, trained on real labelled videos) when it is
-    installed; the rules below cover movements it wasn't trained on and serve as a fallback.
+    times: the poses' timestamps; when given the window is first resampled to RATE_HZ so the features mean
+    the same at any pose rate. Uses the learned classifier when a product-safe one is installed (see
+    `_model`) and it names one of the movements below; the rules cover everything else.
     """
+    if times is not None and len(window) >= 2:
+        window = resample(times, window)
     f = features(window)
     if f is None:
         return None, 0.0, None
@@ -134,8 +214,8 @@ def classify(window: list[np.ndarray]) -> tuple[str | None, float, dict | None]:
         v = window_vector(window)
         proba = m["model"].predict_proba(v[None])[0]
         k = int(np.argmax(proba))
-        if proba[k] >= 0.55:
-            return m["classes"][k], round(float(proba[k]), 2), f
+        if proba[k] >= 0.55 and str(m["classes"][k]) in LABELS:
+            return str(m["classes"][k]), round(float(proba[k]), 2), f
     s: dict[str, float] = {}
     lying = f["tilt_med"] > 55
     if lying:

@@ -538,9 +538,9 @@ class PeopleTracker:
         dn_top = math.hypot(cx0 - cx1, pb[1] - d[1]) / hmax
         hr = d[3] / max(pb[3], 1.0)
         g = min(gap, 3.0)
-        gate = 0.45 + 0.8 * g
+        gate = 0.25 + 0.7 * g  # body heights: ~2.5 m/s plus detector jitter; a stood-still person can't slide onto a neighbour
         if 0.6 <= hr <= 1.65:
-            if hm < 0.05 and dn_feet > gate:
+            if dn_feet > gate:
                 return None
             return 0.5 * (1 - hm) + 0.5 * min(dn_feet / gate, 1.5) + 0.3 * abs(math.log(hr))
         # partly hidden: same width, and the shorter box lies inside the taller one (it's the same body, cropped)
