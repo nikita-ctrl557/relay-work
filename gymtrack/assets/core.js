@@ -661,7 +661,7 @@ class ReplaySource {
       c.data.timeline.sort((a, b) => a.t - b.t);
       this.cfg.machines.push(...c.machines);
       this.cfg.cameras.push({id: c.id, name: c.name, source: c.source, fps: 10, zones: c.zones, exercise_names: c.exercise_names !== false});
-      for (const p of c.data.people.rows.filter(p => p.seen_s >= 20)) this.cfg.members.push({id: `${c.id}-${p.id}`, name: `${c.short} #${p.id}`, tag: p.id, cam: c.id, pid: p.id});
+      const withSets = new Set(c.data.sets.map(s => s.pid)); for (const p of c.data.people.rows.filter(p => withSets.has(p.id) || p.seen_s >= 45)) this.cfg.members.push({id: `${c.id}-${p.id}`, name: `${c.short} #${p.id}`, tag: p.id, cam: c.id, pid: p.id});
       if (c.parts?.length) { c.pv = new PartedVideo(c.parts.map(p => ({src: base + p.file, start: p.start, dur: p.dur}))); c.el = c.pv.el; continue; }
       const v = document.createElement("video");
       Object.assign(v, {muted: true, loop: true, playsInline: true, autoplay: true, preload: "auto"});
