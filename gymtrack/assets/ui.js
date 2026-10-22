@@ -248,7 +248,7 @@ function skeletonPlayer(host, clip) {
     const pts = at(t);
     trail.push(pts); if (trail.length > 7) trail.shift();
     trail.slice(0, -1).forEach((p, i) => drawSkeleton(ctx, p, map, {color: clip.color || "#3d7cf0", width: 2, joint: 0, alpha: 0.06 + i * 0.03, outline: false}));
-    drawSkeleton(ctx, pts, map, {color: clip.color || "#3d7cf0", width: Math.max(3, s * 0.012), joint: Math.max(3, s * 0.01)});
+    drawSkeleton(ctx, pts, map, {color: clip.color || "#3d7cf0", width: Math.min(7, Math.max(3, s * 0.012)), joint: Math.min(5, Math.max(3, s * 0.01))});
     const a = poseAngles(pts), row = (k, l, help) => a[k] == null ? "" : `<div data-tip="${help}"><span class="eyebrow">${l}</span><b class="num">${Math.round(a[k])}°</b><small class="muted">range ${Math.round(lo.min[k])}–${Math.round(lo.max[k])}°</small></div>`;
     ang.innerHTML = row("knee", "Knee", "Angle at the knee: 180° is straight, under 90° is below parallel on a squat") + row("hip", "Hip", "Angle between torso and thigh") + row("lean", "Torso lean", "Torso angle from vertical");
     range.value = String(Math.round((t - t0) / dur * 1000)); tEl.textContent = `${clockFmt(t - t0)} / ${clockFmt(dur)}`;

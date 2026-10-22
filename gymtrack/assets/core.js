@@ -659,12 +659,13 @@ class ReplaySource {
     const sources = (c.video_clean ? [[c.video_clean, "video/mp4"]] : [[c.video, "video/mp4"], [c.video_webm, "video/webm"]]).filter(([f]) => f).map(([f, type]) => ({src: this.base + f, type}));
     return {camera: c.name, camId: c.id, pid: m.pid, samples, sets, sources, duration: c.data.duration, pose: t => this.poseAt(c, m.pid, t)};
   }
-  personStats(c, pid, ct) {
-    const done = c.data.sets.filter(s => s.pid === pid && s.t1 <= ct), seen = c.data.timeline.filter(e => e.t <= ct && e.p.some(p => p[0] === pid));
+  personStats(c, pid, ct, full = false) { // full: the whole recording (totals, history); otherwise up to playback time
+    const lim = full ? Infinity : ct;
+    const done = c.data.sets.filter(s => s.pid === pid && s.t1 <= lim), seen = c.data.timeline.filter(e => e.t <= lim && e.p.some(p => p[0] === pid));
     if (!seen.length) return null;
     const first = seen[0].t, rests = [];
     for (let i = 1; i < done.length; i++) { const g = done[i].t0 - done[i - 1].t1; if (g > 0 && g <= 300) rests.push(g); }
-    const lift = done.reduce((a, s) => a + s.t1 - s.t0, 0), rest = rests.reduce((a, b) => a + b, 0), el = ct - first;
+    const lift = done.reduce((a, s) => a + s.t1 - s.t0, 0), rest = rests.reduce((a, b) => a + b, 0), el = (full ? seen[seen.length - 1].t : ct) - first;
     return {first, done, lift, rest, rests, el, visible: (this.at(c, ct).p.find(p => p[0] === pid) || null)};
   }
   async config() { return this.cfg; }
@@ -687,15 +688,16 @@ class ReplaySource {
         recent.push({member: mem?.id || null, who: mem ? null : (s.pid != null ? `${c.short} #${s.pid}` : null), exercise: s.ex || null, machine: s.m, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, duration: s.t1 - s.t0, cameras: [c.id]});
       }
       for (const m of this.cfg.members.filter(m => m.cam === c.id)) {
-        const st = this.personStats(c, m.pid, ct), row = {id: m.id, name: m.name, tag: m.pid, status: "away"};
+        const now = this.personStats(c, m.pid, ct), st = this.personStats(c, m.pid, ct, true), row = {id: m.id, name: m.name, tag: m.pid, status: "away"};
         if (st) {
-          const lifting = machines.some(x => x.state === "lifting" && x.member === m.id), vis = st.visible;
+          const lifting = machines.some(x => x.state === "lifting" && x.member === m.id), vis = now?.visible;
           row.status = lifting ? "lifting" : vis && vis[2] && vis[3] ? "resting" : vis ? "on floor" : "away";
-          const last = st.done[st.done.length - 1], curRest = row.status !== "lifting" && last ? ct - last.t1 : null;
+          const doneNow = now?.done || [], last = doneNow[doneNow.length - 1], curRest = row.status !== "lifting" && last ? ct - last.t1 : null;
           Object.assign(row, {elapsed_s: st.el, lifting_s: st.lift, resting_s: st.rest + (row.status === "resting" && curRest && curRest <= 300 ? curRest : 0), other_s: Math.max(0, st.el - st.lift - st.rest),
             sets: st.done.length, reps: st.done.reduce((a, s) => a + s.reps, 0), location: vis ? vis[2] : null, camera: c.id,
             avg_rest_s: st.rests.length ? st.rest / st.rests.length : null, session_start: this.abs(c, st.first), current_rest_s: row.status === "resting" && curRest != null ? curRest : undefined,
-            timeline: st.done.map(s => [this.abs(c, s.t0), this.abs(c, s.t1), s.m, s.reps]), machines: {}});
+            timeline: st.done.map(s => [this.abs(c, s.t0), this.abs(c, s.t1), s.m, s.reps]), machines: {},
+            exercises: Object.entries(st.done.reduce((a, s) => (s.ex && (a[s.ex] = (a[s.ex] || 0) + 1), a), {})).sort((a, b) => b[1] - a[1])});
           if (row.status === "away") delete row.current_rest_s;
         }
         members.push(row);
@@ -708,14 +710,14 @@ class ReplaySource {
   async progress(id) {
     const m = this.cfg.members.find(x => x.id === id), c = this.cams.find(x => x.id === m?.cam);
     if (!m || !c) return {days: [], machines: {}, sessions: 0, areas: {}, session_list: [], recent_sets: []};
-    const ct = this.ct(c), st = this.personStats(c, m.pid, ct), day = dayKey(Date.now() / 1000), machines = {}, areas = {};
+    const ct = this.ct(c), st = this.personStats(c, m.pid, ct, true), day = dayKey(Date.now() / 1000), machines = {}, areas = {};
     for (const [i, s] of (st?.done || []).entries()) {
       const pm = machines[s.m] ||= {sets: 0, reps: 0, best_reps: 0, best_kg: null, time_s: 0, history: [{day, sets: 0, reps: 0, top_kg: null}]};
       const kg = this.weights[`${id}:${i}`]; pm.sets++; pm.reps += s.reps; pm.best_reps = Math.max(pm.best_reps, s.reps); pm.time_s += s.t1 - s.t0;
       pm.history[0].sets++; pm.history[0].reps += s.reps; if (kg) { pm.best_kg = Math.max(pm.best_kg || 0, kg); pm.history[0].top_kg = Math.max(pm.history[0].top_kg || 0, kg); }
     }
     const row = c.data.people.rows.find(p => p.id === m.pid);
-    for (const [zone, secs] of Object.entries(row?.zones || {})) { const frac = Math.min(1, ct / Math.max(1, c.data.duration)); areas[zone] = {time_s: secs * frac, lifting_s: 0, by_day: {[day]: secs * frac}, lift_by_day: {}}; }
+    for (const [zone, secs] of Object.entries(row?.zones || {})) { const frac = 1; areas[zone] = {time_s: secs * frac, lifting_s: 0, by_day: {[day]: secs * frac}, lift_by_day: {}}; }
     for (const s of st?.done || []) { const a = areas[s.m] ||= {time_s: 0, lifting_s: 0, by_day: {}, lift_by_day: {}}; a.lifting_s += s.t1 - s.t0; a.lift_by_day[day] = (a.lift_by_day[day] || 0) + s.t1 - s.t0; a.by_day[day] = Math.max(a.by_day[day] || 0, a.lift_by_day[day]); a.time_s = Math.max(a.time_s, a.lifting_s); }
     return {days: st ? [{day, lifting_s: 0, resting_s: 0, elapsed_s: 0, sets: st.done.length, reps: st.done.reduce((a, s) => a + s.reps, 0), volume_kg: 0}] : [], machines, sessions: st ? 1 : 0, areas, session_list: [],
       recent_sets: (st?.done || []).map((s, i) => ({id: `${id}:${i}`, machine: s.m, exercise: s.ex || null, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, weight_kg: this.weights[`${id}:${i}`] ?? null})).reverse(),
@@ -724,7 +726,7 @@ class ReplaySource {
   }
   async utilisation() {
     const out = {};
-    for (const c of this.cams) { const ct = this.ct(c); for (const s of c.data.sets.filter(s => s.t1 <= ct)) { const r = out[s.m] ||= {machine: s.m, n: 0, busy: 0, members: new Set()}; r.n++; r.busy += s.t1 - s.t0; if (s.pid != null) r.members.add(s.pid); } }
+    for (const c of this.cams) { for (const s of c.data.sets) { const r = out[s.m] ||= {machine: s.m, n: 0, busy: 0, members: new Set()}; r.n++; r.busy += s.t1 - s.t0; if (s.pid != null) r.members.add(s.pid); } }
     return Object.values(out).map(r => ({...r, members: r.members.size}));
   }
   async hourly() { const h = new Date().getHours(), out = {}; for (const u of await this.utilisation()) { out[u.machine] = Array(24).fill(0); out[u.machine][h] = u.n; } return out; }
