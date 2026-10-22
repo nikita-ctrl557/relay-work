@@ -1,0 +1,52 @@
+{
+  "about": "Hand-labelled sets for bench/eval_sets.py. Labels only, no footage: clips are 1280x720 10 fps segments of a public fixed-camera gym walk-through (scratch: yt/segs/<clip>.mp4 + <clip>-config.json). Labelled by looking at per-zone crop strips (2 s, then 0.4-0.5 s around sets) and ROI motion traces. 'who' is the lifter's body centre (fractions of the frame) at time t; the eval credits a set correctly when the credited track is the track nearest that point. 'reps_tol' widens the +-1 check where the count is uncertain (set already running when the clip starts, or slow/unclear reps). 'ignore' = stretches of a zone we could not label confidently; predicted sets that fall mostly inside them are not scored. Only zones in 'zones' are scored; others (far background) are unlabelled.",
+  "clips": [
+    {
+      "clip": "floor0", "duration": 70,
+      "zones": ["cable", "seated", "bench", "dumbbells", "pl-row", "pl-press", "rack1", "rack2"],
+      "sets": [
+        {"m": "bench", "t0": 0, "t1": 48, "who": {"t": 25, "xy": [0.375, 0.62]}, "reps": 13, "reps_tol": 2, "ex": ["cable_row", "row"],
+         "note": "man in cap seated on the seated-cable-row bench, set already running at clip start, slow ~3.5 s reps; a woman stands right next to him the whole time (stander)"}
+      ],
+      "ignore": [{"m": "seated", "t0": 34, "t1": 64, "note": "man bent over the machine, small or no visible movement"}],
+      "standers": ["woman next to the bench rower (0-70)", "woman hands-on-hips in rack2 (0-70)", "man in tank top standing/walking in rack1 and seated zones (0-32)"]
+    },
+    {
+      "clip": "floor1", "duration": 75,
+      "zones": ["seated", "bench", "dumbbells", "pl-row", "pl-press", "rack2", "cable"],
+      "sets": [
+        {"m": "bench", "t0": 0, "t1": 18.5, "who": {"t": 9, "xy": [0.44, 0.5]}, "reps": 11, "reps_tol": 1, "ex": ["cable_row", "row"],
+         "note": "older man in cream shirt, seated cable row ~1.6 s reps, already running at clip start"}
+      ],
+      "ignore": [
+        {"m": "bench", "t0": 63, "t1": 75, "note": "same man grabs the handle again and holds; set may start after the clip"},
+        {"m": "rack2", "t0": 0, "t1": 37, "note": "woman at the bar, possibly slow shrugs/RDLs; mirror reflections behind"},
+        {"m": "rack2", "t0": 60, "t1": 75, "note": "man in orange un-racks the bar at the clip end"},
+        {"m": "cable", "t0": 18, "t1": 75, "note": "man in red adjusts the cable / fiddles, unclear"}
+      ],
+      "standers": ["man in tank top hands-on-hips in the seated zone (0-75)", "man in blue next to the bench (65-75)"]
+    },
+    {
+      "clip": "floor3", "duration": 60,
+      "zones": ["rack1", "rack2", "bench", "seated", "dumbbells", "pl-row", "cable"],
+      "sets": [
+        {"m": "rack1", "t0": 0, "t1": 14, "who": {"t": 7, "xy": [0.395, 0.19]}, "reps": 4, "reps_tol": 2, "ex": ["squat"],
+         "note": "man in black squats with the bar on his back, set running at clip start; far, low resolution"},
+        {"m": "rack2", "t0": 21, "t1": 44, "who": {"t": 30, "xy": [0.575, 0.19]}, "reps": 6, "reps_tol": 1, "ex": ["squat"],
+         "note": "man in white shirt, back squat, clear reps"}
+      ],
+      "ignore": [],
+      "standers": ["woman in red seated in front of rack2 (0-60)", "woman seated on the machine in front of rack1 (0-60)", "man in black standing under the bar in rack1 (30-56)"]
+    },
+    {
+      "clip": "cables1", "duration": 75,
+      "zones": ["c-bench", "c-decline"],
+      "sets": [
+        {"m": "c-decline", "t0": 9, "t1": 41, "who": {"t": 25, "xy": [0.385, 0.55]}, "reps": 11, "reps_tol": 1, "ex": ["cable_row", "row"],
+         "note": "man in white tee, low seated cable row (the zone is configured as 'Decline bench'); a grey-haired man stands beside him 17-30"}
+      ],
+      "ignore": [],
+      "standers": ["woman seated on the flat bench on her phone (5-15)", "grey-haired man next to the rower (17-30)"]
+    }
+  ]
+}

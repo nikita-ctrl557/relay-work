@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ID Audit</title>
+<!--
+  Identity audit for tracker output (no backend). Make a pack with:
+    python bench/eval_tracking.py REPLAY.json --config CFG.json --video VIDEO.mp4 --label-pack pack.json
+  Open this file in a browser, load pack.json, then for each ID look at its crop strip:
+    * click a crop where the person changes (an ID switch starts there) - click again to undo;
+    * "Same as #" marks two IDs that are one person (fragmentation);
+    * "Not a person" marks false tracks (mirror, poster, bag).
+  Keys: left/right = previous/next frame, n/p = next/previous ID, j = next suspect.
+  Export writes labels.json; score it with eval_tracking.py ... --labels labels.json
+-->
+<style>
+:root{--bg:#f3f4f6;--panel:#fff;--ink:#111827;--mut:#6b7280;--line:#e5e7eb;--acc:#2563eb;--bad:#dc2626;--ok:#059669;--sel:#f59e0b}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b0d10;--panel:#15181d;--ink:#e5e7eb;--mut:#9ca3af;--line:#262b33;--acc:#60a5fa;--bad:#f87171;--ok:#34d399;--sel:#fbbf24}}
+:root[data-theme="dark"]{--bg:#0b0d10;--panel:#15181d;--ink:#e5e7eb;--mut:#9ca3af;--line:#262b33;--acc:#60a5fa;--bad:#f87171;--ok:#34d399;--sel:#fbbf24}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:15px;margin:0 12px 0 0}
+main{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:12px;padding:12px 16px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;min-width:0}
+canvas{width:100%;height:auto;display:block;border-radius:6px;cursor:pointer}
+button,input{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 10px}
+button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
+.mut{color:var(--mut);font-size:12.5px}
+.strip{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.crop{position:relative;border:2px solid transparent;border-radius:4px;cursor:pointer}
+.crop img{display:block;height:80px}
+.crop span{position:absolute;left:2px;top:1px;font:11px ui-monospace,monospace;color:#fff;text-shadow:0 0 3px #000}
+.crop.sw{border-color:var(--bad)}
+.crop.now{outline:2px solid var(--sel)}
+ul{margin:4px 0;padding-left:18px;max-height:220px;overflow:auto}
+li{cursor:pointer}
+input[type=range]{width:100%;padding:0}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tracker ID audit</h1>
+  <input type="file" id="file" accept=".json" aria-label="Load label pack">
+  <button id="export">Export labels</button>
+  <span class="mut" id="stats">Load a pack made by eval_tracking.py --label-pack</span>
+</header>
+<main>
+  <section class="panel">
+    <canvas id="cv" width="960" height="540"></canvas>
+    <input type="range" id="slider" min="0" max="0" value="0" aria-label="Frame">
+    <div class="row"><button id="prev">&larr;</button><button id="next">&rarr;</button><span id="ftime" class="mut"></span></div>
+  </section>
+  <section class="panel">
+    <div class="row"><b id="selname">No ID selected</b>
+      <button id="pid">prev ID</button><button id="nid">next ID</button></div>
+    <div class="row"><label>Same as # <input id="same" type="number" style="width:80px"></label><button id="addsame">Add</button>
+      <button id="np">Not a person</button></div>
+    <div class="mut">Click the first crop where it is somebody else (ID switch). Click again to undo.</div>
+    <div class="strip" id="strip"></div>
+    <h3 style="font-size:13px;margin:14px 0 4px">Suspects from the proxy metrics <span class="mut">(j = next)</span></h3>
+    <ul id="sus"></ul>
+    <h3 style="font-size:13px;margin:14px 0 4px">Your labels</h3>
+    <ul id="labs"></ul>
+  </section>
+</main>
+<script>
+let pack = null, fi = 0, sel = null, susI = -1, name = "pack";
+let labels = {switches: [], same: [], not_person: []};
+const $ = id => document.getElementById(id), cv = $("cv"), ctx = cv.getContext("2d");
+const ids = () => pack ? Object.keys(pack.crops).map(Number).sort((a, b) => a - b) : [];
+function save() { try { localStorage.setItem("idaudit:" + name, JSON.stringify(labels)); } catch (e) {} }
+function load() { try { const v = localStorage.getItem("idaudit:" + name); if (v) labels = JSON.parse(v); } catch (e) {} }
+$("file").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  name = f.name; pack = JSON.parse(await f.text()); load();
+  $("slider").max = pack.frames.length - 1; fi = 0; sel = ids()[0] ?? null; render();
+};
+function frameImg(fr) {
+  if (!fr._img) { fr._img = new Image(); fr._img.onload = () => draw(); fr._img.src = "data:image/jpeg;base64," + fr.jpg; }
+  return fr._img;
+}
+function draw() {
+  if (!pack || !pack.frames.length) return;
+  const fr = pack.frames[fi], img = frameImg(fr);
+  if (!img.complete) return;
+  cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  ctx.drawImage(img, 0, 0);
+  for (const [id, x, y, w, h] of fr.boxes) {
+    const on = id === sel, X = x * cv.width, Y = y * cv.height;
+    ctx.lineWidth = on ? 3 : 1.5; ctx.strokeStyle = on ? "#f59e0b" : "#60a5fa";
+    ctx.strokeRect(X, Y, w * cv.width, h * cv.height);
+    ctx.font = "bold 13px system-ui"; const s = "#" + id, tw = ctx.measureText(s).width + 6;
+    ctx.fillStyle = on ? "#f59e0b" : "#1e3a8a"; ctx.fillRect(X, Y - 16, tw, 16);
+    ctx.fillStyle = "#fff"; ctx.fillText(s, X + 3, Y - 4);
+  }
+  $("ftime").textContent = `t = ${fr.t.toFixed(0)} s   (${fi + 1}/${pack.frames.length})`;
+}
+cv.onclick = ev => {
+  if (!pack) return;
+  const r = cv.getBoundingClientRect(), x = (ev.clientX - r.left) / r.width, y = (ev.clientY - r.top) / r.height;
+  const hit = pack.frames[fi].boxes.filter(([id, bx, by, bw, bh]) => x >= bx && x <= bx + bw && y >= by && y <= by + bh)
+    .sort((a, b) => a[3] * a[4] - b[3] * b[4])[0];
+  if (hit) { sel = hit[0]; render(); }
+};
+function render() {
+  draw();
+  const strip = $("strip"); strip.innerHTML = "";
+  $("selname").textContent = sel == null ? "No ID selected" : `ID #${sel}` + (labels.not_person.includes(sel) ? " (not a person)" : "");
+  $("np").classList.toggle("on", labels.not_person.includes(sel));
+  const t = pack && pack.frames[fi] ? pack.frames[fi].t : 0;
+  for (const c of (pack && sel != null ? pack.crops[sel] || [] : [])) {
+    const d = document.createElement("div"), sw = labels.switches.some(s => s.id === sel && s.t === c.t);
+    d.className = "crop" + (sw ? " sw" : "") + (Math.abs(c.t - t) < 1.01 ? " now" : "");
+    d.innerHTML = `<img alt="ID ${sel} at ${c.t}s" src="data:image/jpeg;base64,${c.jpg}"><span>${c.t.toFixed(0)}</span>`;
+    d.onclick = () => {
+      const k = labels.switches.findIndex(s => s.id === sel && s.t === c.t);
+      if (k >= 0) labels.switches.splice(k, 1); else labels.switches.push({id: sel, t: c.t});
+      save(); render();
+    };
+    d.ondblclick = () => goto(c.t);
+    strip.appendChild(d);
+  }
+  $("sus").innerHTML = (pack ? pack.suspects : []).map((s, i) => `<li data-i="${i}">${s.kind} #${s.id} at ${s.t.toFixed(0)} s</li>`).join("");
+  for (const li of $("sus").children) li.onclick = () => jumpSus(+li.dataset.i);
+  $("labs").innerHTML = labels.switches.map(s => `<li>switch #${s.id} at ${s.t.toFixed(0)} s</li>`).join("")
+    + labels.same.map(([a, b]) => `<li>#${a} = #${b}</li>`).join("") + labels.not_person.map(i => `<li>#${i} not a person</li>`).join("");
+  $("stats").textContent = pack ? `${pack.frames.length} frames · ${ids().length} IDs · ${labels.switches.length} switches · ${labels.same.length} merges marked` : "";
+}
+function goto(t) { let b = 0; pack.frames.forEach((f, i) => { if (Math.abs(f.t - t) < Math.abs(pack.frames[b].t - t)) b = i; }); fi = b; $("slider").value = fi; render(); }
+function jumpSus(i) { susI = i; const s = pack.suspects[i]; if (!s) return; sel = s.id; goto(s.t); }
+$("slider").oninput = e => { fi = +e.target.value; render(); };
+$("prev").onclick = () => { fi = Math.max(0, fi - 1); $("slider").value = fi; render(); };
+$("next").onclick = () => { fi = Math.min(pack.frames.length - 1, fi + 1); $("slider").value = fi; render(); };
+const step = d => { const L = ids(); if (!L.length) return; const k = L.indexOf(sel); sel = L[(k + d + L.length) % L.length]; render(); };
+$("nid").onclick = () => step(1); $("pid").onclick = () => step(-1);
+$("addsame").onclick = () => { const o = +$("same").value; if (sel != null && o && o !== sel) { labels.same.push([sel, o]); save(); render(); } };
+$("np").onclick = () => { if (sel == null) return; const k = labels.not_person.indexOf(sel); k >= 0 ? labels.not_person.splice(k, 1) : labels.not_person.push(sel); save(); render(); };
+document.onkeydown = e => {
+  if (!pack || e.target.tagName === "INPUT") return;
+  if (e.key === "ArrowLeft") $("prev").click(); else if (e.key === "ArrowRight") $("next").click();
+  else if (e.key === "n") step(1); else if (e.key === "p") step(-1); else if (e.key === "j") jumpSus(susI + 1);
+};
+$("export").onclick = () => {
+  const blob = new Blob([JSON.stringify({pack: name, ...labels}, null, 1)], {type: "application/json"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name.replace(/\.json$/, "") + "-labels.json"; a.click();
+};
+</script>
+</body>
+</html>

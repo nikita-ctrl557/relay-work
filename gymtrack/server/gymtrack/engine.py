@@ -10,8 +10,9 @@ import threading
 from collections import Counter, deque
 from dataclasses import dataclass, field
 
+from . import credit as _credit
 from .config import GymConfig
-from .reps import count_reps
+from .reps import REPS_SHOW_CONF, count_1d, count_pose, count_reps, fuse
 from .vision import FrameReading
 
 FUSE_WINDOW_S = 1.0  # readings older than this are ignored when fusing cameras
@@ -24,6 +25,8 @@ UNPLANTED_END_S = 5.0  # with people tracking, a set ends once nobody has stood 
 PLANTED_LEAD_S = 2.0   # a set starts at most this long before someone first stands planted in the zone
 LIVE_REPS_EVERY_S = 1.0
 MAX_SET_FRAMES = 3000  # per camera; ~5 minutes at 10 fps
+NEAR_ZONE = 0.25       # a person whose box overlaps the zone (this share of the box) is a candidate lifter
+PREROLL_S = 3.0        # observations kept from before a set starts
 
 
 @dataclass
@@ -37,10 +40,25 @@ class SetRecord:
     id: int | None = None
     person: int | None = None   # people-tracker ID of who did it (anonymous if no tag)
     exercise: str | None = None # recognised from pose (see activity.py), else None (the machine says what it is)
+    reps_conf: float = 0.0      # how sure the rep count is (0..1); below reps.REPS_SHOW_CONF show "a set" without reps
+    credit: float | None = None # motion-coherence score of the credited person (None = no pose evidence, presence vote)
+    cands: dict = field(default_factory=dict)     # pid -> motion-coherence score, for everyone judged near the zone
+    evidence: dict = field(default_factory=dict)  # per-source rep counts etc., for debugging and active learning
 
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    @property
+    def reps_shown(self) -> int | None:
+        return self.reps if self.reps_conf >= REPS_SHOW_CONF else None
+
+    def as_replay(self, t0: float = 0.0) -> dict:
+        """Compact dict used by the replay viewer, post-processing and the evaluation."""
+        return {"t0": round(self.start - t0, 2), "t1": round(self.end - t0, 2), "m": self.machine, "reps": self.reps_shown,
+                "reps_est": self.reps, "reps_conf": round(self.reps_conf, 2), "pid": self.person, "member": self.member,
+                "ex": self.exercise, "credit": self.credit, "cands": {str(k): v for k, v in self.cands.items()},
+                "cams": self.cameras, "ev": self.evidence}
 
 
 @dataclass
@@ -76,6 +94,10 @@ class MachineTracker:
         self.planted_at: float | None = None       # last time someone stood planted in this zone
         self.tracked_at: float | None = None       # last reading that came with people tracking
         self.set_first_planted: float | None = None
+        self.obs: dict[int, deque] = {}          # pid -> recent (t, box, kp13 or None, crop) of people near the zone
+        self.in_zone: Counter = Counter()        # pid -> frames with feet inside the zone during the set
+        self.motion_hist: deque = deque(maxlen=MAX_SET_FRAMES)  # (t, fused zone motion)
+        self.vetoed: list[dict] = []             # sets dropped because nobody moved with the machine
 
     # -- signal fusion -----------------------------------------------------
     def ingest(self, cam: str, t: float, motion: float, thumb, tags: list[int], positions: dict | None = None,
@@ -116,15 +138,46 @@ class MachineTracker:
                         break
         if thumb is not None:
             self.thumbs.setdefault(cam, deque(maxlen=MAX_SET_FRAMES)).append((t, thumb))
+        self._observe(cam, t, people or [])
 
         if self.last_t is not None and t < self.last_t:
             return  # out-of-order reading from a slower camera: signal kept, timing not advanced
         dt = 0.1 if self.last_t is None else t - self.last_t
         self.last_t = t
         fused = max((z.motion for z in self.cams.values() if t - z.t <= FUSE_WINDOW_S), default=0.0)
+        self.motion_hist.append((t, fused))
         self.ema += min(1.0, dt / 0.5) * (fused - self.ema)
         self._update_occupant(t)
         self._step(t)
+
+    def _observe(self, cam: str, t: float, people: list):
+        """Keep boxes/poses of people at or near this zone (candidates for who's lifting)."""
+        poly = self.e.zone_box(cam, self.id)
+        for pid, _member, zone, *rest in people:
+            obs = rest[2] if len(rest) > 2 and isinstance(rest[2], dict) else None
+            if obs is None:
+                continue
+            near = zone == self.id
+            if not near and poly is not None:
+                x, y, w, h = obs["box"]
+                ix = max(0.0, min(x + w, poly[2]) - max(x, poly[0]))
+                iy = max(0.0, min(y + h, poly[3]) - max(y, poly[1]))
+                near = ix * iy >= NEAR_ZONE * max(w * h, 1e-6)
+            if not near:
+                continue
+            q = self.obs.get(pid)
+            if q is None:
+                q = self.obs[pid] = deque(maxlen=MAX_SET_FRAMES)
+            q.append((t, obs["box"], obs.get("kp"), obs.get("crop")))
+            if self.state == "lifting" and zone == self.id:
+                self.in_zone[pid] += 1
+        if self.state != "lifting":  # idle: keep only a short pre-roll
+            for pid in list(self.obs):
+                q = self.obs[pid]
+                while q and q[0][0] < t - PREROLL_S:
+                    q.popleft()
+                if not q:
+                    del self.obs[pid]
 
     def _update_occupant(self, t: float):
         th = self.e.cfg.thresholds
@@ -159,6 +212,7 @@ class MachineTracker:
                     self.set_tracked_frames = self.set_planted = 0
                     self.set_first_planted = self.planted_at if self.planted_at is not None and t - self.planted_at <= th.on_hold_s + 1 else None
                     self.set_cams = {c for c, z in self.cams.items() if t - z.t <= FUSE_WINDOW_S}
+                    self.in_zone = Counter()
                     self._live_reps, self._live_at = 0, -1e9
                     self.below_since = None
             else:
@@ -185,35 +239,101 @@ class MachineTracker:
             start = max(start, self.set_first_planted - PLANTED_LEAD_S)  # drop the walking-around before the set
         self.state, self.above_since, self.below_since, self.set_start = "idle", None, None, None
         if end - start < th.min_set_s:
-            return
-        # with people tracking: someone must stand planted in the zone for a good part of the set,
-        # otherwise it was walking past, kids playing, stretching on the floor...
-        if self.set_tracked_frames >= 10 and self.set_people and self.set_planted < PLANTED_SHARE * self.set_tracked_frames:
-            return
-        if self.set_tracked_frames >= 10 and self.set_planted == 0 and self.e.people_seen_recently(end):
-            return  # people are being tracked fine, yet nobody ever stood in this zone: not a set
-        member = self._set_member() or self._occupant_if_seen()
-        person = None
-        if self.set_people:  # the tracked person who stood in this zone for most of the set
-            (pid, pmember), n = self.set_people.most_common(1)[0]  # noqa
-            if n >= SET_PRESENCE * self.set_frames:
-                person, member = pid, member or pmember
+            return self._done(end)
+        cr = self._credit(start, end)
+        members = {pid: m for (pid, m) in self.set_people}
+        person, score = None, None
+        if cr is not None and cr.judged:
+            # pose evidence: whoever moved with the machine did the set (the presence vote and the
+            # hand-tuned "barely moved" rules are only the fallback when nobody could be judged)
+            if cr.best is not None:
+                person, score = cr.best, round(cr.cands[cr.best].score, 3)
+            else:
+                present = [p for p, n in self.in_zone.items() if n >= 0.3 * max(1, self.set_tracked_frames)]
+                if all(cr.cands.get(p) is not None and cr.cands[p].judged for p in present):
+                    self.vetoed.append({"machine": self.id, "start": start, "end": end, "cands": cr.scores()})
+                    return self._done(end)  # everyone at the machine was seen, nobody lifted: not a set
+                # someone in the zone couldn't be judged (hidden behind the machine): keep the set, unattributed
+        else:
+            # no usable poses: fall back to presence. Someone must stand planted in the zone for a good part
+            # of the set, otherwise it was walking past, kids playing, stretching on the floor...
+            if self.set_tracked_frames >= 10 and self.set_people and self.set_planted < PLANTED_SHARE * self.set_tracked_frames:
+                return self._done(end)
+            if self.set_tracked_frames >= 10 and self.set_planted == 0 and self.e.people_seen_recently(end):
+                return self._done(end)  # people are being tracked fine, yet nobody ever stood in this zone: not a set
+            if self.set_people:  # the tracked person who stood in this zone for most of the set
+                (pid, _pm), n = self.set_people.most_common(1)[0]
+                if n >= SET_PRESENCE * self.set_frames:
+                    person = pid
+        member = self._set_member() or self._occupant_if_seen() or members.get(person)
         exercise = None
         acts = Counter({a: n for (pid, a), n in self.set_acts.items() if (person is None or pid == person) and a != "standing"})
         if acts:
             from .activity import EXERCISE_ID
-            exercise = EXERCISE_ID.get(acts.most_common(1)[0][0])
-        reps = max(1, self._count(start, end))  # too short to see a repeat, but a set is at least one rep
+            from .exercises import candidates
+            m = self.e.cfg.machine(self.id)
+            cands = candidates(self.id, m.name if m else "", m.kind if m else "")
+            ex = EXERCISE_ID.get(acts.most_common(1)[0][0])
+            exercise = ex if ex and (not cands or ex in cands) else None  # the equipment decides what's possible
+        reps, conf, ev = self._count_set(start, end, person, cr)
+        cands = cr.scores() if cr is not None else {}
+        cams = sorted(self.set_cams)
+        self._done(end)
+        self.e._record_set(SetRecord(member, self.id, start, end, max(1, reps), cams, person=person, exercise=exercise,
+                                     reps_conf=conf, credit=score, cands=cands, evidence=ev))
+
+    def _done(self, end: float):
         self._trim(end)
-        self.e._record_set(SetRecord(member, self.id, start, end, reps, sorted(self.set_cams), person=person, exercise=exercise))
+        self.in_zone = Counter()
+        for pid in list(self.obs):
+            q = self.obs[pid]
+            while q and q[0][0] < end - PREROLL_S:
+                q.popleft()
+            if not q:
+                del self.obs[pid]
+
+    def _credit(self, start: float, end: float):
+        """Motion-coherence scores of everyone seen near the zone during the set (None without observations)."""
+        if not self.obs:
+            return None
+        cam = max(self.thumbs, key=lambda c: sum(1 for t, _ in self.thumbs[c] if start <= t <= end), default=None)
+        thumbs = [(t, x) for t, x in self.thumbs.get(cam, ()) if start - 1 <= t <= end + 1] if cam else []
+        mt = [(t, m) for t, m in self.motion_hist if start - 1 <= t <= end + 1]
+        n = max(1, self.set_tracked_frames)
+        in_zone = {p: min(1.0, c / n) for p, c in self.in_zone.items()}
+        try:
+            return _credit.evaluate(start, end, [t for t, _ in mt], [m for _, m in mt], thumbs,
+                                    {p: list(q) for p, q in self.obs.items()}, in_zone)
+        except Exception:  # never lose a set over a scoring problem
+            return None
+
+    def _count_set(self, start: float, end: float, person, cr) -> tuple[int, float, dict]:
+        """Reps from the zone, the lifter's moving joint, the lifter's pose and a crop around the lifter, fused."""
+        counts = []
+        zr, zc = self._count_conf(start, end)
+        counts.append(("zone", zr, zc))
+        if person is not None:
+            obs = [o for o in self.obs.get(person, ()) if start <= o[0] <= end]
+            c = cr.cands.get(person) if cr is not None else None
+            if c is not None and c.signal is not None:
+                g, v = c.signal
+                counts.append(("joint", *count_1d(g, v)))
+            counts.append(("pose", *count_pose(obs)))
+            crops = [(o[0], o[3]) for o in obs if o[3] is not None]
+            if len(crops) >= 6:
+                counts.append(("crop", *count_reps([t for t, _ in crops], [x for _, x in crops])))
+        reps, conf, how = fuse(counts)
+        if reps <= 0:
+            reps, conf = zr, 0.0
+        return reps, round(conf, 2), {"counts": {s: [r, round(q, 2)] for s, r, q in counts}, "how": how}
 
     def _trim(self, before: float):
         for q in self.thumbs.values():
             while q and q[0][0] < before:
                 q.popleft()
 
-    def _count(self, start: float, end: float) -> int:
-        """Reps from the camera that sees the repetition most clearly."""
+    def _count_conf(self, start: float, end: float) -> tuple[int, float]:
+        """Reps (and confidence) from the zone thumbnails of the camera that sees the repetition most clearly."""
         best = (0.0, 0)
         for q in self.thumbs.values():
             seq = [(t, th) for t, th in q if start <= t <= end]
@@ -221,7 +341,10 @@ class MachineTracker:
                 continue
             reps, conf = count_reps([t for t, _ in seq], [th for _, th in seq])
             best = max(best, (conf, reps))
-        return best[1]
+        return best[1], best[0]
+
+    def _count(self, start: float, end: float) -> int:
+        return self._count_conf(start, end)[0]
 
     def _occupant_if_seen(self) -> str | None:
         """Fall back to the machine's occupant only if their tag showed up during the set.
@@ -295,6 +418,13 @@ class Engine:
         self.now = 0.0
         self.camera_stats: dict[str, dict] = {}
         self.people_at: float | None = None   # last reading in which the tracker saw anyone at all
+        self._zone_boxes = {(c.id, z.machine): (min(p[0] for p in z.polygon), min(p[1] for p in z.polygon),
+                                                max(p[0] for p in z.polygon), max(p[1] for p in z.polygon))
+                            for c in cfg.cameras for z in c.zones if z.polygon}
+
+    def zone_box(self, cam: str, machine: str):
+        """Bounding box (x0, y0, x1, y1) of a machine's zone in a camera, or None."""
+        return self._zone_boxes.get((cam, machine))
 
     # -- input -------------------------------------------------------------
     def ingest(self, r: FrameReading):

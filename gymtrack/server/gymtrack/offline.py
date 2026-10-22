@@ -53,16 +53,118 @@ def pose_vector(kp, W: int, H: int) -> list[int]:
     return out
 
 
+def person_obs(tr, frame: np.ndarray, t: float) -> dict:
+    """What the engine needs to judge who is lifting: the box, this frame's pose (13 joints, analysis-frame
+    pixels, with confidence) if one was just estimated, and a small grey crop of the person for rep counting."""
+    from .pose import JOINTS13
+    from .reps import THUMB
+    x, y, w, h = (float(v) for v in tr.box)
+    kp = None
+    kps = getattr(tr, "kps", None)
+    if kps and abs(kps[-1][0] - t) < 1e-6:
+        kp = np.asarray(kps[-1][1], np.float32)[JOINTS13]
+    H, W = frame.shape[:2]
+    x0, y0, x1, y1 = max(0, int(x)), max(0, int(y)), min(W, int(x + w)), min(H, int(y + h))
+    crop = None
+    if x1 - x0 >= 4 and y1 - y0 >= 4:
+        g = frame[y0:y1, x0:x1]
+        g = cv2.cvtColor(g, cv2.COLOR_BGR2GRAY) if g.ndim == 3 else g
+        crop = cv2.resize(g, (THUMB, THUMB), interpolation=cv2.INTER_AREA)
+    return {"box": (x, y, w, h), "kp": kp, "crop": crop}
+
+
+class _DeferredSets:
+    """Store wrapper used during offline analysis: sessions go straight through, sets wait until
+    post-processing has decided which ones are real (so vetoed sets never reach members' history)."""
+
+    def __init__(self, store):
+        self.store = store
+        self.pending: list = []
+
+    def __getattr__(self, name):
+        return getattr(self.store, name)
+
+    def add_set(self, rec, session_id):
+        self.pending.append((rec, session_id))
+        return None
+
+    def flush(self, keep: list) -> None:
+        ids = {id(r) for r in keep}
+        for rec, sid in self.pending:
+            if id(rec) in ids:
+                rec.id = self.store.add_set(rec, sid)
+        self.pending = []
+
+
+def _finish(cfg: GymConfig, cam: Camera, engine: Engine, sink, start_ts: float, end: float, tracker,
+            timeline: list, poses: list, postprocess: bool) -> dict:
+    """End of a recording: close open sets, post-process, close sessions, write sets, build the report."""
+    for mt in engine.machines.values():  # recording ended mid-set
+        if mt.state == "lifting":
+            mt._finish_set(end)
+    replay_sets = None
+    if postprocess:
+        from .postprocess import apply_to_records, finish_sets
+        data = {"timeline": timeline, "poses": poses, "sets": [r.as_replay(start_ts) for r in engine.recent_sets_all],
+                "people": {"rows": []}}
+        if tracker is not None and hasattr(tracker, "appearance_summary"):
+            try:
+                data["looks"] = tracker.appearance_summary()
+            except Exception:
+                pass
+        info = finish_sets(data, cfg, cam)
+        kept = apply_to_records(engine, data["sets"], start_ts)
+        replay_sets = data["sets"]
+    else:
+        kept = list(engine.recent_sets_all)
+        info = {}
+    engine.tick(end + cfg.thresholds.checkout_s + 1)  # close everyone's session (totals without vetoed sets)
+    if sink is not None:
+        sink.flush(kept)
+    rep = report(cfg, engine, start_ts, end, tracker)
+    rep["replay_sets"] = replay_sets if replay_sets is not None else [r.as_replay(start_ts) for r in kept]
+    rep["postprocess"] = info
+    return rep
+
+
+def replay_trace(trace: list, cfg: GymConfig, cam: Camera, timeline: list | None = None, poses: list | None = None,
+                 start_ts: float = 0.0, postprocess: bool = True) -> dict:
+    """Re-run sets, crediting, reps and post-processing on a trace recorded by `analyse(trace=[...])`.
+
+    No video, detector or pose model needed: seconds instead of minutes, for tuning and tests."""
+    import copy
+
+    from .vision import FrameReading, ZoneReading
+    engine = Engine(cfg, None, keep_all=True)
+    end = start_ts
+    for f in trace:
+        r = FrameReading(f["camera"], f["t"], [ZoneReading(m, mo, th, list(tg)) for m, mo, th, tg in f["zones"]],
+                         dict(f["tags"]), list(f["people"]), f["tracking"])
+        engine.ingest(r)
+        end = f["t"]
+    return _finish(cfg, cam, engine, None, start_ts, end, None, copy.deepcopy(timeline or []), copy.deepcopy(poses or []), postprocess)
+
+
 def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float | None = None,
             sample_fps: float = 10.0, on_progress=None, should_stop=None,
             people: bool | None = None, video_out: str | None = None, timeline: list | None = None,
-            poses: list | None = None, detect_every_s: float = 0.34) -> dict:
+            poses: list | None = None, detect_every_s: float = 0.34, pose_boost_s: float | None = 0.19,
+            trace: list | None = None, postprocess: bool = True) -> dict:
     """Run one recording through the pipeline. Returns a report dict (see `report`).
 
     people: track individual people (needs the detector model; default: on if it's installed).
     video_out: also write an annotated MP4 showing zones, tracked people and live set state.
+    detect_every_s: detection + pose rate while nothing is happening. pose_boost_s: while any zone is lifting
+      (or about to), detect and run pose this often instead, so the lifter's joints are sampled at ~5 Hz for
+      crediting and rep counting (None = never boost).
+    trace: if a list, gets one entry per analysed frame with everything the engine saw (zone motion and
+      thumbnails, people with boxes/poses), so `replay_trace` can re-run sets, crediting and reps without video.
+    postprocess: run the offline clean-up after the last frame (tracklet stitching, motion-coherence credit
+      conflicts, fake-set veto, exercise naming among the station's candidates); see postprocess.py.
     """
     from .tracking import DEFAULT_MODEL, PeopleTracker, PersonDetector, draw_people, heatmap_image
+    timeline = [] if timeline is None else timeline   # post-processing needs both, whether the caller wants them or not
+    poses = [] if poses is None else poses
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise ValueError(f"cannot open video: {path}")
@@ -73,7 +175,8 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
     duration = total / fps if total else 0.0
     start_ts = time.time() - duration if start_ts is None else start_ts
 
-    engine = Engine(cfg, store, keep_all=True)
+    sink = _DeferredSets(store) if store is not None else None  # sets reach the store only after post-processing
+    engine = Engine(cfg, sink, keep_all=True)
     analyser = FrameAnalyzer(cam)
     if people is None:
         people = DEFAULT_MODEL.exists()
@@ -107,9 +210,16 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         tracks = []
         if tracker:
             tracks = tracker.update(frame, start_ts + t, reading.tags, cfg.member_by_tag, full=full)
-            reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity) for tr in tracks]
+            reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity, person_obs(tr, frame, start_ts + t)) for tr in tracks]
             reading.tracking = True
         engine.ingest(reading)
+        if tracker is not None and pose_boost_s:
+            th = cfg.thresholds  # sample the lifter's pose faster while a zone is (about to be) lifting
+            hot = any(mt.state == "lifting" or mt.ema >= 0.7 * th.lift_on for mt in engine.machines.values())
+            tracker.every = min(pose_boost_s, detect_every_s) if hot else detect_every_s
+        if trace is not None:
+            trace.append({"t": start_ts + t, "camera": cam.id, "zones": [(z.machine, z.motion, z.thumb, list(z.tags)) for z in reading.zones],
+                          "tags": dict(reading.tags), "people": list(reading.people), "tracking": reading.tracking})
         if poses is not None and tracker:
             fresh = [tr for tr in tracks if tr.kps and abs(tr.kps[-1][0] - (start_ts + t)) < 1e-6]
             if fresh:
@@ -139,12 +249,8 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
     if writer is not None:
         writer.release()
     end = start_ts + t
-    for mt in engine.machines.values():  # recording ended mid-set
-        if mt.state == "lifting":
-            mt._finish_set(end)
-    engine.tick(end + cfg.thresholds.checkout_s + 1)  # close everyone's session
     wall = time.time() - wall0
-    rep = report(cfg, engine, start_ts, end, tracker)
+    rep = _finish(cfg, cam, engine, sink, start_ts, end, tracker, timeline, poses, postprocess)
     if tracker is not None and background is not None:
         ok, jpg = cv2.imencode(".jpg", heatmap_image(background, tracker.heat), [cv2.IMWRITE_JPEG_QUALITY, 80])
         rep["heatmap_jpg_b64"] = base64.b64encode(jpg.tobytes()).decode() if ok else None
