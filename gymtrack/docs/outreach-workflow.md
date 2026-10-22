@@ -57,7 +57,7 @@ The reader should walk away with a single thought:
 - [ ] One short paragraph on what GymTrack does to solve it (automatic workout logs from existing cameras, progress on the member's phone), plus one sentence on the floor data the owner gets.
 - [ ] No feature lists. Don't mention form/posture correction.
 - [ ] The ask: no money; we want to develop it together with a few gyms, free, on their existing cameras. Short call or demo.
-- [ ] Under ~150 words. Signed Nikita, GymTrack.
+- [ ] As short as possible: aim for ~70 words, never over 100. Signed Nikita, GymTrack.
 - [ ] If routed by another inbox, say who referred us ("Your team at hello@... suggested I get in touch").
 
 ## 7. After sending
@@ -66,3 +66,19 @@ The reader should walk away with a single thought:
 - [ ] Replies that route us elsewhere (collab inboxes, a named manager): follow up the same day and add the new route to step 3's list of places to look.
 - [ ] Ticket auto-replies (e.g. "[##159952##] Your ticket has been created") mean the email reached a helpdesk. Find a person instead.
 - [ ] Follow up once after 5-7 working days if there's no reply.
+
+## Current template (keep it this short)
+
+Subject: Members quit when they can't see progress
+
+Hi {name},
+
+{one specific line about their gym}
+
+Most members quit because they can't see progress. GymTrack uses the cameras you already have to log every member's sets and reps automatically, so they see their progress on their phone, and you see how your floor is used.
+
+No cost. We want to build it together with a few gyms. Open to a short call?
+
+Best,
+Nikita
+GymTrack
