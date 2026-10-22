@@ -55,7 +55,7 @@ The reader should walk away with a single thought:
 - [ ] Opening line is specific to the gym (why them).
 - [ ] One short paragraph on the problem (members quitting).
 - [ ] One short paragraph on what GymTrack does to solve it (automatic workout logs from existing cameras, progress on the member's phone), plus one sentence on the floor data the owner gets.
-- [ ] No feature lists. Don't mention form/posture correction.
+- [ ] No feature lists. Don't mention form/posture correction. Never name the product.
 - [ ] The ask: no money; we want to develop it together with a few gyms, free, on their existing cameras. Short call or demo.
 - [ ] As short as possible: aim for ~70 words, never over 100. Signed Nikita, GymTrack.
 - [ ] If routed by another inbox, say who referred us ("Your team at hello@... suggested I get in touch").
@@ -69,16 +69,19 @@ The reader should walk away with a single thought:
 
 ## Current template (keep it this short)
 
-Subject: Members quit when they can't see progress
+Never name the product in the email. Sign with first name only.
+
+Subject: Members quit when they can't see their progress
 
 Hi {name},
 
 {one specific line about their gym}
 
-Most members quit because they can't see progress. GymTrack uses the cameras you already have to log every member's sets and reps automatically, so they see their progress on their phone, and you see how your floor is used.
+Most members quit the gym because they can't see their progress.
 
-No cost. We want to build it together with a few gyms. Open to a short call?
+We're developing a program that uses the cameras you already have to track what every member is doing, giving you, your staff and your members far more insight from infrastructure that's already there.
+
+We're still in development and aren't taking on customers, but we'd like to work with you to develop it. If that sounds worth your time, what time would suit you for a call?
 
 Best,
 Nikita
-GymTrack
