@@ -53,6 +53,13 @@ def pose_vector(kp, W: int, H: int) -> list[int]:
     return out
 
 
+def pose_conf(kp) -> list[int]:
+    """The 13 joints' confidences quantised 0..9 (kept next to the pose vector: training and exercise naming
+    use the model's real visibility instead of treating every drawn joint as certain)."""
+    from .pose import JOINTS13
+    return [int(np.clip(round(float(kp[j][2]) * 9), 0, 9)) for j in JOINTS13]
+
+
 def person_obs(tr, frame: np.ndarray, t: float) -> dict:
     """What the engine needs to judge who is lifting: the box, this frame's pose (13 joints, analysis-frame
     pixels, with confidence) if one was just estimated, and a small grey crop of the person for rep counting."""
@@ -71,6 +78,47 @@ def person_obs(tr, frame: np.ndarray, t: float) -> dict:
         g = cv2.cvtColor(g, cv2.COLOR_BGR2GRAY) if g.ndim == 3 else g
         crop = cv2.resize(g, (THUMB, THUMB), interpolation=cv2.INTER_AREA)
     return {"box": (x, y, w, h), "kp": kp, "crop": crop}
+
+
+def boost_poses(tracker, engine, cam_id: str, frame: np.ndarray, full: np.ndarray | None, t: float, every: float) -> int:
+    """Extra pose estimates, between detection rounds, for people settled at a zone that is lifting (or about to).
+
+    Detection and pose for everyone run every `detect_every_s` (~3 Hz); a lifter's joints need 5-10 Hz for
+    crediting and rep counting (sota.md B6). So only tracks that stand or sit still in or next to a hot zone
+    get a pose every `every` seconds, on their current box: one crop each, no detector run. Uses the
+    tracker's own pose model and smoothing, and the same size / frame-edge rules. Returns poses added."""
+    if tracker is None or tracker.pose is None:
+        return 0
+    th = engine.cfg.thresholds
+    hot = [mid for mid, mt in engine.machines.items() if mt.state == "lifting" or mt.ema >= 0.7 * th.lift_on]
+    if not hot:
+        return 0
+    boxes = [b for b in (engine.zone_box(cam_id, m) for m in hot) if b is not None]
+    H, W = frame.shape[:2]
+    k = full.shape[1] / W if full is not None else 1.0
+    src = full if full is not None else frame
+    min_h = 0.07 if hasattr(tracker.pose, "sess") else 0.12
+    n = 0
+    for tr in tracker.visible(t):
+        if tr.kps and t - tr.kps[-1][0] < every - 1e-6:
+            continue  # fresh enough (or just estimated in this frame's detection round)
+        x, y, w, h = tr.box
+        if h < min_h * H or y + h >= 0.985 * H or x <= 0.015 * W or x + w >= 0.985 * W:
+            continue
+        near = tr.zone in hot or any(
+            max(0.0, min(x + w, b[2]) - max(x, b[0])) * max(0.0, min(y + h, b[3]) - max(y, b[1])) >= 0.25 * w * h for b in boxes)
+        if not near or not (tr.planted or tr.stationary):
+            continue
+        pb = getattr(tr, "pose_box", None) or tr.box
+        kp = tracker.pose.estimate(src, tuple(v * k for v in pb))
+        if kp is None:
+            continue
+        if k != 1.0:
+            kp = kp.copy(); kp[:, :2] /= k
+        kp = tracker._smooth_pose(tr, kp, t)
+        tr.kps = [q for q in tr.kps if t - q[0] <= 8.0] + [(t, kp)]
+        n += 1
+    return n
 
 
 class _DeferredSets:
@@ -124,6 +172,8 @@ def _finish(cfg: GymConfig, cam: Camera, engine: Engine, sink, start_ts: float, 
     rep = report(cfg, engine, start_ts, end, tracker)
     rep["replay_sets"] = replay_sets if replay_sets is not None else [r.as_replay(start_ts) for r in kept]
     rep["postprocess"] = info
+    rep["vetoed"] = [{**v, "start": round(v["start"] - start_ts, 2), "end": round(v["end"] - start_ts, 2)}
+                     for mt in engine.machines.values() for v in mt.vetoed]  # sets nobody was seen doing
     return rep
 
 
@@ -148,15 +198,15 @@ def replay_trace(trace: list, cfg: GymConfig, cam: Camera, timeline: list | None
 def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float | None = None,
             sample_fps: float = 10.0, on_progress=None, should_stop=None,
             people: bool | None = None, video_out: str | None = None, timeline: list | None = None,
-            poses: list | None = None, detect_every_s: float = 0.34, pose_boost_s: float | None = 0.19,
+            poses: list | None = None, detect_every_s: float = 0.34, pose_boost_s: float | None = 0.15,
             trace: list | None = None, postprocess: bool = True) -> dict:
     """Run one recording through the pipeline. Returns a report dict (see `report`).
 
     people: track individual people (needs the detector model; default: on if it's installed).
     video_out: also write an annotated MP4 showing zones, tracked people and live set state.
-    detect_every_s: detection + pose rate while nothing is happening. pose_boost_s: while any zone is lifting
-      (or about to), detect and run pose this often instead, so the lifter's joints are sampled at ~5 Hz for
-      crediting and rep counting (None = never boost).
+    detect_every_s: detection + pose rate for everyone. pose_boost_s: people standing or sitting still at a
+      zone that is lifting (or about to) get an extra pose this often between detection rounds (~7 Hz at the
+      default), for crediting and rep counting; everyone else stays at the detection rate (None = never).
     trace: if a list, gets one entry per analysed frame with everything the engine saw (zone motion and
       thumbnails, people with boxes/poses), so `replay_trace` can re-run sets, crediting and reps without video.
     postprocess: run the offline clean-up after the last frame (tracklet stitching, motion-coherence credit
@@ -210,13 +260,11 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         tracks = []
         if tracker:
             tracks = tracker.update(frame, start_ts + t, reading.tags, cfg.member_by_tag, full=full)
+            if pose_boost_s:
+                boost_poses(tracker, engine, cam.id, frame, full, start_ts + t, pose_boost_s)
             reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity, person_obs(tr, frame, start_ts + t)) for tr in tracks]
             reading.tracking = True
         engine.ingest(reading)
-        if tracker is not None and pose_boost_s:
-            th = cfg.thresholds  # sample the lifter's pose faster while a zone is (about to be) lifting
-            hot = any(mt.state == "lifting" or mt.ema >= 0.7 * th.lift_on for mt in engine.machines.values())
-            tracker.every = min(pose_boost_s, detect_every_s) if hot else detect_every_s
         if trace is not None:
             trace.append({"t": start_ts + t, "camera": cam.id, "zones": [(z.machine, z.motion, z.thumb, list(z.tags)) for z in reading.zones],
                           "tags": dict(reading.tags), "people": list(reading.people), "tracking": reading.tracking})
@@ -224,7 +272,8 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
             fresh = [tr for tr in tracks if tr.kps and abs(tr.kps[-1][0] - (start_ts + t)) < 1e-6]
             if fresh:
                 H, W = frame.shape[:2]
-                poses.append({"t": round(t, 2), "k": [[tr.id, pose_vector(tr.kps[-1][1], W, H)] for tr in fresh]})
+                poses.append({"t": round(t, 2), "k": [[tr.id, pose_vector(tr.kps[-1][1], W, H)] for tr in fresh],
+                              "c": {str(tr.id): pose_conf(tr.kps[-1][1]) for tr in fresh}})
         if background is None:
             background = frame.copy()
         if timeline is not None and (not timeline or t - timeline[-1]["t"] >= 1.0):

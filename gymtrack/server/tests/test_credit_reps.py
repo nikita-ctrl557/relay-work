@@ -176,3 +176,78 @@ def test_repcount_trained_models_are_never_loaded(tmp_path, monkeypatch):
     monkeypatch.setattr(activity, "__file__", str(tmp_path / "gymtrack" / "activity.py"))
     assert activity._model() is False
     monkeypatch.setattr(activity, "_MODEL", None)
+
+
+def test_resolve_credit_lets_one_person_do_sets_one_after_another():
+    from gymtrack.postprocess import resolve_credit
+    # A and C don't overlap (same person, two sets in a row); B overlaps both, so it can't be person 1
+    sets = [{"t0": 0, "t1": 20, "pid": 1, "credit": 0.8, "cands": {"1": 0.8}},
+            {"t0": 15, "t1": 40, "pid": 1, "credit": 0.7, "cands": {"1": 0.7, "2": 0.6}},
+            {"t0": 35, "t1": 60, "pid": 1, "credit": 0.9, "cands": {"1": 0.9}}]
+    resolve_credit(sets)
+    assert [s["pid"] for s in sets] == [1, 2, 1]
+
+
+def _seated(pid, cx, wrist_fn, rng, zone="bench"):
+    """A person on a seat: wide box, so the tracker's `planted` (upright) is False, but the feet stay put."""
+    def obs(t, fresh):
+        kp = _pose(cx, 100, 200, wrist_fn(t), rng, 1.0) if fresh else None
+        return (pid, None, zone, False, None, {"box": (cx - 110, 160.0, 220.0, 140.0), "kp": kp, "crop": None})
+    return obs
+
+
+def test_seated_lifter_who_is_not_planted_keeps_the_set_going():
+    rng = np.random.default_rng(4)
+    rower = _seated(7, 100, _lifter_wrist, rng)
+    e = _run(lambda t, f: [rower(t, f)])
+    sets = [s for s in e.recent_sets if s.machine == "bench"]
+    assert len(sets) == 1 and sets[0].person == 7, sets
+    assert sets[0].start <= 7 and sets[0].end >= 28, (sets[0].start, sets[0].end)
+
+
+def test_set_is_trimmed_to_the_lifters_active_stretch():
+    rng = np.random.default_rng(5)
+    # the zone moves 5-40 s (the stack, then a neighbour fiddling), the lifter only lifts 5-30 s
+    lifter = _person(7, 100, _lifter_wrist, rng)
+    e = _run(lambda t, f: [lifter(t, f)], t_end=55.0, lift=(5.0, 40.0))
+    s = [s for s in e.recent_sets if s.machine == "bench"][0]
+    assert s.person == 7 and s.end <= 35.0, (s.start, s.end)
+
+
+def test_person_lifting_at_the_neighbouring_machine_is_not_credited_here():
+    rng = np.random.default_rng(6)
+    # their arms move with this zone's picture, but their feet are in another (non-overlapping) zone
+    reacher = _person(9, 100, _lifter_wrist, rng, zone="squat")
+    e = _run(lambda t, f: [reacher(t, f)])
+    assert not [s for s in e.recent_sets if s.machine == "bench" and s.person == 9]
+
+
+def test_replay_pose_confidences_reach_the_exercise_features():
+    from gymtrack.exercises import vec_to33
+    v = [500] * 26
+    assert vec_to33(v)[11, 2] == 1.0                  # old replays: every drawn joint counts as seen
+    k = vec_to33(v, [9, 9, 9, 3, 3, 0, 0, 9, 9, 9, 9, 9, 9])
+    assert abs(k[11, 2] - 1.0) < 1e-6 and abs(k[13, 2] - 3 / 9) < 1e-6 and k[15, 2] == 0.0
+
+
+def test_pose_boost_only_for_people_settled_at_a_hot_zone():
+    from types import SimpleNamespace
+
+    from gymtrack.offline import boost_poses
+    e = Engine(_cfg())
+    e.machines["bench"].ema = 1.0                     # bench is lifting
+    kp = np.zeros((33, 3), np.float32)
+
+    def track(tid, box, zone, still):
+        return SimpleNamespace(id=tid, box=box, zone=zone, planted=still, stationary=still, kps=[(0.0, kp)], pose_box=None)
+    bench_box = e.zone_box("cam-north", "bench")
+    sitter = track(1, (bench_box[0] + 5, bench_box[1] + 5, 40.0, 80.0), "bench", True)
+    walker = track(2, (bench_box[0] + 5, bench_box[1] + 5, 40.0, 80.0), "bench", False)
+    elsewhere = track(3, (5.0, 5.0, 40.0, 80.0), None, True)
+    calls = []
+    tracker = SimpleNamespace(pose=SimpleNamespace(estimate=lambda img, box: calls.append(box) or kp.copy()),
+                              visible=lambda t: [sitter, walker, elsewhere], _smooth_pose=lambda tr, k, t: k)
+    frame = np.zeros((360, 640, 3), np.uint8)
+    assert boost_poses(tracker, e, "cam-north", frame, None, 0.2, 0.15) == 1
+    assert sitter.kps[-1][0] == 0.2 and walker.kps[-1][0] == 0.0 and elsewhere.kps[-1][0] == 0.0
+    assert boost_poses(tracker, e, "cam-north", frame, None, 0.25, 0.15) == 0   # fresh enough already

@@ -16,6 +16,13 @@ set we compare their own joint trajectories with the zone's motion:
   chance but has no amplitude) and by whether the person stayed in place (a walker *causes* zone motion
   but isn't lifting), plus a small prior for being inside the zone.
 
+Each person is compared over the stretch they were actually near the zone, and long sets are scored in
+overlapping 15 s windows (the better half counts), so a lifter who was tracked under this id for only part
+of the set, or who rested between reps, still matches. People whose feet were mostly in *another*
+machine's zone (one that doesn't overlap this one in the picture) are discounted: their arms or the handle
+reach into this zone, but they lift there. `active_span` then tells engine.py when the credited person was
+actually lifting, so a set can be trimmed to that.
+
 The best-scoring person above CREDIT_MIN gets the set. If people were seen well (enough poses) but nobody
 moves with the machine, there was no lifter we can see: the set is dropped (or left unattributed, see
 engine.py). Ideas from retail attribution patents (Inokyo US11049170: hand motion must match the shelf
@@ -35,6 +42,11 @@ MIN_OVERLAP_S = 4.0        # need this much pose coverage to judge someone
 MIN_POSES = 8
 CREDIT_MIN = 0.32          # score needed to be credited with a set
 AMP_FULL = 0.25            # joint travel (torso lengths) that counts as a full-size movement
+ELSEWHERE_PENALTY = 0.8    # score cut for people whose feet were mostly in another machine's zone
+SCORE_WIN_S = 15.0         # long sets are scored in windows of this length...
+SCORE_HOP_S = 5.0          # ...every this many seconds
+ACTIVE_WIN_S = 3.0         # rolling window for "is the lifter moving right now" (set trimming)
+ACTIVE_BRIDGE_S = 4.0      # pauses shorter than this inside a set don't split it
 CONF_MIN = 0.3             # joint confidence below this = not seen
 
 # joint groups in the 13-joint layout (pose.JOINTS13): 0 nose, 1/2 shoulders, 3/4 elbows, 5/6 wrists,
@@ -59,6 +71,7 @@ class Candidate:
     best: str | None = None          # e.g. "wrist_y~pc1"
     judged: bool = False             # enough pose data to judge
     signal: tuple | None = None      # (t grid, values) of the best-matching joint signal, for rep counting
+    windows: list = field(default_factory=list)  # [(t0, t1, score)] for long sets scored in windows
 
 
 @dataclass
@@ -165,10 +178,15 @@ def zone_signals(times, motion, thumbs, grid: np.ndarray) -> dict[str, np.ndarra
         if len(E) >= 10:
             k = max(3, int(round(4.0 / max(np.median(np.diff(tt)), 1e-3))))
             E = E - np.array([E[max(0, i - k // 2):i + k // 2 + 1].mean(0) for i in range(len(E))])
-            try:
-                U, S, _ = np.linalg.svd(E - E.mean(0), full_matrices=False)
-                for i in range(min(3, U.shape[1])):
-                    out[f"pc{i + 1}"] = resample(tt, U[:, i] * S[i], grid, 1.0)
+            try:  # top principal components from the small n x n Gram matrix (n frames << n pixels is not
+                # guaranteed, but n <= a few hundred: much cheaper than a full SVD of n x 576)
+                X = (E - E.mean(0)).astype(np.float64)
+                w, V = np.linalg.eigh(X @ X.T)
+                for i in range(min(3, len(w))):
+                    k = len(w) - 1 - i
+                    if w[k] <= 1e-9:
+                        break
+                    out[f"pc{i + 1}"] = resample(tt, V[:, k] * np.sqrt(w[k]), grid, 1.0)
             except np.linalg.LinAlgError:
                 pass
     return out
@@ -265,7 +283,7 @@ def _period_match(p: float | None, q: float | None) -> float:
     return 1.0 if any(abs(r / k - 1) <= 0.25 for k in (0.5, 1.0, 2.0)) else 0.4
 
 
-def score_person(zs: dict[str, np.ndarray], obs: list, grid: np.ndarray, in_zone: float) -> Candidate:
+def score_person(zs: dict[str, np.ndarray], obs: list, grid: np.ndarray, in_zone: float, elsewhere: float = 0.0) -> Candidate:
     """How strongly this person's joints move *periodically, together with* the zone's moving part."""
     c = Candidate(pid=-1, in_zone=in_zone)
     sig, info = person_signals(obs, grid)
@@ -278,47 +296,88 @@ def score_person(zs: dict[str, np.ndarray], obs: list, grid: np.ndarray, in_zone
     lag = int(round(MAX_LAG_S * GRID_HZ))
     min_n = int(MIN_OVERLAP_S * GRID_HZ)
     refs = {k: highpass(v, hp) for k, v in zs.items() if k.startswith("pc") and np.isfinite(v).sum() >= min_n}
-    zper = {k: _periodicity(r) for k, r in refs.items()}
-    best = (0.0, 0.0, 0.0, None, None)
-    for name, v in valid.items():
-        h = highpass(v, hp)
-        if np.isfinite(h).sum() <= 4:
-            continue
-        amp = float(np.nanpercentile(h, 90) - np.nanpercentile(h, 10))
-        w_amp = min(1.0, amp / AMP_FULL)
-        per, strength = _periodicity(h)
-        w_per = float(np.clip((strength - 0.15) / 0.35, 0.0, 1.0))  # a lift repeats; walking past or fidgeting doesn't
-        if w_amp * w_per <= best[0]:
-            continue
-        for rk, r in refs.items():
-            cc, _ = ncc_max(h, r, lag, min_n)
-            sc = cc * w_amp * w_per * _period_match(per, zper[rk][0])
-            if sc > best[0]:
-                best = (sc, cc, amp, f"{name}~{rk}", v)
+    hs = {name: highpass(v, hp) for name, v in valid.items()}
+    hs = {k: h for k, h in hs.items() if np.isfinite(h).sum() > 4}
+
+    def match(sl: slice) -> tuple:
+        """Best (score, corr, amp, name) of any joint signal against any zone signal inside grid[sl]."""
+        zper = {k: _periodicity(r[sl]) for k, r in refs.items()}
+        best = (0.0, 0.0, 0.0, None)
+        for name, h0 in hs.items():
+            h = h0[sl]
+            if np.isfinite(h).sum() < min_n:
+                continue
+            amp = float(np.nanpercentile(h, 90) - np.nanpercentile(h, 10))
+            w_amp = min(1.0, amp / AMP_FULL)
+            per, strength = _periodicity(h)
+            w_per = float(np.clip((strength - 0.15) / 0.35, 0.0, 1.0))  # a lift repeats; walking past or fidgeting doesn't
+            if w_amp * w_per <= best[0]:
+                continue
+            for rk, r in refs.items():
+                cc, _ = ncc_max(h, r[sl], lag, min_n)
+                sc = cc * w_amp * w_per * _period_match(per, zper[rk][0])
+                if sc > best[0]:
+                    best = (sc, cc, amp, f"{name}~{rk}")
+        return best
+
+    n = len(grid)
+    win, hop = int(SCORE_WIN_S * GRID_HZ), int(SCORE_HOP_S * GRID_HZ)
+    if n <= int(1.4 * win):
+        best = match(slice(0, n))
+    else:
+        # long sets: score in overlapping windows and keep the better half. A lifter who rests, re-grips or
+        # was only tracked under this id for part of the set still matches while lifting; a bystander's
+        # chance correlations don't add up to that in most windows.
+        starts = sorted(set(range(0, n - win + 1, hop)) | {n - win})
+        res = [match(slice(i, i + win)) for i in starts]
+        c.windows = [(float(grid[i]), float(grid[i + win - 1]), r[0]) for i, r in zip(starts, res)]
+        res = sorted(res, key=lambda r: -r[0])
+        top = res[:max(1, (len(res) + 1) // 2)]
+        best = (float(np.mean([r[0] for r in top])), top[0][1], top[0][2], top[0][3])
+    best = (*best, valid[best[3].split("~")[0]] if best[3] else None)
     c.score, c.corr, c.amp, c.best = best[0], best[1], best[2], best[3]
     # walking through the zone moves it too, but a lifter stays put (lunges travel a little)
     c.still = float(np.clip(1.5 - info["travel"], 0.0, 1.0))
     c.score *= c.still * (0.85 + 0.15 * in_zone)
+    # someone standing (or sitting) at *another* machine reaches into this zone's picture with their arms or
+    # the handle: they lift there, not here (two zones drawn next to each other, a cable row under a bench)
+    c.score *= 1.0 - ELSEWHERE_PENALTY * max(0.0, elsewhere - in_zone)
     if best[4] is not None:
         c.signal = (grid, best[4])
     return c
 
 
-def evaluate(t0: float, t1: float, zone_times, zone_motion, thumbs, people: dict[int, list], in_zone: dict[int, float]) -> Credit:
-    """Score everyone seen near the zone during [t0, t1]. people: pid -> [(t, box, kp13 or None, crop)]."""
+def evaluate(t0: float, t1: float, zone_times, zone_motion, thumbs, people: dict[int, list], in_zone: dict[int, float],
+             elsewhere: dict[int, float] | None = None) -> Credit:
+    """Score everyone seen near the zone during [t0, t1]. people: pid -> [(t, box, kp13 or None, crop)].
+
+    Each person is compared with the zone over the stretch they were actually there (the zone's principal
+    components over a long window are dominated by whatever happened before they arrived: someone walking
+    through, a neighbour, the previous lifter under another track id)."""
     out = Credit()
     if t1 - t0 < 2.0:
         return out
-    grid = np.arange(t0, t1, 1.0 / GRID_HZ)
-    zt = [t for t in zone_times if t0 - 1 <= t <= t1 + 1]
-    zm = [m for t, m in zip(zone_times, zone_motion) if t0 - 1 <= t <= t1 + 1]
-    th = [(t, x) for t, x in thumbs if t0 - 1 <= t <= t1 + 1]
-    zs = zone_signals(zt, zm, th, grid)
+    cache: dict = {}
+
+    def zone_at(a: float, b: float):
+        key = (round(a, 1), round(b, 1))
+        if key not in cache:
+            grid = np.arange(a, b, 1.0 / GRID_HZ)
+            zt = [t for t in zone_times if a - 1 <= t <= b + 1]
+            zm = [m for t, m in zip(zone_times, zone_motion) if a - 1 <= t <= b + 1]
+            th = [(t, x) for t, x in thumbs if a - 1 <= t <= b + 1]
+            cache[key] = (grid, zone_signals(zt, zm, th, grid))
+        return cache[key]
+
     for pid, obs in people.items():
         obs = [o for o in obs if t0 - 0.5 <= o[0] <= t1 + 0.5]
         if not obs:
             continue
-        c = score_person(zs, obs, grid, in_zone.get(pid, 0.0))
+        a, b = max(t0, obs[0][0] - 1.0), min(t1, obs[-1][0] + 1.0)
+        if b - a < MIN_OVERLAP_S or b - a > 0.85 * (t1 - t0):
+            a, b = t0, t1  # there (nearly) all along, or too briefly to matter: the whole set
+        grid, zs = zone_at(a, b)
+        c = score_person(zs, obs, grid, in_zone.get(pid, 0.0), (elsewhere or {}).get(pid, 0.0))
         c.pid = pid
         out.cands[pid] = c
     judged = [c for c in out.cands.values() if c.judged]
@@ -328,6 +387,56 @@ def evaluate(t0: float, t1: float, zone_times, zone_motion, thumbs, people: dict
         if top.score >= CREDIT_MIN:
             out.best = top.pid
     return out
+
+
+def active_span(c: Candidate) -> tuple[float, float] | None:
+    """(start, end) of the stretch in which the credited person's best joint actually moved, or None.
+
+    The zone can keep moving before and after the set (a neighbour's arms, a mirror, someone loading
+    plates); the lifter's own joint says when *they* were lifting. Rolling 10-90% range of the high-passed
+    signal over ACTIVE_WIN_S, active above a third of its typical in-set value; pauses up to ACTIVE_BRIDGE_S
+    are bridged and the longest active run is returned."""
+    if c.signal is None:
+        return None
+    g, v = c.signal
+    lo, hi = -np.inf, np.inf
+    if c.windows:  # long set: only where the windows covering a moment matched the machine well on average
+        top = max(w[2] for w in c.windows)
+        ts = np.arange(c.windows[0][0], c.windows[-1][1] + 1e-9, 0.5)
+        cov = np.array([np.mean([w[2] for w in c.windows if w[0] <= t <= w[1]] or [0.0]) for t in ts])
+        ok = np.flatnonzero(cov >= max(0.7 * top, 0.7 * CREDIT_MIN))
+        if len(ok):
+            runs = np.split(ok, np.flatnonzero(np.diff(ok) > 1) + 1)
+            r = max(runs, key=len)
+            lo, hi = float(ts[r[0]]), float(ts[r[-1]])
+    h = highpass(np.asarray(v, float), int(round(HIGHPASS_S * GRID_HZ)))
+    ok = np.isfinite(h)
+    if ok.sum() < MIN_OVERLAP_S * GRID_HZ:
+        return None
+    k = int(round(ACTIVE_WIN_S * GRID_HZ / 2))
+    amp = np.full(len(h), np.nan)
+    for i in range(len(h)):
+        w = h[max(0, i - k):i + k + 1]
+        w = w[np.isfinite(w)]
+        if len(w) >= k:
+            amp[i] = np.percentile(w, 90) - np.percentile(w, 10)
+    if not np.isfinite(amp).any():
+        return None
+    thr = max(0.3 * AMP_FULL, 0.35 * float(np.nanpercentile(amp, 90)))
+    act = np.nan_to_num(amp, nan=0.0) >= thr
+    idx = np.flatnonzero(act)
+    if not len(idx):
+        return None
+    runs, a, b = [], idx[0], idx[0]
+    for i in idx[1:]:
+        if (i - b) / GRID_HZ <= ACTIVE_BRIDGE_S:
+            b = i
+        else:
+            runs.append((a, b)); a = b = i
+    runs.append((a, b))
+    a, b = max(runs, key=lambda r: r[1] - r[0])
+    a, b = max(float(g[a]), lo), min(float(g[b]), hi)
+    return (a, b) if b > a else None
 
 
 def assign(sets_scores: list[dict[int, float]], min_score: float = CREDIT_MIN) -> list[int | None]:

@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from .floor import FloorMap
+from .floor import FloorMap, moved
 from .motion import assign
 
+SAME_SPOT_S = 15.0    # position-only, back at the very same spot with nobody else near
 GAP_S = 6.0           # position-only linking (no usable appearance): at most this long a gap. Stations get
                       # re-occupied: after longer, "someone is standing where X was" is often somebody else
 MAX_GAP_S = 120.0     # hard cap on any link (with a stronger re-ID feature, long rests out of view)
@@ -56,6 +57,9 @@ class _Geo:
 
     def dist(self, a, b) -> float:
         return self.fm.distance(self.px(a), self.px(b))[0]
+
+    def moved(self, a, b) -> float:
+        return moved(self.fm, self.px(a), self.px(b))[0]
 
 
 def _at_edge(b) -> bool:
@@ -98,7 +102,7 @@ def _split_points(samples, geo: _Geo, looks):
     for (ta, ba, _), (tb, bb, _) in zip(samples, samples[1:]):
         dt = tb - ta
         if 0 < dt <= 3.0 and ba[1] + ba[3] < 0.98 and bb[1] + bb[3] < 0.98:  # feet visible in both
-            d = geo.dist(ba, bb)
+            d = geo.moved(ba, bb)  # partial views (legs hidden by a rack) don't count as movement
             hr = max(ba[3], bb[3]) / max(1e-6, min(ba[3], bb[3]))
             if d > 0.8 + 3.0 * dt or (hr > 2.0 and d > 0.5):
                 cuts.append(tb)
@@ -141,12 +145,16 @@ def _link_cost(A, B, geo: _Geo, doors, gap_max: float):
     sim = _sim(A["look_end"], B["look_start"])
     edge = _at_edge(A["b1"]) or _at_edge(B["b0"])
     if sim is None:
-        if A.get("crowded") or B.get("crowded"):
+        if A.get("crowd_end") or B.get("crowd_start"):
             return None  # someone else was right there: "re-appeared at the same spot" proves nothing
-        near = SLACK + 0.15 * gap
-        if gap > GAP_S or d > near or not 0.67 < hr < 1.5 or edge:
+        if not 0.67 < hr < 1.5 or edge:
             return None
-        return 0.5 * d / near + 0.3 * gap / GAP_S
+        near = SLACK + 0.15 * gap
+        if gap <= GAP_S and d <= near:
+            return 0.5 * d / near + 0.3 * gap / GAP_S
+        if gap <= SAME_SPOT_S and d <= 0.5 * SLACK:
+            return 0.5 + 0.3 * gap / SAME_SPOT_S  # back at the very spot (stood behind a rack), nobody else near
+        return None
     if not 0.6 < hr < 1.67:
         return None
     # Colour signatures are weak evidence: two different people in black gym clothes often agree above
@@ -161,11 +169,25 @@ def _link_cost(A, B, geo: _Geo, doors, gap_max: float):
         need = 0.95
     else:
         return None
-    if edge or A.get("crowded") or B.get("crowded"):
+    if edge or A.get("crowd_end") or B.get("crowd_start"):
         need = max(need, 0.95)
     if sim < need:
         return None
     return _app_cost(sim) + 0.4 * d / (SLACK + WALK * gap) + 0.2 * gap / gap_max
+
+
+def _unambiguous(C, pairs, margin: float = 0.15):
+    """Drop links whose end (or start) had a nearly as good alternative: a coin flip between two people is
+    worse than a fragment (a wrong link hands one person's history to someone else)."""
+    out = []
+    for i, j in pairs:
+        row = np.sort(np.delete(C[i], j))
+        col = np.sort(np.delete(C[:, j], i))
+        alt = min(row[0] if len(row) else np.inf, col[0] if len(col) else np.inf)
+        if alt < 1.0 and alt - C[i, j] < margin:
+            continue
+        out.append((i, j))
+    return out
 
 
 def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap_s: float = MAX_GAP_S,
@@ -256,7 +278,7 @@ def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap
                     return True
         return False
     for pid, x in trk.items():
-        x["crowded"] = crowded(pid, x["t1"], x["b1"]) or crowded(pid, x["t0"], x["b0"])
+        x["crowd_end"], x["crowd_start"] = crowded(pid, x["t1"], x["b1"]), crowded(pid, x["t0"], x["b0"])
     ids = sorted(trk)
     n = len(ids)
     C = np.full((n, n), 1e6)
@@ -268,7 +290,7 @@ def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap
                     C[i, j] = c
     remap: dict[int, int] = {}
     links = []
-    for i, j in assign(C, 1.0):
+    for i, j in _unambiguous(C, assign(C, 1.0)):
         remap[ids[j]] = ids[i]
         A, B = trk[ids[i]], trk[ids[j]]
         links.append({"a": A["id"], "b": B["id"], "t1": A["t1"], "b1": A["b1"], "t0": B["t0"], "b0": B["b0"],

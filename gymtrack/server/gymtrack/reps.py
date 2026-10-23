@@ -190,13 +190,16 @@ def pose_embedding(obs: list) -> tuple[np.ndarray, np.ndarray] | tuple[None, Non
     return np.asarray(T), X
 
 
-def count_pose(obs: list) -> tuple[int, float]:
+def count_pose(obs: list, smooth_s: float = 0.7) -> tuple[int, float]:
     """Reps from the lifter's whole pose sequence, through the same self-similarity counter as thumbnails."""
     T, X = pose_embedding(obs)
     if T is None:
         return 0, 0.0
     g = np.arange(T[0], T[-1] + 1e-9, 0.1)
     Xg = np.stack([np.interp(g, T, X[:, j]) for j in range(X.shape[1])], 1)
+    if smooth_s:  # offline: two-sided Savitzky-Golay over the set window (no lag, keeps the turning points)
+        from .credit import _savgol
+        Xg = np.stack([_savgol(Xg[:, j], int(round(smooth_s / 0.1))) for j in range(Xg.shape[1])], 1)
     return count_reps(g, Xg)
 
 

@@ -28,6 +28,13 @@ MAX_SET_FRAMES = 3000  # per camera; ~5 minutes at 10 fps
 NEAR_ZONE = 0.25       # a person whose box overlaps the zone (this share of the box) is a candidate lifter
 PREROLL_S = 3.0        # observations kept from before a set starts
 ZONE_REPEAT_MIN = 0.15 # zone-thumbnail periodicity a set needs when no person was seen moving with the machine
+REPS_MIN_CONF = 0.3    # a credited set whose rep counters are all this unsure isn't a set (unless the mover is clear)
+CLEAR_MOVER = 0.75     # credit score above which the mover alone is enough evidence
+SETTLED_S = 1.5        # someone near the zone whose feet stayed put this long counts as at the machine...
+SETTLED_MOVE = 0.3     # ...moving less than this share of their body size (seated rowers and lifters whose
+                       # feet are just outside the zone polygon included; the tracker's `planted` needs upright)
+TRIM_MARGIN_S = 1.5    # a credited set is trimmed to the lifter's active stretch, plus this margin...
+TRIM_MIN_S = 5.0       # ...on a side where that removes at least this much
 
 
 @dataclass
@@ -97,6 +104,7 @@ class MachineTracker:
         self.set_first_planted: float | None = None
         self.obs: dict[int, deque] = {}          # pid -> recent (t, box, kp13 or None, crop) of people near the zone
         self.in_zone: Counter = Counter()        # pid -> frames with feet inside the zone during the set
+        self.elsewhere: Counter = Counter()      # pid -> frames with feet inside *another* machine's zone
         self.motion_hist: deque = deque(maxlen=MAX_SET_FRAMES)  # (t, fused zone motion)
         self.vetoed: list[dict] = []             # sets dropped because nobody moved with the machine
 
@@ -118,9 +126,13 @@ class MachineTracker:
             self.tag_seen[tag] = t
             if self.state == "lifting":
                 self.set_tags[tag] += 1
+        if thumb is not None:
+            self.thumbs.setdefault(cam, deque(maxlen=MAX_SET_FRAMES)).append((t, thumb))
+        self._observe(cam, t, people or [])
+        settled = self._settled_now(t) if tracking else set()
         if tracking:
             self.tracked_at = t
-            if any(zone == self.id and rest and rest[0] for _pid, _m, zone, *rest in people or []):
+            if settled or any(zone == self.id and rest and rest[0] for _pid, _m, zone, *rest in people or []):
                 self.planted_at = t
                 if self.state == "lifting" and self.set_first_planted is None:
                     self.set_first_planted = t
@@ -129,17 +141,15 @@ class MachineTracker:
             self.set_frames += 1
             if tracking:
                 self.set_tracked_frames += 1
+            counted = False
             for pid, member, zone, *rest in people or []:
-                if zone == self.id:
+                if zone == self.id or pid in settled:
                     self.set_people[(pid, member)] += 1
                     if len(rest) > 1 and rest[1]:
                         self.set_acts[(pid, rest[1])] += 1
-                    if rest and rest[0]:
+                    if not counted and ((rest and rest[0] and zone == self.id) or pid in settled):
                         self.set_planted += 1
-                        break
-        if thumb is not None:
-            self.thumbs.setdefault(cam, deque(maxlen=MAX_SET_FRAMES)).append((t, thumb))
-        self._observe(cam, t, people or [])
+                        counted = True
 
         if self.last_t is not None and t < self.last_t:
             return  # out-of-order reading from a slower camera: signal kept, timing not advanced
@@ -170,8 +180,11 @@ class MachineTracker:
             if q is None:
                 q = self.obs[pid] = deque(maxlen=MAX_SET_FRAMES)
             q.append((t, obs["box"], obs.get("kp"), obs.get("crop")))
-            if self.state == "lifting" and zone == self.id:
-                self.in_zone[pid] += 1
+            if self.state == "lifting":
+                if zone == self.id:
+                    self.in_zone[pid] += 1
+                elif zone is not None and not self.e.zones_overlap(cam, zone, self.id):
+                    self.elsewhere[pid] += 1
         if self.state != "lifting":  # idle: keep only a short pre-roll
             for pid in list(self.obs):
                 q = self.obs[pid]
@@ -179,6 +192,28 @@ class MachineTracker:
                     q.popleft()
                 if not q:
                     del self.obs[pid]
+
+    def _settled_now(self, t: float) -> set:
+        """People seen near the zone right now whose feet have stayed put for SETTLED_S (any posture)."""
+        out = set()
+        for pid, q in self.obs.items():
+            if not q or t - q[-1][0] > 1e-6:
+                continue
+            x, y, w, h = q[-1][1]
+            size = max(w, h, 1.0)
+            fx, fy = x + w / 2, y + h
+            first = None
+            for o in reversed(q):
+                if t - o[0] > SETTLED_S + 0.5:
+                    break
+                bx, by, bw, bh = o[1]
+                if abs(bx + bw / 2 - fx) > SETTLED_MOVE * size or abs(by + bh - fy) > SETTLED_MOVE * size:
+                    first = None
+                    break
+                first = o[0]
+            if first is not None and t - first >= SETTLED_S:
+                out.add(pid)
+        return out
 
     def _update_occupant(self, t: float):
         th = self.e.cfg.thresholds
@@ -214,6 +249,7 @@ class MachineTracker:
                     self.set_first_planted = self.planted_at if self.planted_at is not None and t - self.planted_at <= th.on_hold_s + 1 else None
                     self.set_cams = {c for c, z in self.cams.items() if t - z.t <= FUSE_WINDOW_S}
                     self.in_zone = Counter()
+                    self.elsewhere = Counter()
                     self._live_reps, self._live_at = 0, -1e9
                     self.below_since = None
             else:
@@ -249,6 +285,13 @@ class MachineTracker:
             # hand-tuned "barely moved" rules are only the fallback when nobody could be judged)
             if cr.best is not None:
                 person, score = cr.best, round(cr.cands[cr.best].score, 3)
+                span = _credit.active_span(cr.cands[cr.best])
+                if span is not None:  # the zone kept moving before/after: keep the lifter's own stretch
+                    a, b = max(start, span[0] - TRIM_MARGIN_S), min(end, span[1] + TRIM_MARGIN_S)
+                    a = a if a - start >= TRIM_MIN_S else start  # only cut clearly idle stretches
+                    b = b if end - b >= TRIM_MIN_S else end
+                    if b - a >= th.min_set_s:
+                        start, end = a, b
             else:
                 present = [p for p, n in self.in_zone.items() if n >= 0.3 * max(1, self.set_tracked_frames)]
                 if all(cr.cands.get(p) is not None and cr.cands[p].judged for p in present):
@@ -283,6 +326,12 @@ class MachineTracker:
             # through, a bag dropped, someone stretching. (With a member tag present we keep it.)
             self.vetoed.append({"machine": self.id, "start": start, "end": end, "cands": cr.scores() if cr else {}, "why": "no repetition"})
             return self._done(end)
+        if score is not None and conf < REPS_MIN_CONF and score < CLEAR_MOVER and not self._set_member():
+            # someone moved with the zone, but nothing in the set repeats like reps (zone, joint, pose and crop
+            # counters all unsure): resting on the seat, drinking, re-racking, chatting with hand gestures
+            self.vetoed.append({"machine": self.id, "start": start, "end": end, "cands": cr.scores(), "why": "no countable reps",
+                                "reps": [reps, conf]})
+            return self._done(end)
         if cr is not None:  # why it was (or wasn't) credited, for debugging and active learning
             ev["credit"] = {p: [round(c.score, 2), round(c.corr, 2), round(c.amp, 2), round(c.still, 2), c.best, c.n_poses]
                             for p, c in sorted(cr.cands.items(), key=lambda kv: -kv[1].score)[:4]}
@@ -295,6 +344,7 @@ class MachineTracker:
     def _done(self, end: float):
         self._trim(end)
         self.in_zone = Counter()
+        self.elsewhere = Counter()
         for pid in list(self.obs):
             q = self.obs[pid]
             while q and q[0][0] < end - PREROLL_S:
@@ -311,9 +361,10 @@ class MachineTracker:
         mt = [(t, m) for t, m in self.motion_hist if start - 1 <= t <= end + 1]
         n = max(1, self.set_tracked_frames)
         in_zone = {p: min(1.0, c / n) for p, c in self.in_zone.items()}
+        elsewhere = {p: min(1.0, c / n) for p, c in self.elsewhere.items()}
         try:
             return _credit.evaluate(start, end, [t for t, _ in mt], [m for _, m in mt], thumbs,
-                                    {p: list(q) for p, q in self.obs.items()}, in_zone)
+                                    {p: list(q) for p, q in self.obs.items()}, in_zone, elsewhere)
         except Exception:  # never lose a set over a scoring problem
             return None
 
@@ -431,6 +482,28 @@ class Engine:
         self._zone_boxes = {(c.id, z.machine): (min(p[0] for p in z.polygon), min(p[1] for p in z.polygon),
                                                 max(p[0] for p in z.polygon), max(p[1] for p in z.polygon))
                             for c in cfg.cameras for z in c.zones if z.polygon}
+        self._zone_polys = {(c.id, z.machine): z.polygon for c in cfg.cameras for z in c.zones if z.polygon}
+        self._overlap: dict = {}
+
+    def zones_overlap(self, cam: str, a: str, b: str) -> bool:
+        """Two machines' zones overlap in this camera's picture (a rack seen behind a machine): standing in one
+        doesn't say the person isn't using the other."""
+        key = (cam, a, b) if a <= b else (cam, b, a)
+        v = self._overlap.get(key)
+        if v is None:
+            v = False
+            pa, pb = self._zone_polys.get((cam, a)), self._zone_polys.get((cam, b))
+            if pa is not None and pb is not None:
+                try:
+                    import cv2
+                    import numpy as np
+                    A, B = np.float32(pa), np.float32(pb)
+                    inter, _ = cv2.intersectConvexConvex(cv2.convexHull(A), cv2.convexHull(B))
+                    v = inter > 0.05 * min(cv2.contourArea(A), cv2.contourArea(B))
+                except Exception:
+                    v = False
+            self._overlap[key] = v
+        return v
 
     def zone_box(self, cam: str, machine: str):
         """Bounding box (x0, y0, x1, y1) of a machine's zone in a camera, or None."""

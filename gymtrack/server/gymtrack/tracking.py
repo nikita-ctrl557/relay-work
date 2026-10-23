@@ -27,7 +27,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .floor import FloorMap
+from .floor import FloorMap, moved as floor_moved
 from .motion import BIG, BoxKalman, assign, cover, hm_iou, iou
 
 MODEL_URL = "https://huggingface.co/opencv/object_detection_yolox/resolve/main/object_detection_yolox_2022nov.onnx"
@@ -333,11 +333,18 @@ class PeopleTracker:
     RECENT_S = 1.0       # tracks seen this recently are matched on motion first
     REID_SIM = 0.95      # clothing similarity needed to give a long-lost person their ID back (colour is weak:
                          # two people in black kit often score > 0.9, so only near-identical and nearby)
-    MOVE_SIM = 0.84      # clothing similarity required when a match implies a big move
-    APP_KEEP_MIN_H = 55  # px (analysis frame): smaller people's colours are mostly background and floor
+    MOVE_SIM = 0.80      # clothing similarity required when a match implies a big move
+    CLEAN_VETO = 0.62    # a clean view this unlike the track's clothes is someone else (frame-to-frame)
+    LOST_VETO = 0.70     # ... for a person missing a few seconds
+    SAME_SPOT_SIM = 0.78 # back at the very spot they were lost, after a longer occlusion
+    BACK_S = 2.5         # s: how long a hidden person's ID can still be taken back from whoever grabbed it
+    BACK_SIM = 0.90      # ... with clothes at least this similar (and clearly the best match)
+    HIDDEN_MPS = 0.15    # m/s: how far a person who stays hidden for long is assumed to drift (beyond 3 s)
+    SMALL_H = (40, 80)   # px (analysis frame): colour of people smaller than this is less reliable
+    APP_KEEP_MIN_H = 30  # px (analysis frame): smaller people's colours are mostly background and floor
     APP_KEEP_S = 1.0     # one stored signature per track per second, for offline stitching
 
-    def __init__(self, zones, detector: PersonDetector, detect_every_s: float = 0.34, max_age_s: float = 6.0, min_hits: int = 3,
+    def __init__(self, zones, detector: PersonDetector, detect_every_s: float = 0.34, max_age_s: float = 15.0, min_hits: int = 3,
                  pose=None, homography=None, plan_size: tuple[float, float] | None = None, exercise_names: bool = True,
                  ignore: list | None = None, reid_s: float = 30.0, calib_image=None):
         self.exercise_names = exercise_names
@@ -522,6 +529,19 @@ class PeopleTracker:
             return appearance(full, tuple(v * k for v in box))
         return appearance(frame, box)
 
+    def _drift(self, gap: float) -> float:
+        """Metres a person unseen for gap seconds may plausibly have moved: a slow shuffle for the first few
+        seconds, then very little (someone hidden for long is standing behind a rack or a crowd; somebody who
+        walked off would have been seen walking). Colour can't carry a longer move (two people in black kit
+        score as high as one person twice), so neither re-identification path goes beyond this."""
+        return 0.5 + 0.9 * min(gap, 3.0) + self.HIDDEN_MPS * max(0.0, gap - 3.0)
+
+    def _need(self, base: float, h: float) -> float:
+        """A clothing-similarity threshold for a person h px tall: colour from a small box is mostly floor,
+        shadow and neighbours, so the same person scores lower there (bench: same-person 5th percentile
+        0.72 below 40 px, 0.86 at 40-80 px, 0.89 above)."""
+        return base - (0.10 if h < self.SMALL_H[0] else 0.03 if h < self.SMALL_H[1] else 0.0)
+
     @staticmethod
     def _app_cost(sim: float) -> float:
         """Clothing similarity -> cost: ~0 for the same person (sims ~0.95), ~1 for someone else (~0.77)."""
@@ -570,7 +590,9 @@ class PeopleTracker:
 
     def _observe(self, tr: Track, d, t: float, look=None, clean: bool = False):
         """Apply a matched detection to a track: motion, box, history and (clean views only) appearance."""
+        h_before = tr.kf.x[2]
         tr.kf.update(d, t, step_s=max(self.every, 0.1))
+        self._limit_motion(tr.kf, d[3] / max(h_before, 1.0))
         tr.vel = tr.kf.velocity
         tr.box, tr.last, tr.hits, tr.conf = tuple(d[:4]), t, tr.hits + 1, d[4]
         tr.trail = (tr.trail + [tuple(map(int, tr.feet))])[-20:]
@@ -589,6 +611,23 @@ class PeopleTracker:
                 tr.id = self.next_id  # public ID only once confirmed: no gaps from one-off false detections
                 self.next_id += 1
 
+    @staticmethod
+    def _limit_motion(kf: BoxKalman, h_ratio: float):
+        """Keep the filter's velocities physical. A box that halves because a rack hides the legs is a partial
+        view, not a person shrinking at 3 m/s: left alone, that height velocity makes the prediction collapse
+        to a dot (or fly off the frame) within a second of coasting, and the person is lost."""
+        x = kf.x
+        h = max(float(x[2]), 1.0)
+        if not 0.75 <= h_ratio <= 1.33:
+            x[5] = 0.0
+        x[5] = float(np.clip(x[5], -0.5 * h, 0.5 * h))   # body heights per second
+        v = math.hypot(x[3], x[4])
+        vmax = 1.6 * h                                   # ~2.7 m/s for a 1.7 m person
+        if v > vmax:
+            x[3:5] *= vmax / v
+        if getattr(kf, "_saved", None) is not None:      # the state OC-SORT's re-update rewinds to
+            kf._saved = (x.copy(), kf._saved[1], kf._saved[2])
+
     def _adopt(self, tr: Track, t: float) -> bool:
         """A track about to be confirmed may be someone we lost a moment ago whose first sightings were too
         unclear to match (half hidden, odd box). Now that it has a few observations, compare again and, if
@@ -603,13 +642,13 @@ class PeopleTracker:
             gap = tr.first - c.last
             if gap > self.reid_s:
                 continue
-            dm, _ = fm.distance(c.kf.last_obs, tr.kf.last_obs)
+            dm, _ = floor_moved(fm, c.kf.last_obs, tr.kf.last_obs)
             sim = float(c.look @ tr.look)
-            near = gap <= self.max_age and dm <= 0.5 + 0.9 * gap
-            same_spot = dm <= 0.5 + 0.1 * gap and sim >= 0.85
-            if not (near and sim >= 0.8) and not same_spot and not (dm <= 0.6 + 0.5 * gap and sim >= self.REID_SIM):
+            near = gap <= self.max_age and dm <= self._drift(gap)
+            same_spot = dm <= 0.5 + 0.1 * gap and sim >= self._need(self.SAME_SPOT_SIM, tr.box[3])
+            if not (near and sim >= 0.8) and not same_spot and not (dm <= self._drift(gap) and sim >= self.REID_SIM):
                 continue
-            score = sim - 0.05 * dm / (0.5 + 0.9 * gap)
+            score = sim - 0.05 * dm / self._drift(gap)
             if best is None or score > best[0]:
                 best, second = (score, c), best
             elif second is None or score > second[0]:
@@ -658,6 +697,11 @@ class PeopleTracker:
         trust_det = [float(np.clip((d[4] - 0.35) / 0.4, 0, 1)) * (1.0 - min(occl[j], 0.5)) for j, d in enumerate(high)]
         tracks = list(self.tracks.values())
         recent = [tr for tr in tracks if t - tr.last <= self.RECENT_S]
+        # tracks lost a moment ago with a well-established signature may take a detection back from whoever
+        # grabbed it while their owner was hidden (someone walking in front of a lifter): only on clearly
+        # matching clothes, see below
+        n_recent = len(recent)
+        recent += [tr for tr in tracks if self.RECENT_S < t - tr.last <= self.BACK_S and tr.look is not None and tr.look_n >= 10]
         free_d = set(range(len(high)))
         done: set[int] = set()
 
@@ -669,6 +713,15 @@ class PeopleTracker:
                 pb = tr.kf.box_at(t)
                 gap = t - tr.last
                 for j, d in enumerate(high):
+                    if i >= n_recent:  # take-back candidate: from its last real box, tall, mostly unoccluded view
+                        if looks[j] is None or d[3] < self.SMALL_H[0] or occl[j] > 0.3 or d[4] < 0.6:
+                            continue
+                        g = self._geo_cost(tr.kf.last_obs, d, gap)
+                        if g is None or float(tr.look @ looks[j]) < self._need(self.BACK_SIM, d[3]):
+                            continue
+                        S[i, j] = float(tr.look @ looks[j])
+                        G[i, j] = g
+                        continue
                     g = self._geo_cost(pb, d, gap)
                     if g is None:
                         continue
@@ -678,7 +731,7 @@ class PeopleTracker:
                         # an ID slides onto someone walking in front of (or standing behind) its owner
                         lo = tr.kf.last_obs
                         moved = math.hypot(lo[0] + lo[2] / 2 - d[0] - d[2] / 2, lo[1] + lo[3] - d[1] - d[3]) / max(lo[3], d[3], 1.0)
-                        if tr.look_n >= 3 and moved > 0.25 and S[i, j] < self.MOVE_SIM:
+                        if tr.look_n >= 3 and moved > 0.25 and S[i, j] < self._need(self.MOVE_SIM, d[3]):
                             continue
                     G[i, j] = g
             # adaptive appearance weight (Deep OC-SORT): trusted detection, established track signature,
@@ -689,9 +742,14 @@ class PeopleTracker:
                 col = S[:, j][~np.isnan(S[:, j])]
                 srt = np.sort(col)[::-1]
                 disc = 1.0 if len(srt) < 2 else float(np.clip((srt[0] - srt[1]) / 0.08, 0.25, 1.0))
+                for i in range(n_recent, len(recent)):  # a take-back must be the clear best match in clothes
+                    if G[i, j] < BIG and len(srt) > 1 and S[i, j] < srt[1] + 0.05 and S[i, j] >= srt[0]:
+                        G[i, j] = C[i, j] = BIG
+                    elif G[i, j] < BIG and S[i, j] < srt[0]:
+                        G[i, j] = C[i, j] = BIG
                 for i, tr in enumerate(recent):
                     if G[i, j] < BIG and not np.isnan(S[i, j]):
-                        if clean[j] and tr.look_n >= 3 and S[i, j] < 0.62:
+                        if clean[j] and tr.look_n >= 3 and S[i, j] < self._need(self.CLEAN_VETO, high[j][3]):
                             C[i, j] = BIG
                             continue
                         w = 0.6 * trust_det[j] * min(1.0, tr.look_n / 3) * disc
@@ -732,7 +790,7 @@ class PeopleTracker:
                     moved = math.hypot(lo[0] + lo[2] / 2 - d[0] - d[2] / 2, lo[1] + lo[3] - d[1] - d[3]) / max(lo[3], d[3], 1.0)
                     if tr.look is not None and looks[j] is not None:
                         sim = float(tr.look @ looks[j])
-                        if (clean[j] and tr.look_n >= 3 and sim < 0.66) or (moved > 0.25 and tr.look_n >= 3 and sim < self.MOVE_SIM):
+                        if (clean[j] and tr.look_n >= 3 and sim < self._need(self.CLEAN_VETO + 0.04, d[3])) or (moved > 0.25 and tr.look_n >= 3 and sim < self._need(self.MOVE_SIM, d[3])):
                             continue
                         g += 0.4 * trust_det[j] * self._app_cost(sim)
                     elif moved > 0.25:
@@ -758,18 +816,20 @@ class PeopleTracker:
                     hr = d[3] / max(lo[3], 1)
                     if not 0.65 <= hr <= 1.5 and (gap > self.max_age or self._geo_cost(lo, d, min(gap, 1.0)) is None):
                         continue
-                    dm, _ = fm.distance(lo, d)
+                    dm, _ = floor_moved(fm, lo, d)
                     sim = float(tr.look @ looks[j]) if tr.look is not None and looks[j] is not None else None
                     if gap <= self.max_age:
-                        allowed = 0.5 + 0.9 * gap   # still "here": a slow shuffle, not a walk across the room
-                        if dm > allowed or (sim is not None and clean[j] and sim < 0.7):
+                        # still "here": a slow shuffle, not a walk across the room. Someone hidden for long was
+                        # mostly standing behind something, so the allowance grows slowly after a few seconds
+                        allowed = self._drift(gap)
+                        if dm > allowed or (sim is not None and clean[j] and sim < self._need(self.LOST_VETO, d[3])):
                             continue
                         C[i, k] = 0.6 * dm / allowed + (0.6 * self._app_cost(sim) if sim is not None else 0.3)
                     else:
                         # back at the same spot (hidden behind a rack or a crowd) with similar clothes, or
                         # nearby with near-identical clothes; colour alone can't carry a walk across the room
-                        allowed = 0.6 + 0.5 * gap
-                        same_spot = dm <= 0.5 + 0.1 * gap and sim is not None and sim >= 0.85
+                        allowed = self._drift(gap)
+                        same_spot = dm <= 0.5 + 0.1 * gap and sim is not None and sim >= self._need(self.SAME_SPOT_SIM, d[3])
                         if sim is None or tr.look_n < 3 or dm > allowed or not (same_spot or sim >= self.REID_SIM):
                             continue
                         C[i, k] = 0.3 + 0.3 * dm / allowed + self._app_cost(sim)

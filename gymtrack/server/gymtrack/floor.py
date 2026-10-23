@@ -7,6 +7,10 @@ says how it was measured:
 
 * floor metres from the homography when both feet points are in the part of the image where it is
   trustworthy (not too far beyond the calibrated quad, mapped inside the plan with a margin);
+* and when the homography's local scale there agrees with the person's own size: a standing person's box
+  height says how many metres one pixel is at that spot; where the (often hand-clicked, approximate)
+  calibration disagrees with that by more than 2x, its distances are noise amplified (bench: a person
+  shuffling 3 px at the back of the room "moved" 4-8 m), so we don't use it;
 * otherwise a local scale from the person's own box: a standing adult is ~1.7 m tall, so one box height
   of image displacement is ~1.7 m. This underestimates movement towards/away from the camera, which
   makes it the conservative choice for "could this person have walked there?" checks.
@@ -32,6 +36,8 @@ def body_scale(box) -> float:
 
 class FloorMap:
     """Wraps an image->plan homography (may be None) with a reliability test."""
+
+    SCALE_TOL = 2.0  # homography metres-per-pixel vs the person's own box: trust it within this factor
 
     def __init__(self, H=None, calib_image=None, plan_size=None, margin_m: float = 3.0, max_blowup: float = 2.5):
         self.H = None if H is None else np.asarray(H, np.float64)
@@ -71,8 +77,27 @@ class FloorMap:
                 return None
         return p
 
+    def scale(self, x: float, y: float) -> float | None:
+        """Floor metres per image pixel for a sideways step at image point (x, y) (None without a homography)."""
+        if self.H is None:
+            return None
+        v = self.H @ np.array([x, y, 1.0])
+        if abs(v[2]) < 1e-12:
+            return None
+        # d(plan)/d(x_image) of the projective map (the column of the Jacobian for a horizontal image step)
+        dx = (self.H[:2, 0] * v[2] - v[:2] * self.H[2, 0]) / v[2] ** 2
+        return float(np.hypot(*dx))
+
     def box_metres(self, box):
-        return self.metres(*_feet(box))
+        """Floor point of a person's feet, or None where the homography isn't trustworthy for this person."""
+        p = self.metres(*_feet(box))
+        if p is None or box[3] < 8:
+            return p
+        s = self.scale(*_feet(box))
+        b = body_scale(box)
+        if s is None or not b / self.SCALE_TOL <= s <= b * self.SCALE_TOL:
+            return None
+        return p
 
     def distance(self, a, b) -> tuple[float, str]:
         """Distance in metres between two people's feet (boxes x, y, w, h in image px) and how it was measured."""
@@ -82,6 +107,32 @@ class FloorMap:
         fa, fb = _feet(a), _feet(b)
         s = (body_scale(a) + body_scale(b)) / 2
         return float(np.hypot(fa[0] - fb[0], fa[1] - fb[1]) * s), "body"
+
+
+def _cover(a, b) -> float:
+    """Share of box a inside box b."""
+    ix = max(0.0, min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1]))
+    return ix * iy / max(a[2] * a[3], 1e-9)
+
+
+def moved(fm: "FloorMap", a, b) -> tuple[float, str]:
+    """How far a person moved between boxes a and b (image px), in metres, allowing for partial views.
+
+    When racks, benches or other people hide the legs (or the head), the box shrinks and its bottom no
+    longer marks the feet, so the feet distance alone reports metres of "movement" for someone who stood
+    still. If the shorter box lies inside the taller one with the same width, it is the same body cropped:
+    the smaller of the feet and head-top displacements is the movement."""
+    d, how = fm.distance(a, b)
+    hr = max(a[3], b[3]) / max(min(a[3], b[3]), 1e-9)
+    if hr < 1.3:
+        return d, how
+    small, big = (a, b) if a[3] < b[3] else (b, a)
+    wr = small[2] / max(big[2], 1e-9)
+    if not 0.55 <= wr <= 1.6 or _cover(small, big) < 0.7:
+        return d, how
+    top = float(np.hypot(a[0] + a[2] / 2 - b[0] - b[2] / 2, a[1] - b[1])) * body_scale(big)
+    return (top, "anchor") if top < d else (d, how)
 
 
 def reachable(d_m: float, gap_s: float, v: float = WALK_MPS, slack_m: float = 0.6) -> bool:

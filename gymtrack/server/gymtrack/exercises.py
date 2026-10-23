@@ -109,20 +109,23 @@ def pick(cands: list[str], poses: list[list[float]]) -> tuple[str | None, float]
     return best, round(conf, 2)
 
 
-def vec_to33(vec: list[int]) -> np.ndarray | None:
-    """26-number pose vector (thousandths of a 16:9 frame, -1 = unseen) -> (33, 3) keypoints for activity.py."""
+def vec_to33(vec: list[int], conf: list[int] | None = None) -> np.ndarray | None:
+    """26-number pose vector (thousandths of a 16:9 frame, -1 = unseen) -> (33, 3) keypoints for activity.py.
+
+    conf: the joints' confidences quantised 0..9 (replay "c", offline.pose_conf), used as visibility; older
+    replays without it get 1.0 for every drawn joint."""
     from .pose import JOINTS13
     k = np.zeros((33, 3), np.float32)
     seen = 0
     for i, j in enumerate(JOINTS13):
         x, y = vec[2 * i], vec[2 * i + 1]
         if x >= 0:
-            k[j] = (x * 1.6, y * 0.9, 1.0)  # square-ish units
+            k[j] = (x * 1.6, y * 0.9, conf[i] / 9.0 if conf is not None and len(conf) == 13 else 1.0)  # square-ish units
             seen += 1
     return k if seen >= 9 else None
 
 
-def name_set(cands: list[str], times: list[float], poses: list[list[float]]) -> tuple[str | None, float, str]:
+def name_set(cands: list[str], times: list[float], poses: list[list[float]], confs: list | None = None) -> tuple[str | None, float, str]:
     """Exercise of one set: the station's candidates decide what's possible; pose only chooses among them.
 
     Robust pose cues (pick) first; the learned classifier (activity.classify_among, product-safe models
@@ -135,7 +138,7 @@ def name_set(cands: list[str], times: list[float], poses: list[list[float]]) -> 
     src = "pose-cues"
     try:
         from .activity import classify_among
-        pts = [(t, vec_to33(v)) for t, v in zip(times, poses)]
+        pts = [(t, vec_to33(v, c)) for t, v, c in zip(times, poses, confs or [None] * len(poses))]
         pts = [(t, k) for t, k in pts if k is not None]
         ml, mconf = classify_among([t for t, _ in pts], [k for _, k in pts], cands) if len(pts) >= 6 else (None, 0.0)
     except Exception:
@@ -149,14 +152,15 @@ def refine_sets(sets: list[dict], machines: list[dict], poses: list[dict]) -> No
     """In-place: give each set {t0, t1, m, pid, ex} the equipment-based exercise (pose picks between options)."""
     by_pid: dict[int, list] = {}
     for e in poses:
+        cf = e.get("c") or {}
         for pid, vec in e["k"]:
-            by_pid.setdefault(pid, []).append((e["t"], vec))
+            by_pid.setdefault(pid, []).append((e["t"], vec, cf.get(str(pid))))
     info = {m["id"]: m for m in machines}
     for s in sets:
         m = info.get(s["m"], {"id": s["m"]})
         c = m.get("exercises") or candidates(m["id"], m.get("name", ""), m.get("kind", ""))
-        win = [(t, v) for t, v in by_pid.get(s.get("pid"), []) if s["t0"] - 0.5 <= t <= s["t1"] + 0.5]
-        ex, conf, src = name_set(c, [t for t, _ in win], [v for _, v in win])
+        win = [w for w in by_pid.get(s.get("pid"), []) if s["t0"] - 0.5 <= w[0] <= s["t1"] + 0.5]
+        ex, conf, src = name_set(c, [w[0] for w in win], [w[1] for w in win], [w[2] for w in win])
         if ex:
             s["ex"], s["ex_conf"], s["ex_src"] = ex, conf, src
 

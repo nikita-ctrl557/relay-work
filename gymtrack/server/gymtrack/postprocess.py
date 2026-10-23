@@ -3,10 +3,13 @@
 Order matters:
 1. credit conflicts: sets that overlap in time compete for the people near them. One person can't do two
    sets at once, so the motion-coherence scores recorded per set (engine.py / credit.py) are resolved
-   jointly with maximum-weight matching; a set whose best free person scores too low becomes unattributed.
+   jointly (maximum-weight matching for sets that all overlap, greedy under pairwise constraints for
+   chains); a set whose only credible mover was taken by a concurrent set had no lifter of its own and is
+   dropped.
 2. fake-set veto fallback: sets that had no pose evidence when they were decided (nobody near the zone was
    seen well enough) still get the old "did the credited person move at all" check (exercises.drop_fake_sets).
-3. tracklet stitching (stitch.py) and hiding skeletons of bodies cut off by the frame edge.
+3. tracklet stitching (stitch.py) and hiding skeletons of bodies cut off by the frame edge (joint
+   confidences, replay "c", follow their pose vectors through the id changes).
 4. exercise naming among the station's candidate exercises (exercises.refine_sets).
 """
 from __future__ import annotations
@@ -15,24 +18,51 @@ from .credit import CREDIT_MIN, assign
 from .exercises import drop_fake_sets, refine_sets
 
 
+def _conflict(a: dict, b: dict) -> bool:
+    """Two sets overlap enough in time that one person can't have done both."""
+    ov = min(a["t1"], b["t1"]) - max(a["t0"], b["t0"])
+    return ov >= max(2.0, 0.25 * min(a["t1"] - a["t0"], b["t1"] - b["t0"]))
+
+
 def resolve_credit(sets: list[dict]) -> int:
-    """In place: re-assign people across time-overlapping sets that have motion-coherence scores. Returns changes."""
+    """In place: re-assign people across time-overlapping sets that have motion-coherence scores. Returns changes.
+
+    Sets that pairwise overlap (a clique: several zones busy at the same time) are solved with maximum-weight
+    matching (Hungarian, credit.assign). Chains (A overlaps B, B overlaps C, but A and C don't) only forbid
+    the overlapping pairs: the same person may well do A and then C, so those are assigned greedily by score
+    under the pairwise constraint."""
     scored = [s for s in sets if s.get("cands")]
-    scored.sort(key=lambda s: s["t0"])
-    runs: list[list] = []  # connected runs of time-overlapping sets: [[sets], end]
-    for s in scored:
-        if runs and s["t0"] < runs[-1][1]:
-            runs[-1][0].append(s)
-            runs[-1][1] = max(runs[-1][1], s["t1"])
-        else:
-            runs.append([[s], s["t1"]])
-    groups = [g for g, _ in runs]
+    n = len(scored)
+    adj = {i: {j for j in range(n) if j != i and _conflict(scored[i], scored[j])} for i in range(n)}
+    seen, groups = set(), []
+    for i in range(n):
+        if i in seen or not adj[i]:
+            continue
+        comp, todo = [], [i]
+        while todo:
+            k = todo.pop()
+            if k in seen:
+                continue
+            seen.add(k)
+            comp.append(k)
+            todo += list(adj[k])
+        groups.append(sorted(comp))
     changed = 0
     for g in groups:
-        if len(g) < 2:
-            continue
-        who = assign([{int(k): v for k, v in s["cands"].items()} for s in g], CREDIT_MIN)
-        for s, pid in zip(g, who):
+        cands = [{int(k): v for k, v in scored[i]["cands"].items()} for i in g]
+        if all(j in adj[i] for i in g for j in g if i != j):
+            who = assign(cands, CREDIT_MIN)
+        else:
+            who = [None] * len(g)
+            pairs = sorted(((v, gi, p) for gi, c in enumerate(cands) for p, v in c.items() if v >= CREDIT_MIN), reverse=True)
+            for v, gi, p in pairs:
+                if who[gi] is not None:
+                    continue
+                if any(who[gj] == p and g[gj] in adj[g[gi]] for gj in range(len(g))):
+                    continue
+                who[gi] = p
+        for i, pid in zip(g, who):
+            s = scored[i]
             if s.get("credit") is None:
                 continue  # credited by presence (no pose evidence): leave it
             if pid != s.get("pid"):
@@ -61,6 +91,8 @@ def finish_sets(data: dict, cfg, cam=None) -> dict:
     info["vetoed_no_pose_evidence"] = len(gone)
     if data.get("timeline"):
         from .stitch import drop_cut_off_poses, stitch
+        # joint confidences ride along with each pose vector object, whatever ids stitching gives them
+        conf = {id(v): e["c"].get(str(pid)) for e in data.get("poses", []) if e.get("c") for pid, v in e["k"]}
         plan = (cfg.plan["width"], cfg.plan["depth"]) if getattr(cfg, "plan", None) else None
         try:
             remap = stitch(data, cam=cam, plan_size=plan)
@@ -68,6 +100,9 @@ def finish_sets(data: dict, cfg, cam=None) -> dict:
             remap = stitch(data)
         info["stitched"] = len(remap or {})
         info["cut_off_poses"] = drop_cut_off_poses(data)
+        for e in data.get("poses", []):
+            if e.get("c"):
+                e["c"] = {str(pid): conf[id(v)] for pid, v in e["k"] if conf.get(id(v)) is not None}
     machines = [{"id": m.id, "name": m.name, "kind": m.kind} for m in cfg.machines]
     refine_sets(sets, machines, data.get("poses", []))
     info["sets_out"] = len(sets)

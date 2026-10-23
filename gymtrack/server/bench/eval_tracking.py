@@ -14,7 +14,8 @@ x, y, w, h (fractions of the frame), activity, plan x, plan y]). Metrics (lower 
 * short_tracks          tracks seen for < 5 s
 * jumps                 consecutive samples of one ID further apart than walking allows
                         (0.6 m + 2.5 m/s * dt, or 2 m/s across gaps > 3 s; floor metres from the calibration
-                        where it is reliable, else the box-height scale, see gymtrack/floor.py), or a box
+                        where it is reliable, else the box-height scale, see gymtrack/floor.py; a box that
+                        is a cropped view of the previous one (legs hidden) is measured at the head), or a box
                         that doubles/halves in height without overlapping its previous self
 * swap_suspects         within one ID, clothing colour before vs after a moment differs much more than
                         it varies on either side (needs --video): the ID probably moved to someone else
@@ -35,7 +36,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from gymtrack.floor import FloorMap  # noqa: E402
+from gymtrack.floor import FloorMap, moved  # noqa: E402
 
 EDGE = 0.03          # a box within 3% of the frame border is "at the edge" (people enter/leave there)
 JUMP_SLACK, JUMP_V = 0.6, 2.5
@@ -151,12 +152,12 @@ def evaluate(data, cam=None, plan=None, video=None, t0=None, t1=None, doors=(), 
             if dt <= 0 or ba[1] + ba[3] >= 0.98 or bb[1] + bb[3] >= 0.98:
                 continue  # feet below the frame edge: the box bottom isn't where they stand
             if dt > 3.0:  # the ID was hidden for a while: was it physically possible to get there?
-                d, how = fm.distance(px(ba), px(bb))
+                d, how = moved(fm, px(ba), px(bb))
                 if d > JUMP_SLACK + 2.0 * dt:
                     jumps.append({"id": i, "t": tb, "d_m": round(d, 2), "dt": round(dt, 2), "how": how, "h_ratio": 0, "gap": True})
                     by_floor += how == "floor"
                 continue
-            d, how = fm.distance(px(ba), px(bb))
+            d, how = moved(fm, px(ba), px(bb))
             hr = max(ba[3], bb[3]) / max(1e-6, min(ba[3], bb[3]))
             if d > JUMP_SLACK + JUMP_V * dt or (hr > 1.8 and _iou(ba, bb) < 0.2):
                 jumps.append({"id": i, "t": tb, "d_m": round(d, 2), "dt": round(dt, 2), "how": how, "h_ratio": round(hr, 2)})

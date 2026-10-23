@@ -14,7 +14,8 @@ Fixes against the first version (docs/research/sota.md B1-B4):
   replays at 2.5-10 Hz);
 - velocities come from the sample rate, not an assumed 6 s window;
 - visibility is not a feature any more (it was 1.0 for every gym joint and a sigmoid for BlazePose, so it
-  identified the dataset);
+  identified the dataset); where it is still used (the "torso seen well enough" gate in activity.features)
+  gym replays now carry the pose model's real joint confidences (replay "c", offline.pose_conf);
 - at inference the classifier only chooses among the station's candidate exercises
   (activity.classify_among), so evaluation reports that restricted choice too.
 
@@ -46,13 +47,13 @@ GYM_LABEL = {"cable_row": "cable_row", "row": "row", "bench_press": "press", "in
 CHOICES = [("cable_row", "press"), ("row", "press"), ("cable_row", "row")]
 
 
-def to33(vec: list[int]) -> np.ndarray | None:
-    """26-number replay pose -> (33, 3); see exercises.vec_to33."""
-    return vec_to33(vec)
+def to33(vec: list[int], conf=None) -> np.ndarray | None:
+    """26-number replay pose (+ its quantised joint confidences when the replay has them) -> (33, 3)."""
+    return vec_to33(vec, conf)
 
 
 def _seq(track, a, b):
-    pts = [(t, to33(v)) for t, v in track if a <= t <= b]
+    pts = [(t, to33(v, c)) for t, v, c in track if a <= t <= b]
     pts = [(t, k) for t, k in pts if k is not None]
     return [t for t, _ in pts], [k for _, k in pts]
 
@@ -71,8 +72,9 @@ def gym_windows(gym_dir: str, exclude: set[str]):
         machines = {m["id"]: m for m in cfg["machines"]}
         track = defaultdict(list)
         for e in d["poses"]:
+            cf = e.get("c") or {}
             for pid, v in e["k"]:
-                track[pid].append((e["t"], v))
+                track[pid].append((e["t"], v, cf.get(str(pid))))
         in_set = defaultdict(list)
         for s in d["sets"]:
             if s.get("pid") is None:
@@ -92,7 +94,7 @@ def gym_windows(gym_dir: str, exclude: set[str]):
         # "none": people not in a set (sparser: there's a lot of it)
         for pid, seq in track.items():
             spans = in_set.get(pid, [])
-            pts = [(t, v) for t, v in seq if not any(a - 2 <= t <= b + 2 for a, b in spans)]
+            pts = [x for x in seq if not any(a - 2 <= x[0] <= b + 2 for a, b in spans)]
             ts, ks = _seq(pts, -1e9, 1e9)
             for w in windows(ts, ks, step_s=2 * WINDOW_S):
                 v = window_vector(w)
