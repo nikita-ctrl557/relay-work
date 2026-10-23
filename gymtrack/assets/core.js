@@ -678,6 +678,15 @@ class ReplaySource {
   get speed() { return this._speed; }
   ct(c) { return (c.pv ? c.pv.currentTime : c.el.currentTime) || 0; }
   seek(camId, t) { const c = this.cams.find(x => x.id === camId); if (c) (c.pv || c.el).currentTime = t; }
+  /* replay clock per camera, for the timeline scrubber */
+  timeOf(camId) { const c = this.cams.find(x => x.id === camId); return c ? this.ct(c) : 0; }
+  isPaused(camId) { const c = this.cams.find(x => x.id === camId); return !!c && (c.pv ? !c.pv.wantPlay : c.el.paused); }
+  setPaused(camId, on) { const c = this.cams.find(x => x.id === camId); if (!c) return; const v = c.pv || c.el; if (on) v.pause(); else v.play().catch(() => {}); }
+  clockInfo(camId) {
+    const c = this.cams.find(x => x.id === camId); if (!c) return null;
+    return c._clock ||= {duration: c.data.duration || c.data.timeline[c.data.timeline.length - 1]?.t || 0, sets: c.data.sets.map(s => ({t0: s.t0, t1: s.t1, m: s.m, pid: s.pid, reps: s.reps, ex: s.ex || null})),
+      counts: c.data.timeline.map(e => [e.t, e.n ?? e.p.length]), segments: c.data.segments || []};
+  }
   at(c, ct) { const tl = c.data.timeline; let lo = 0, hi = tl.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (tl[m].t <= ct) lo = m; else hi = m - 1; } return tl[lo]; }
   abs(c, x) { return Date.now() / 1000 - this.ct(c) + x; }   // video seconds -> wall clock for display
   personTrack(memberId) { // everything recorded about one tracked person, for the profile's replay and time breakdown

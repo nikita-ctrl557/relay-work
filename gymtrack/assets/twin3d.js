@@ -7,6 +7,7 @@
 */
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
+import {makeBody, jointsFrom, footMid} from "./body3d.js";
 
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const dark = () => matchMedia("(prefers-color-scheme: dark)").matches && document.documentElement.dataset.theme !== "light" || document.documentElement.dataset.theme === "dark";
@@ -166,13 +167,13 @@ const fmtMin = s => s >= 3600 ? `${(s / 3600).toFixed(1)}h` : s >= 60 ? `${Math.
 
 export function mountTwin(host, {plan, machines, people, states, heat, layer = () => "both", cams = [], usage = () => ({}), onOpen, onHover, onMachine, labelOf}) {
   const P = palette(); mats(P);
-  let peopleMode = pref("people", "skel"), colourMode = pref("colour", "live");
+  let peopleMode = pref("people2", "skel"), colourMode = pref("colour", "live");
   const wrap = document.createElement("div"); wrap.className = "s3d twin";
   const seg = (g, opts, cur) => `<div class="tw-seg" role="group" aria-label="${g === "pm" ? "People" : "Colour"}"><span>${g === "pm" ? "People" : "Colour"}</span>${opts.map(([k, l]) => `<button data-${g}="${k}" aria-pressed="${k === cur}">${l}</button>`).join("")}</div>`;
   wrap.innerHTML = `<div class="s3d-labels"></div><div class="tw-legend" aria-live="polite"></div>
     <div class="s3d-bar tw-bar"><div class="tw-views"><button data-v="iso" aria-pressed="true">Overview</button><button data-v="top">Top</button>${cams.some(c => c.pose) ? `<button data-v="cam">Camera</button>` : ""}</div>
     <button class="tw-tog" data-tog="opts" aria-expanded="false">Display</button><button class="tw-tog" data-tog="key" aria-expanded="false">Legend</button>
-    <div class="tw-opts">${seg("pm", [["skel", "Skeleton"], ["fig", "Figure"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Status"], ["heat", "Usage"]], colourMode)}</div>
+    <div class="tw-opts">${seg("pm", [["skel", "Body"], ["fig", "Marker"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Status"], ["heat", "Usage"]], colourMode)}</div>
     <span class="s3d-hint">${matchMedia("(pointer: coarse)").matches ? "Drag to rotate · pinch to zoom" : "Drag to rotate · scroll to zoom"}</span></div>`;
   host.append(wrap);
   const labels = wrap.querySelector(".s3d-labels"), legend = wrap.querySelector(".tw-legend");
@@ -245,7 +246,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     machineObjs.push({id: m.id, name: m.name, obj, tint, tag, poly: z.poly, fill: "transparent", stroke: HEX(UNUSED), strong: false, prio: 0, top: new THREE.Vector3(fp.cx, Math.max(0.9, topY) + 0.25, fp.cy)});
   }
   for (const it of items) {
-    const mk = MODELS[it.type]; if (!mk) continue;
+    const mk = MODELS[it.type] || MODELS.machine;
     const obj = it.type === "timer" ? MODELS.timer() : mk(it.w, it.d);
     place(obj, it.x, it.y, (it.rot || 0) * Math.PI / 180);
     if (it.type === "timer") obj.position.y = it.h || 2.3;
@@ -294,7 +295,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   // people
   const ppl = new Map(), boneGeo = new THREE.CylinderGeometry(0.045, 0.045, 1, 8), jointGeo = new THREE.SphereGeometry(0.055, 10, 8), headGeo = new THREE.SphereGeometry(0.13, 16, 12);
   const bodyGeo = new THREE.CapsuleGeometry(0.23, 1.1, 4, 12), shadowGeo = new THREE.CircleGeometry(0.42, 28), ringGeo = new THREE.RingGeometry(0.44, 0.56, 36);
-  const COL = {move: UNUSED, station: REST, lift: LIFT};
+  const COL = {move: UNUSED, station: REST, lift: LIFT}, WHITE = new THREE.Color(0xffffff);
   let hoverPid = null;
   const camFor = id => cams.find(c => c.id === id)?.pose || {x: CX, y: z1 + 8};
   function person(key) {
@@ -305,12 +306,15 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const body = new THREE.Mesh(bodyGeo, mat); body.castShadow = true; body.position.y = 0.78;
     const head = new THREE.Mesh(headGeo, mat); head.position.y = 1.62; head.castShadow = true;
     const fig = group(body, head);
+    const jmat = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: 0.5, transparent: true, opacity: 0});
+    const b3 = makeBody({body: mat, joint: jmat}); b3.group.visible = false; b3.meshes.forEach(o => o.userData.pkey = key);
     const shadow = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({color: 0x000000, transparent: true, opacity: 0, depthWrite: false})); shadow.rotation.x = -Math.PI / 2;
     const halo = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({color: LIFT, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide})); halo.rotation.x = -Math.PI / 2;
-    scene.add(skel, fig, shadow, halo);
+    scene.add(skel, fig, shadow, halo, b3.group);
+    [body, head, ...bones, ...joints].forEach(o => o.userData.pkey = key);
     const tag = document.createElement("button"); tag.className = "s3d-tag"; labels.append(tag);
     tag.onmouseenter = () => setHover(key); tag.onmouseleave = () => setHover(null); tag.onclick = () => onOpen?.(ppl.get(key)?.q);
-    p = {mat, white, skel, bones, joints, fig, shadow, halo, tag, pos: null, target: null, q: null, alpha: 0, want: 1}; ppl.set(key, p); return p;
+    p = {mat, white, jmat, b3, J3: null, skel, bones, joints, fig, shadow, halo, tag, pos: null, target: null, q: null, alpha: 0, want: 1}; ppl.set(key, p); return p;
   }
   const setHover = k => { hoverPid = k; onHover?.(k == null ? null : ppl.get(k)?.q?.pid); };
   function sync() {
@@ -321,6 +325,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       p.q = q; p.want = 1; p.target = new THREE.Vector3(q.x, 0, q.y); if (!p.pos) p.pos = p.target.clone();
       const lift = q.activity && q.activity !== "standing";
       p.mat.color.setHex(lift ? COL.lift : q.planted && q.zone ? COL.station : COL.move);
+      p.jmat.color.copy(p.mat.color).lerp(WHITE, 0.55);
       p.full = labelOf(q); p.short = (q.label.match(/#\d+/) || [q.label])[0] + (lift ? " · " + (typeof actName === "function" && q.activity ? actName(q.activity) : "lifting") : ""); p.tag.classList.toggle("link", !!q.member);
     }
     for (const [k, p] of ppl) if (!seen.has(k)) p.want = 0;
@@ -364,7 +369,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   wrap.querySelector(".tw-bar").onclick = e => {
     const tg = e.target.closest("[data-tog]"); if (tg) { const on = wrap.classList.toggle("show-" + tg.dataset.tog); tg.setAttribute("aria-expanded", on); return; }
     const v = e.target.closest("[data-v]"); if (v) { userMoved = false; return setView(v.dataset.v); }
-    const pm = e.target.closest("[data-pm]"); if (pm) { peopleMode = pm.dataset.pm; savePref("people", peopleMode); wrap.querySelectorAll("[data-pm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.pm === peopleMode)); return; }
+    const pm = e.target.closest("[data-pm]"); if (pm) { peopleMode = pm.dataset.pm; savePref("people2", peopleMode); wrap.querySelectorAll("[data-pm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.pm === peopleMode)); return; }
     const cm = e.target.closest("[data-cm]"); if (cm) { colourMode = cm.dataset.cm; savePref("colour", colourMode); wrap.querySelectorAll("[data-cm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.cm === colourMode)); applyColours(); }
   };
   setView("iso", true);
@@ -374,8 +379,11 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const pick = e => { const r = renderer.domElement.getBoundingClientRect(); ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); ray.setFromCamera(ndc, camera); return ray.intersectObjects(machineObjs.map(m => m.obj), true)[0]?.object.userData.machine; };
   let downAt = null, hoverM = null, selM = null;
   renderer.domElement.addEventListener("pointerdown", e => downAt = [e.clientX, e.clientY]);
-  renderer.domElement.addEventListener("pointerup", e => { if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) < 8) { const m = pick(e); selM = m || null; if (m) onMachine?.(m); } downAt = null; });
-  renderer.domElement.addEventListener("pointermove", e => { if (e.buttons) return; hoverM = pick(e) || null; renderer.domElement.style.cursor = hoverM ? "pointer" : ""; });
+  const pickP = e => { const r = renderer.domElement.getBoundingClientRect(); ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); ray.setFromCamera(ndc, camera);
+    const objs = []; for (const p of ppl.values()) if (p.alpha > 0.3) objs.push(p.b3.group.visible ? p.b3.group : p.skel.visible ? p.skel : p.fig);
+    return ray.intersectObjects(objs, true).find(h => h.object.visible)?.object.userData.pkey; };
+  renderer.domElement.addEventListener("pointerup", e => { if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) < 8) { const pk = pickP(e); if (pk && ppl.get(pk)?.q) { onOpen?.(ppl.get(pk).q); downAt = null; return; } const m = pick(e); selM = m || null; if (m) onMachine?.(m); } downAt = null; });
+  renderer.domElement.addEventListener("pointermove", e => { if (e.buttons) return; const pk = pickP(e) || null; if (pk !== hoverPid && (pk || hoverPid && !ppl.get(hoverPid)?.tag.matches(":hover"))) setHover(pk); hoverM = pk ? null : pick(e) || null; renderer.domElement.style.cursor = pk || hoverM ? "pointer" : ""; });
 
   // phones: taller canvas, controls under it, fewer labels
   let compact = false;
@@ -393,7 +401,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const sp = v => { tmp.copy(v).project(camera); return tmp.z < 1 && Math.abs(tmp.x) < 1.05 && Math.abs(tmp.y) < 1.05 ? tmp.clone() : null; };
   function frame(ts) {
     raf = requestAnimationFrame(frame);
-    if (ts - last > 66) { last = ts; sync(); }
+    if (ts - last > 30) { last = ts; sync(); }
     if (ts - heatAt > 3000) { heatAt = ts; lastHeat = heat(); }
     if (ts - colAt > 1000) { colAt = ts; applyColours(); }
     if (anim) { anim.t = Math.min(1, anim.t + 0.04); const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.l0, anim.l1, e); if (anim.t >= 1) anim = null; }
@@ -403,11 +411,15 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const placeTag = (tag, s) => { const x = (s.x + 1) / 2 * W, y = (1 - s.y) / 2 * H, w = tag.offsetWidth || 30, h = tag.offsetHeight || 18; taken.push({l: x - w / 2, r: x + w / 2, t: y - h, b: y}); tag.style.display = ""; tag.style.transform = `translate(${((s.x + 1) / 2 * W).toFixed(1)}px, ${((1 - s.y) / 2 * H).toFixed(1)}px) translate(-50%, -100%)`; };
     for (const [k, p] of [...ppl]) {
       p.alpha += ((showP ? p.want : 0) - p.alpha) * 0.12;
-      if (p.want === 0 && p.alpha < 0.02) { scene.remove(p.skel, p.fig, p.shadow, p.halo); p.tag.remove(); ppl.delete(k); continue; }
+      if (p.want === 0 && p.alpha < 0.02) { scene.remove(p.skel, p.fig, p.shadow, p.halo, p.b3.group); p.mat.dispose(); p.white.dispose(); p.jmat.dispose(); p.tag.remove(); ppl.delete(k); continue; }
       p.pos.lerp(p.target, 0.18);
-      const hl = hoverPid === k, J = showP && peopleMode === "skel" ? skeletonAt(p) : null, a = Math.max(0, Math.min(1, p.alpha));
-      p.mat.opacity = a; p.white.opacity = a; p.mat.transparent = p.white.transparent = a < 0.99;
-      p.skel.visible = !!J && a > 0.02; p.fig.visible = !J && a > 0.02;
+      const hl = hoverPid === k, a = Math.max(0, Math.min(1, p.alpha)), P3 = showP && peopleMode === "skel" ? p.q.pose3d?.J : null;
+      // measured 3D body: joints relative to the feet, stood on the floor where the tracker places the person (next to their machine)
+      const J3 = P3 ? (p.J3 = jointsFrom(P3, (fm => [p.pos.x - fm[0], p.pos.z - fm[1]])(footMid(P3)), p.J3 || undefined)) : null;
+      const J = !J3 && showP && peopleMode === "skel" ? skeletonAt(p) : null;
+      p.mat.opacity = a; p.white.opacity = a; p.jmat.opacity = a; p.mat.transparent = p.white.transparent = p.jmat.transparent = a < 0.99;
+      p.b3.group.visible = !!J3 && a > 0.02; if (J3) { p.b3.set(J3); p.b3.group.scale.setScalar(1); }
+      p.skel.visible = !!J && a > 0.02; p.fig.visible = !J && !J3 && a > 0.02;
       p.shadow.position.set(p.pos.x, 0.015, p.pos.z); p.shadow.material.opacity = 0.16 * a; p.shadow.visible = a > 0.02;
       p.halo.position.set(p.pos.x, 0.025, p.pos.z); p.halo.material.opacity = hl ? 0.85 * a : 0; p.halo.visible = hl;
       p.fig.position.copy(p.pos); p.fig.scale.setScalar(hl ? 1.08 : 1);
@@ -418,7 +430,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       }
       p.tag.classList.toggle("hl", hl); const txt = hl ? p.full : p.short; if (p.tag.textContent !== txt) p.tag.textContent = txt;
       p.tag.style.opacity = a.toFixed(2);
-      const s = showP && a > 0.05 ? sp(J?.[0] ? J[0].clone().add(new THREE.Vector3(0, 0.32, 0)) : p.pos.clone().add(new THREE.Vector3(0, 2.0, 0))) : null;
+      const top = J3 ? J3[0] : J?.[0], s = showP && a > 0.05 ? sp(top ? top.clone().add(new THREE.Vector3(0, 0.34, 0)) : p.pos.clone().add(new THREE.Vector3(0, 2.0, 0))) : null;
       if (s) placeTag(p.tag, s); else p.tag.style.display = "none";
     }
     // machine labels: always shown, de-overlapped in screen space (busy/in-use win; idle ones give way)

@@ -266,7 +266,8 @@ function boxAt(tr, t) {
 const segLabel = sg => sg.state === "lift" ? `Set on ${machineName(sg.zone)}` : sg.state === "rest" ? `At ${machineName(sg.zone)}, not lifting` : "Moving / on the floor";
 const segColor = st => st === "lift" ? "var(--lift)" : st === "rest" ? "var(--rest)" : "var(--other)";
 function personReplay(host, tr, bd) { // video that follows one person, with skeleton, captions and chapters
-  host.innerHTML = `<div class="prp"><div class="prp-stage"><canvas></canvas><div class="prp-cap"></div><div class="prp-wait">Loading video…</div></div>
+  host.innerHTML = `<div class="prp"><div class="prp-stage"><canvas></canvas><div class="prp-cap"></div><div class="prp-wait">Loading video…</div><span class="prp-lbl">Camera</span></div>
+    <div class="prp-3d" hidden></div>
     <div class="prp-side"><div class="prp-h">Events</div><div class="prp-ch"></div></div></div>
     <div class="skp-bar"><button class="btn secondary sm" data-pp aria-label="Pause">${IC.pause}</button><input type="range" min="0" max="1000" value="0" aria-label="Position"><span class="num skp-t"></span><button class="btn ghost sm" data-sp>1×</button><label class="prp-tog"><input type="checkbox" checked data-sk> Skeleton</label></div>`;
   const pv = tr.parts ? new PartedVideo(tr.parts, {autoplay: false}) : null;
@@ -279,7 +280,7 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
   const ch = [...tr.sets.map((x, i) => ({t: x.t0, label: `Set ${i + 1} · ${x.reps} reps`, sub: machineName(x.m), state: "lift"})),
     ...bd.segs.filter(g => g.state === "rest" && g.t1 - g.t0 >= 4).map(g => ({t: g.t0, label: `At ${machineName(g.zone)}`, sub: `${fmtDur(g.t1 - g.t0)}, not lifting`, state: "rest"}))].sort((a, b) => a.t - b.t);
   host.querySelector(".prp-ch").innerHTML = ch.map(c => `<button data-seek="${c.t}"><i style="background:${segColor(c.state)}"></i><span><b>${esc(c.label)}</b><small>${esc(c.sub)} · ${clockFmt(c.t - T0)}</small></span></button>`).join("") || `<div class="muted small">No sets or station stays</div>`;
-  let playing = true, speed = 1, crop = null, raf, showSk = true;
+  let playing = true, speed = 1, crop = null, raf, showSk = true, curT = null, body3d = null;
   let want = T0;
   const seek = t => { want = Math.max(T0, Math.min(T1, t)); V.currentTime = want; crop = null; };
   v.addEventListener("loadeddata", () => { host.querySelector(".prp-wait")?.remove(); V.currentTime = want; V.play().catch(() => {}); }, {once: true});
@@ -308,14 +309,24 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
     cap.innerHTML = set ? `<i></i><b>Set ${si + 1} · ${set.reps} reps</b><span>${esc(machineName(set.m))}</span>` : smp.zone ? `<i></i><b>${esc(machineName(smp.zone))}</b><span>between sets</span>` : `<i></i><b>On floor</b>`;
     cap.className = "prp-cap " + (set ? "lift" : smp.zone ? "rest" : "");
     range.value = String(Math.round((t - T0) / span * 1000)); tEl.textContent = `${clockFmt(t - T0)} / ${clockFmt(span)}`;
+    curT = t;
   }
   raf = requestAnimationFrame(frame);
+  // 3D body next to the video, once the 3D sidecar has loaded (none: the replay keeps its 2D-only layout)
+  const p3 = host.querySelector(".prp-3d");
+  Promise.resolve(tr.pose3dReady).then(() => {
+    if (!tr.has3d?.() || !p3.isConnected) return;
+    host.querySelector(".prp").classList.add("with3d"); p3.hidden = false;
+    import("./pose3dview.js").then(({mountBody3D}) => { if (!p3.isConnected) return;
+      body3d = mountBody3D(p3, {tr, seek, state: () => ({t: curT, crop, vw: v.videoWidth, vh: v.videoHeight, video: v})}); })
+      .catch(e => { console.warn("3D body view unavailable", e); p3.innerHTML = `<div class="empty">3D needs WebGL</div>`; });
+  }).catch(() => {});
   host.querySelector("[data-pp]").onclick = e => { playing = !playing; e.currentTarget.innerHTML = playing ? IC.pause : IC.play; };
   host.querySelector("[data-sp]").onclick = e => { speed = speed === 1 ? 2 : speed === 2 ? 4 : 1; e.currentTarget.textContent = speed + "×"; };
   host.querySelector("[data-sk]").onchange = e => { showSk = e.target.checked; };
   range.oninput = () => seek(T0 + range.value / 1000 * span);
   host.querySelector(".prp-ch").onclick = e => { const b = e.target.closest("[data-seek]"); if (b) seek(+b.dataset.seek); };
-  return {seek, destroy() { cancelAnimationFrame(raf); V.pause(); v.removeAttribute("src"); v.innerHTML = ""; v.load(); }};
+  return {seek, destroy() { cancelAnimationFrame(raf); body3d?.destroy(); V.pause(); v.removeAttribute("src"); v.innerHTML = ""; v.load(); }};
 }
 function stationTimesHTML(bd) {
   const mx = Math.max(1, ...bd.stations.map(s => s.all), bd.floor);
@@ -513,10 +524,44 @@ function hotspots(plan, heat, n = 3) {
   return out;
 }
 
+/* replay clock for one camera: play/pause, drag to scrub the whole recording, speed, set ticks coloured by station */
+const STATION_COLS = ["#007faf", "#f29d0c", "#2fa36b", "#8e5bd8", "#e2574c", "#14a3b8", "#c7861a", "#5f7df0", "#d6559a", "#6f8f2a"];
+function timeScrubber(host, camId) {
+  const info = src.clockInfo?.(camId); if (!info || !info.duration) { host.hidden = true; return {destroy() {}}; }
+  const D = info.duration, stations = [...new Set(info.sets.map(s => s.m))], col = m => STATION_COLS[stations.indexOf(m) % STATION_COLS.length];
+  // headcount sparkline (busy moments) behind the set ticks
+  const N = 240, bins = Array(N).fill(0), nb = Array(N).fill(0); for (const [t, n] of info.counts) { const i = Math.min(N - 1, Math.max(0, Math.floor(t / D * N))); bins[i] += n; nb[i]++; }
+  const avg = bins.map((v, i) => nb[i] ? v / nb[i] : 0), mx = Math.max(1, ...avg);
+  const spark = `<svg class="ts-spark" viewBox="0 0 ${N} 30" preserveAspectRatio="none" aria-hidden="true"><path d="M0 30 ${avg.map((v, i) => `L${i} ${(30 - v / mx * 28).toFixed(1)} L${i + 1} ${(30 - v / mx * 28).toFixed(1)}`).join(" ")} L${N} 30Z"/></svg>`;
+  host.innerHTML = `<div class="ts"><button class="ts-pp" aria-label="Pause">${IC.pause}</button>
+    <div class="ts-main"><div class="ts-track" role="slider" tabindex="0" aria-label="Replay time" aria-valuemin="0" aria-valuemax="${Math.round(D)}">${spark}
+      <div class="ts-ticks">${info.sets.map(s => `<i data-seek="${s.t0}" data-tip="${esc(machineName(s.m))}${s.ex ? " · " + esc(actName(s.ex)) : ""}\n${s.reps} reps · ${clockFmt(s.t0)}" style="left:${(s.t0 / D * 100).toFixed(2)}%;width:max(3px,${((s.t1 - s.t0) / D * 100).toFixed(2)}%);background:${col(s.m)}"></i>`).join("")}</div>
+      <div class="ts-rail"><div class="ts-fill"></div></div><div class="ts-knob"></div></div>
+      <div class="ts-key">${stations.map(m => `<span><i style="background:${col(m)}"></i>${esc(machineName(m))}</span>`).join("")}</div></div>
+    <span class="ts-t num"></span><button class="ts-sp" aria-label="Playback speed">1×</button></div>`;
+  const track = host.querySelector(".ts-track"), fill = host.querySelector(".ts-fill"), knob = host.querySelector(".ts-knob"), tEl = host.querySelector(".ts-t"), pp = host.querySelector(".ts-pp"), sp = host.querySelector(".ts-sp");
+  let drag = null, lastSeek = 0, raf;
+  const at = e => { const r = track.getBoundingClientRect(); return Math.max(0, Math.min(D - 0.1, (e.clientX - r.left) / r.width * D)); };
+  const show = t => { const k = (t / D * 100).toFixed(3) + "%"; fill.style.width = k; knob.style.left = k; tEl.textContent = `${clockFmt(t)} / ${clockFmt(D)}`; track.setAttribute("aria-valuenow", Math.round(t)); };
+  const go = (t, force) => { const now = performance.now(); if (force || now - lastSeek > 120) { lastSeek = now; src.seek(camId, t); } };
+  track.addEventListener("pointerdown", e => { const tk = e.target.closest("[data-seek]"); drag = tk ? +tk.dataset.seek : at(e); track.setPointerCapture(e.pointerId); show(drag); go(drag, true); host.classList.add("dragging"); e.preventDefault(); });
+  track.addEventListener("pointermove", e => { if (drag == null) return; drag = at(e); show(drag); go(drag); });
+  const end = () => { if (drag == null) return; go(drag, true); drag = null; host.classList.remove("dragging"); };
+  track.addEventListener("pointerup", end); track.addEventListener("pointercancel", end);
+  track.onkeydown = e => { const d = e.key === "ArrowRight" ? 10 : e.key === "ArrowLeft" ? -10 : 0; if (d) { e.preventDefault(); go(Math.max(0, Math.min(D - 0.1, src.timeOf(camId) + d)), true); } };
+  const icon = () => { const p = src.isPaused(camId); pp.innerHTML = p ? IC.play : IC.pause; pp.setAttribute("aria-label", p ? "Play" : "Pause"); };
+  pp.onclick = () => { src.setPaused(camId, !src.isPaused(camId)); icon(); };
+  sp.textContent = (src.speed || 1) + "×";
+  sp.onclick = () => { src.speed = (src.speed || 1) === 1 ? 2 : src.speed === 2 ? 4 : 1; sp.textContent = src.speed + "×"; };
+  const loop = () => { raf = requestAnimationFrame(loop); if (drag == null) show(src.timeOf(camId)); };
+  icon(); loop();
+  return {destroy() { cancelAnimationFrame(raf); }};
+}
+
 function MapPage() {
   let layer = store.get("maplayer", "both"), hover = null;
   let mode = store.get("mapmode2", "twin"), lastFloor = {}, lastStates = {};
-  const scenes = {};
+  const scenes = {}, scrubs = [];
   const markHover = pid => { hover = pid; document.querySelectorAll(".mapgrid [data-pid]").forEach(e => e.classList.toggle("hl", pid != null && +e.dataset.pid === pid)); };
   const setHover = pid => { markHover(pid); Object.values(scenes).forEach(s => s?.highlight?.(pid)); };
   const personSheet = q => sheet(`<div class="sheet-h"><span class="avatar" style="--a:${q.activity && q.activity !== "standing" ? "var(--lift)" : "var(--muted)"}">${esc(initials(q.label))}</span><div><b>${esc(q.label)}</b><small>${esc(q.activity ? actName(q.activity) : "On the floor")}${q.zone ? " · " + esc(machineName(q.zone)) : ""}</small></div></div>
@@ -568,18 +613,19 @@ function MapPage() {
     mount(v) {
       const plans = src.plans();
       if (!plans.length) { v.append(el(`<div class="card empty">No calibrated cameras. Calibrate one under Cameras → Floor map.</div>`)); return; }
-      for (const p of plans) v.append(el(`<section class="mapgrid" data-plan="${esc(p.id)}"><div class="card mapcard"><div class="card-h"><h2>${esc(p.name)}</h2><div class="seg" role="group" aria-label="View">${modesFor(p).map(([k, l]) => `<button data-mode="${k}">${l}</button>`).join("")}</div><span class="right legend"><span><i style="background:var(--lift)"></i>In set</span><span><i style="background:var(--rest)"></i>At station</span><span><i style="background:var(--idle)"></i>Moving</span><span><i style="background:var(--heat)"></i>Traffic</span></span></div><div class="pv"></div><div class="p3" hidden></div></div>
+      for (const p of plans) v.append(el(`<section class="mapgrid" data-plan="${esc(p.id)}"><div class="card mapcard"><div class="card-h"><h2>${esc(p.name)}</h2><div class="seg" role="group" aria-label="View">${modesFor(p).map(([k, l]) => `<button data-mode="${k}">${l}</button>`).join("")}</div><span class="right legend"><span><i style="background:var(--lift)"></i>In set</span><span><i style="background:var(--rest)"></i>At station</span><span><i style="background:var(--idle)"></i>Moving</span><span><i style="background:var(--heat)"></i>Traffic</span></span></div><div class="pv"></div><div class="p3" hidden></div>${src.clockInfo ? `<div class="tscrub"></div>` : ""}</div>
         <div class="col"><section class="card kpi"><span class="eyebrow">On camera</span><div class="row"><span class="big pc">–</span><span class="delta pk"></span></div></section>
         <section class="card"><div class="card-h"><h2>People</h2></div><div class="plist pl"></div></section>
         <section class="card"><div class="card-h"><h2>Hotspots</h2><span class="right hint">person-time</span></div><div class="plist hs"></div></section></div></section>`));
       for (const p of plans) { const box = v.querySelector(`.mapgrid[data-plan="${CSS.escape(p.id)}"]`); showMode(box, p);
+        const ts = box.querySelector(".tscrub"); if (ts) scrubs.push(timeScrubber(ts, (p.cameras?.[0] || p).id));
         box.querySelector(".seg")?.addEventListener("click", e => { const b = e.target.closest("[data-mode]"); if (!b) return; mode = b.dataset.mode; store.set("mapmode2", mode); for (const q of plans) showMode(document.querySelector(`.mapgrid[data-plan="${CSS.escape(q.id)}"]`), q); }); }
       v.onmouseover = e => { const t = e.target.closest("[data-pid]"); setHover(t ? +t.dataset.pid : null); };
       v.onmouseleave = () => setHover(null);
       const open = e => { const t = e.target.closest("[data-member]"); if (t) location.hash = "member-" + t.dataset.member; };
       v.onclick = open; v.onkeydown = e => { if (e.key === "Enter") open(e); };
     },
-    unmount() { for (const k of Object.keys(scenes)) { scenes[k]?.destroy?.(); delete scenes[k]; } },
+    unmount() { for (const k of Object.keys(scenes)) { scenes[k]?.destroy?.(); delete scenes[k]; } scrubs.forEach(s => s.destroy()); scrubs.length = 0; },
     async update() {
       const plans = src.plans(); if (!plans.length || !live) return;
       const fl = await src.floor(), states = lastStates = Object.fromEntries(live.machines.map(m => [m.id, m]));
