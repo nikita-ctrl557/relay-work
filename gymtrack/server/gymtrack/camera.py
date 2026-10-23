@@ -299,7 +299,7 @@ def standing_samples(frames, W: int, Hh: int):
             continue
         if not (no[1] < sh[1] < hip[1] < kn[1] < an[1]):
             continue
-        if (kn[1] - hip[1]) < 0.2 * L or (an[1] - kn[1]) < 0.2 * L or abs(P[11, 1] - P[12, 1]) > 0.06 * L:
+        if (kn[1] - hip[1]) < 0.2 * L or (an[1] - kn[1]) < 0.2 * L or abs(P[11, 1] - P[12, 1]) > 0.12 * L:
             continue
         if an[1] > Hh - 2:
             continue
