@@ -126,7 +126,7 @@ def twin_geometry(real_box, refl_box) -> bool:
         return False  # behind: feet and head both higher in the image (heads are below a wall camera)
     ix = max(0.0, min(real_box[0] + real_box[2], refl_box[0] + refl_box[2]) - max(real_box[0], refl_box[0]))
     iy = max(0.0, min(real_box[1] + real_box[3], refl_box[1] + refl_box[3]) - max(real_box[1], refl_box[1]))
-    if ix * iy > 0.5 * refl_box[2] * refl_box[3]:
+    if ix * iy > 0.75 * refl_box[2] * refl_box[3]:
         return False  # mostly inside the owner's box: a second detection of the same body, not a copy
     return abs(feet(refl_box)[0] - feet(real_box)[0]) <= 1.2 * rh + 10
 
@@ -270,7 +270,7 @@ def estimate_mirrors(pairs: list[Pair], W: float = 640, H: float = 360, min_pair
             cols[int(x // 30)].append(y)
         cx = np.array([(k + 0.5) * 30 for k in cols])
         cy = np.array([np.percentile(v, 90) for v in cols.values()])
-        if len(cx) >= 3 and np.ptp(cx) > 60:
+        if len(cx) >= 4 and np.ptp(cx) > 120:
             b, a = np.polyfit(cx, cy, 1)
             b = float(np.clip(b, -0.15, 0.15))
             a = float(np.median(cy - b * cx))
@@ -296,7 +296,7 @@ def estimate_mirrors(pairs: list[Pair], W: float = 640, H: float = 360, min_pair
     return out
 
 
-def refine_on_frame(m: dict, frame: np.ndarray, down_px: int = 30, up_px: int = 6, max_grow_px: float = 260.0,
+def refine_on_frame(m: dict, frame: np.ndarray, down_px: int = 30, up_px: int = 6, max_grow_px: float = 140.0,
                     owner_limit: float | None = None) -> dict:
     """Snap a mirror polygon to the scene (static cues on a still of the empty scene).
 
@@ -328,16 +328,45 @@ def refine_on_frame(m: dict, frame: np.ndarray, down_px: int = 30, up_px: int = 
         v = np.zeros(len(xx))
         v[ok] = np.max(np.stack([gy[ys[ok] + k, xx[ok]] for k in (-1, 0, 1)]), 0)
         return v
-    offs = list(range(-up_px, down_px + 1))
-    prof = np.array([float(np.mean(row(d))) for d in offs])
-    med = float(np.median(prof))
-    strong = [i for i in range(1, len(offs) - 1) if prof[i] >= prof[i - 1] and prof[i] >= prof[i + 1]
-              and prof[i] >= max(2.0 * med, 0.6 * float(prof.max()))]
-    if strong:
-        d = offs[strong[0]]
-        if owner_limit is not None:
-            d = min(d, owner_limit - a)
-        a = a + d
+    # bottom edge, traced column by column: in each column, the first strong horizontal edge at or below the
+    # estimate (the glass's lower frame; the skirting board's lower edge below it is often stronger, but real
+    # feet can stand right in front of that), then a robust straight line through those points
+    gys = cv2.blur(gy, (7, 1))
+    pts = []
+    for x in xs[::3]:
+        y_est = a + b * x
+        lo = int(max(1, y_est - up_px))
+        hi = int(min(H - 2, y_est + down_px if owner_limit is None else min(y_est + down_px, owner_limit + b * x)))
+        if hi - lo < 3:
+            continue
+        col = gys[lo:hi + 1, x]
+        cmax = float(col.max())
+        if cmax < 8:
+            continue
+        for i in range(1, len(col) - 1):
+            if col[i] >= 0.6 * cmax and col[i] >= col[i - 1] and col[i] >= col[i + 1]:
+                pts.append((float(x), float(lo + i)))
+                break
+    if len(pts) >= 8:  # the line through most of them (within 3 px), from every pair of points
+        P = np.array(pts)
+        best = (0, None)
+        for i in range(len(P)):
+            for j in range(i + 1, len(P)):
+                dx = P[j, 0] - P[i, 0]
+                if dx < 30:
+                    continue
+                bb = (P[j, 1] - P[i, 1]) / dx
+                if abs(bb) > 0.2:
+                    continue
+                aa = P[i, 1] - bb * P[i, 0]
+                n = int(np.sum(np.abs(P[:, 1] - (aa + bb * P[:, 0])) <= 3.0))
+                if n > best[0]:
+                    best = (n, (aa, bb))
+        if best[1] is not None and best[0] >= max(6, 0.35 * len(P)):
+            aa, bb = best[1]
+            inl = np.abs(P[:, 1] - (aa + bb * P[:, 0])) <= 3.0
+            bb, aa = np.polyfit(P[inl, 0], P[inl, 1], 1)
+            a, b = float(aa), float(bb)
     # grow sideways along the bottom edge
     allx = np.arange(0, W)
     v = row(0, allx)
@@ -424,43 +453,45 @@ def warp_pair(Hm: np.ndarray, p: Pair) -> Pair:
     return Pair(p.real, p.refl, p.t0, p.t1, p.corr, p.energy, p.variant, wb(p.real_box), wb(p.refl_box))
 
 
-def estimate_camera(results: dict, stills: dict, W: float = 640, H: float = 360, min_pairs: int = 3) -> dict:
+def estimate_camera(results: dict, stills: dict, W: float = 640, H: float = 360, min_pairs: int = 3,
+                    to_ref: dict | None = None, ref: str | None = None) -> dict:
     """Mirrors for several recordings from one camera (re-aimed a little between them): reflection pairs of
     all recordings are pooled in the frame of the one with most pairs (stills registered with `register`),
     the regions estimated there, mapped back into each recording and snapped to its own still.
 
     results: {name: replay-format data}, stills: {name: still frame}. Returns {name: {"mirrors": [...],
-    "pairs": n (own), "pooled": n}}."""
+    "pairs": n (own), "pooled": n}}. to_ref/ref: known image->reference homographies (e.g. from the cameras'
+    floor calibrations) instead of registering the stills."""
     pairs = {n: find_pairs(d.get("timeline", []), d.get("poses", []), W, H) for n, d in results.items()}
-    ref = max(pairs, key=lambda n: (len({(p.real, p.refl) for p in pairs[n]}), len(pairs[n])))
-    to_ref = {n: (np.eye(3) if n == ref else register(stills[n], stills[ref])) for n in results}
-    pooled = []
-    for n, ps in pairs.items():
-        if to_ref[n] is None:
-            continue
-        # pair keys made unique per recording (track ids restart in each)
-        for p in ps:
-            w = warp_pair(to_ref[n], p)
-            pooled.append(Pair((n, p.real), (n, p.refl), p.t0, p.t1, p.corr, p.energy, p.variant, w.real_box, w.refl_box))
-    base = estimate_mirrors(pooled, W, H, min_pairs=min_pairs)
+    npairs = {n: len({(p.real, p.refl) for p in ps}) for n, ps in pairs.items()}
+    if ref is None:
+        ref = max(pairs, key=lambda n: (npairs[n], len(pairs[n])))
+    if to_ref is None:
+        to_ref = {n: (np.eye(3) if n == ref else register(stills[n], stills[ref])) for n in results}
+
+    def own(n):
+        ms = estimate_mirrors(pairs[n], W, H, min_pairs=min_pairs)
+        return [refine_on_frame(m, stills[n], owner_limit=m.get("limit")) if stills.get(n) is not None else m for m in ms]
+    base = own(ref)
     out = {}
     for n in results:
-        Hm = to_ref[n]
-        ms = []
-        if Hm is not None:
+        Hm = to_ref.get(n)
+        if n == ref:
+            ms, how = base, "own pairs"
+        elif npairs[n] >= min_pairs:
+            ms, how = own(n), "own pairs"
+        elif Hm is not None:  # too little evidence here: the reference's mirrors, moved into this view and re-snapped
             back = np.linalg.inv(Hm)
+            ms, how = [], "from " + ref
             for m in base:
                 poly = warp_points(back, m["polygon"])
                 (bx0, by0), (bx1, by1) = poly[3], poly[2]
                 b = (by1 - by0) / max(1e-6, bx1 - bx0)
-                lim = None
-                if m.get("limit") is not None:  # the owners' floor limit, carried over as a shift of the bottom edge
-                    lim = by0 - b * bx0 + (m["limit"] - m["base"][0])
-                mm = {**m, "polygon": [[round(x, 1), round(y, 1)] for x, y in poly], "base": [round(by0 - b * bx0, 2), round(b, 4)],
-                      "limit": None if lim is None else round(lim, 2)}
-                ms.append(refine_on_frame(mm, stills[n], owner_limit=mm["limit"]) if stills.get(n) is not None else mm)
-        out[n] = {"mirrors": ms, "pairs": len({(p.real, p.refl) for p in pairs[n]}), "pooled": len({(p.real, p.refl) for p in pooled}),
-                  "registered": Hm is not None, "ref": ref}
+                mm = {**m, "polygon": [[round(x, 1), round(y, 1)] for x, y in poly], "base": [round(by0 - b * bx0, 2), round(b, 4)], "limit": None}
+                ms.append(refine_on_frame(mm, stills[n], up_px=8, down_px=12) if stills.get(n) is not None else mm)
+        else:
+            ms, how = [], "none"
+        out[n] = {"mirrors": ms, "pairs": npairs[n], "how": how, "ref": ref}
     return out
 
 

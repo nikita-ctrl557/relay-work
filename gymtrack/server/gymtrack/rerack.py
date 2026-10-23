@@ -168,7 +168,7 @@ def nearest_hand(poses: list[dict], t: float, x: float, y: float, frame_size, wi
 
 def person_tracks(timeline: list[dict]) -> dict[int, list[tuple[float, float | None, float | None, tuple]]]:
     """pid -> [(t, plan_x, plan_y, box_norm)] from replay timeline entries
-    ("p": [id, member, zone, planted, x0, y0, x1, y1, activity, plan_x, plan_y])."""
+    ("p": [id, member, zone, planted, x, y, w, h (frame fractions), activity, plan_x, plan_y])."""
     out: dict[int, list] = {}
     for e in timeline:
         for q in e["p"]:
@@ -314,7 +314,11 @@ def flips_from_scores(t: np.ndarray, score: np.ndarray, slot_ids, *, on: float =
         score[np.ix_(busy, js)] = np.nan
     flips = []
     for j, sid in enumerate(slot_ids):
-        st = SlotState(on=on, off=off, hold_s=hold_s)
+        col = score[:, j]
+        # noise floor of this patch, capped so a slot that is EMPTY most of the time doesn't raise its own bar
+        base = min(0.15, float(np.nanpercentile(col, 30))) if np.isfinite(col).any() else 0.0
+        # slots whose patch is noisy (texture, drift, background behind the rack) get proportionally higher bars
+        st = SlotState(on=max(on, base + 0.12), off=max(off, base + 0.06), hold_s=hold_s)
         occ_runs: list[float] = []          # start times of occlusion runs
         was_hidden = False
         for k in range(len(t)):

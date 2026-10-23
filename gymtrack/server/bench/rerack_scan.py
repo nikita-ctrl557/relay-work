@@ -1,6 +1,9 @@
 """Dumbbell-rack slot scan for one video segment (offline prototype, CPU, 2 threads).
 
-    python -m bench.rerack_scan VIDEO RACKS.json OUT_PREFIX [--fps 2] [--roi-offset X Y]
+    python -m bench.rerack_scan VIDEO RACKS.json OUT_PREFIX --replay REPLAY.json --t0 SEG_START \
+        (--full-frame | --roi-offset X Y) [--fps 2]
+    e.g. python -m bench.rerack_scan segs/cables0.mp4 bench/racks_cables0.json out/cables0 \
+             --replay replay/cables.json --t0 0 --full-frame
 
 Stage 1 (`reference`): every frame of the rack ROI is registered to the first one (phase correlation, the
 wall cameras drift by tens of px within a segment); the per-pixel MEDIAN over the segment is the rack's
@@ -23,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gymtrack.rerack import RackModel  # noqa: E402
 
 cv2.setNumThreads(2)
-SENTINEL_MAX = 0.3
+SENTINEL_MAX = 0.45
 
 
 def frames(path, fps_s, roi=None):
@@ -44,7 +47,8 @@ def frames(path, fps_s, roi=None):
 
 
 def register(ref_g, g, win):
-    (dx, dy), r = cv2.phaseCorrelate(ref_g, g, win)
+    # NB: opencv-python 5.0's phaseCorrelate writes into its first argument (windowing in place) -> pass copies
+    (dx, dy), r = cv2.phaseCorrelate(ref_g.copy(), g.copy(), win)
     return dx, dy, r
 
 
@@ -68,7 +72,8 @@ def occluders(timeline, poses, t, W, H, pad=0.15):
     for e in timeline:
         if abs(e["t"] - t) <= 0.75:
             for q in e["p"]:
-                x0, y0, x1, y1 = q[4] * W, q[5] * H, q[6] * W, q[7] * H
+                x0, y0 = q[4] * W, q[5] * H          # timeline boxes are x, y, w, h (fractions of the frame)
+                x1, y1 = x0 + q[6] * W, y0 + q[7] * H
                 px, py = (x1 - x0) * pad, (y1 - y0) * pad * 0.5
                 boxes.append((x0 - px, y0 - py, x1 + px, y1 + py))
     for fr in poses:
@@ -112,6 +117,8 @@ def scan(video, rack: RackModel, ref_img, offset, replay, t0, fps_s=2.0, roi=Non
         while pi < len(ps) and ps[pi]["t"] < gt - 2:
             pi += 1
         occ = occluders(tl[ti:ti + 6], ps[pi:pi + 60], gt, W, H)
+        # NB: no depth test on purpose - people BEHIND a free-standing rack change the background seen through
+        # the slots too (they caused most false events on the top slots), so any overlap hides the slot
         gr = cv2.warpAffine(g, np.float32([[1, 0, -dx], [0, 1, -dy]]), g.shape[::-1], borderMode=cv2.BORDER_REPLICATE)
         row = []
         for (x0, y0, x1, y1, rp, norm), sen in zip(patches, sentinels):
@@ -138,10 +145,18 @@ def main():
     ap.add_argument("--fps", type=float, default=2.0)
     ap.add_argument("--roi-offset", type=int, nargs=2, default=[0, 0], help="video is a crop starting here")
     ap.add_argument("--ref-only", action="store_true")
+    ap.add_argument("--full-frame", action="store_true",
+                    help="VIDEO is the full camera frame: crop the racks' offset + roi from it (no pre-cut crop needed)")
     a = ap.parse_args()
+    roi = None
+    if a.full_frame:
+        c = json.load(open(a.racks))
+        ox, oy = c.get("offset", [0, 0])
+        roi = (ox + c["roi"][0], oy + c["roi"][1], ox + c["roi"][2], oy + c["roi"][3])
+        a.roi_offset = [ox, oy]
     ref_path = Path(a.out + "-ref.png")
     if not ref_path.exists():
-        ref, shifts = reference(a.video)
+        ref, shifts = reference(a.video, roi=roi)
         cv2.imwrite(str(ref_path), ref)
         print("reference", ref.shape, "drift dx %.0f..%.0f dy %.0f..%.0f" % (shifts[:, 1].min(), shifts[:, 1].max(),
                                                                              shifts[:, 2].min(), shifts[:, 2].max()))
@@ -150,7 +165,7 @@ def main():
     cfg = json.load(open(a.racks))
     rack = RackModel.from_config(cfg)
     replay = json.load(open(a.replay)) if a.replay else {"timeline": [], "poses": []}
-    ts, sc, sh = scan(a.video, rack, cv2.imread(str(ref_path)), a.roi_offset, replay, a.t0, a.fps)
+    ts, sc, sh = scan(a.video, rack, cv2.imread(str(ref_path)), a.roi_offset, replay, a.t0, a.fps, roi=roi)
     np.savez_compressed(a.out + "-scores.npz", t=ts, score=sc, shift=sh, slots=np.array([s.id for s in rack.slots]))
     print("scanned", len(ts), "frames,", len(rack.slots), "slots; occluded %.0f%%" % (100 * np.isnan(sc).mean()))
 

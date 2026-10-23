@@ -1,0 +1,18 @@
+{
+ "camera": "floor",
+ "segment": "floor2",
+ "frame_size": [1280, 720],
+ "offset": [630, 190],
+ "roi": [0, 0, 400, 250],
+ "note": "Floor wall camera, segment floor2. Heads are ~10-16 px here. Weights are PLACEHOLDERS (tower C carries 1-10 labels).",
+ "racks": [
+  {"id": "A", "columns": [
+    {"id": "L", "first": [44, 44], "last": [42, 196], "n": 10, "size": [[9, 8], [13, 12]], "sentinel_dx": 18, "weights": [12, 14, 16, 18, 20, 22, 24, 26, 28, 30]},
+    {"id": "R", "first": [97, 44], "last": [96, 196], "n": 10, "size": [[9, 8], [13, 12]], "sentinel_dx": -18, "weights": [12, 14, 16, 18, 20, 22, 24, 26, 28, 30]}
+  ]},
+  {"id": "C", "columns": [
+    {"id": "L", "first": [298, 42], "last": [284, 186], "n": 10, "size": [[9, 8], [13, 12]], "sentinel_dx": 16, "weights": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]},
+    {"id": "R", "first": [352, 42], "last": [348, 190], "n": 10, "size": [[9, 8], [13, 12]], "sentinel_dx": -16, "weights": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}
+  ]}
+ ]
+}

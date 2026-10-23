@@ -6,7 +6,7 @@ Segment start offsets are taken from the published data so times line up with th
 """
 import json, os, collections
 S = '/tmp/claude-0/-home-user-relay-work/851771c1-781b-56fa-9dda-a42b6ec0afa3/scratchpad/'
-R = S + 'rerun/'; OUT = S + 'replay/'
+R = os.environ.get('RUN_DIR', S + 'rerun/'); OUT = S + 'replay/'
 os.makedirs(R + 'merged', exist_ok=True)
 CAMS = {"floor": [f"floor{i}" for i in range(7)], "cables": ["cables0", "cables1"]}
 SET_KEYS = ("t0", "t1", "m", "reps", "who", "pid", "ex", "ex_conf", "credit", "reps_low_conf")
