@@ -674,8 +674,9 @@ class ReplaySource {
     /* each camera here is a separate recording (a different visit, not a simultaneous feed): one session plays at a time */
     this.cfg.allMachines = this.cfg.machines.slice(); this.cfg.allCameras = this.cfg.cameras.slice();
     this.cams.forEach((c, i) => { c.session = c.session_name || `Session ${String.fromCharCode(65 + i)} · ${c.short || c.name}`; });
-    let pick = null; try { pick = localStorage.getItem("gymtrack:session"); } catch {}
-    this.selectSession(this.cams.some(c => c.id === pick) ? pick : this.cams[0]?.id);
+    let pick = null; try { pick = localStorage.getItem("gymtrack:session2"); } catch {}
+    const def = (this.cams.find(c => c.has3d || /cable/i.test(c.id)) || this.cams[0])?.id;  // open on the session that has 3D bodies
+    this.selectSession(this.cams.some(c => c.id === pick) ? pick : def);
     const kick = () => this.act && !this.act.userPaused && (this.act.pv || this.act.el).play().catch(() => {});
     addEventListener("pointerdown", kick, {once: true});
   }
@@ -683,7 +684,7 @@ class ReplaySource {
   get session() { return this.act?.id || null; }
   selectSession(id) {
     const c = this.cams.find(x => x.id === id); if (!c) return;
-    this.act = c; try { localStorage.setItem("gymtrack:session", id); } catch {}
+    this.act = c; try { localStorage.setItem("gymtrack:session2", id); } catch {}
     for (const o of this.cams) { const v = o.pv || o.el; if (o === c) { if (!o.userPaused) v.play?.().catch?.(() => {}); } else v.pause?.(); }
     this.cfg.cameras.length = 0; this.cfg.cameras.push(...this.cfg.allCameras.filter(x => x.id === id));
     this.cfg.machines.length = 0; this.cfg.machines.push(...this.cfg.allMachines.filter(m => c.machines.some(x => x.id === m.id)));
