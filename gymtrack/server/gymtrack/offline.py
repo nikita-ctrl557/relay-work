@@ -163,6 +163,8 @@ def _finish(cfg: GymConfig, cam: Camera, engine: Engine, sink, start_ts: float, 
                 data["looks"] = tracker.appearance_summary()
             except Exception:
                 pass
+        if tracker is not None and hasattr(tracker, "identity_summary"):
+            data["sigs"] = tracker.identity_summary()  # in memory only: stitch() pops it
         info = finish_sets(data, cfg, cam)
         kept = apply_to_records(engine, data["sets"], start_ts)
         replay_sets = data["sets"]

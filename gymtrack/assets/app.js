@@ -107,6 +107,7 @@ function FloorPage() {
       const showSkel = store.get("skel", true);
       for (const t of wall.querySelectorAll(".tile")) {
         const layer = t.querySelector(".hits"), seen = new Set(), list = src.peopleNow(t.dataset.cam);
+        t.classList.toggle("drawn", !!src.cleanVideo?.(t.dataset.cam)); // clean footage: boxes and ids come from the app, not the video
         const fr = t.querySelector(".frame") || t, cv = t.querySelector(".skel"), dpr = devicePixelRatio || 1, w = fr.clientWidth, hh0 = fr.clientHeight;
         if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(hh0 * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(hh0 * dpr); }
         const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, hh0);
@@ -125,15 +126,16 @@ function FloorPage() {
           const key = String(q.pid); seen.add(key);
           let h = layer.querySelector(`[data-pid="${key}"]`);
           if (!h) {
-            h = el(`<button class="hit" data-pid="${key}"><span></span></button>`); layer.append(h);
+            h = el(`<button class="hit" data-pid="${key}"><i class="hid"></i><span></span></button>`); layer.append(h);
           }
           if (h.dataset.label !== q.label || h.dataset.act !== (q.activity || "")) {
             h.dataset.label = q.label; h.dataset.act = q.activity || "";
+            h.querySelector(".hid").textContent = (q.label.match(/#\d+/) || [q.label])[0]; // same id as the Floor map and the profile
             h.querySelector("span").textContent = q.label + (q.activity && q.activity !== "standing" ? " · " + actName(q.activity) : "") + (q.member ? "  →" : "");
             h.setAttribute("aria-label", q.member ? `Open ${q.label}'s profile` : `${q.label} (no profile)`);
           }
           if (q.member) h.dataset.member = q.member; else delete h.dataset.member;
-          h.classList.toggle("lifting", !!(q.activity && q.activity !== "standing"));
+          h.classList.toggle("lifting", isLift(q));
           const [x, y, w, hh] = q.box;
           h.style.cssText = `left:${(x * 100).toFixed(2)}%;top:${(y * 100).toFixed(2)}%;width:${(w * 100).toFixed(2)}%;height:${(hh * 100).toFixed(2)}%`;
         }
@@ -614,7 +616,8 @@ function MapPage() {
         view = mountTwin(box.querySelector(".p3"), {plan: p, machines: cfg.machines, cams, layer: () => layer, labelOf,
           people: () => (p.cameras || [{id: p.id}]).flatMap(c => src.peopleNow?.(c.id) || []), states: () => lastStates, heat: () => src.heat?.(p.id) || lastFloor[p.id]?.heat,
           usage: () => Object.fromEntries(Object.values(util).map(u => [u.machine, {busy_s: u.busy, sets: u.n}])),
-          onHover: markHover, onOpen: openPerson, onMachine: openMachine, room, clock: src.timeOf ? () => src.timeOf(clockCam) : null});
+          onHover: markHover, onOpen: openPerson, onMachine: openMachine, room, clock: src.timeOf ? () => src.timeOf(clockCam) : null,
+          cam3d: src.camera3dAt ? t => src.camera3dAt(clockCam, t ?? src.timeOf?.(clockCam)) : null});
       } else {
         const sc = src.sceneFor(p.id), [{mountScene}, meta] = await Promise.all([import("./scene3d.js"), sc.meta()]);
         if (scenes[key] !== token) return;

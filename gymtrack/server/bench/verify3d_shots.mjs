@@ -15,7 +15,8 @@ const [session = 'cables', OUT = './shots', times = '240', mem = '', BASE = 'htt
 fs.mkdirSync(OUT, {recursive: true});
 const T = times.split(',').map(Number), MEM = mem ? mem.split(',').map(s => s.split('@').map(Number)) : [];
 const b = await chromium.launch({executablePath: '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--use-gl=swiftshader', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required']});
-const ctx = await b.newContext({viewport: {width: 1440, height: 1000}});
+const VW = +(process.env.VW || 1440), TAG = VW === 1440 ? '' : `-w${VW}`; // VW=390: phone
+const ctx = await b.newContext({viewport: {width: VW, height: VW < 600 ? 844 : 1000}, deviceScaleFactor: VW < 600 ? 2 : 1});
 await ctx.route(/cdn\.jsdelivr\.net/, r => r.fulfill({path: CDN + r.request().url().split('/').pop(), contentType: 'text/javascript'}));
 await ctx.route(/fonts\.(googleapis|gstatic)/, r => r.abort());
 await ctx.route(/replay\/(cables|floor)-[pc]\d\.mp4/, r => {
@@ -41,7 +42,7 @@ for (const t of T) {
   await seekPause(t);
   for (const v of ['iso', 'cam']) {
     await p.evaluate(v => document.querySelector(`.twin [data-v="${v}"]`)?.click(), v); await settle(5000);
-    const f = `${OUT}/map-${session}-${t}-${v}.png`; await p.screenshot({clip: await card.boundingBox(), path: f, timeout: 120000});
+    const f = `${OUT}/map-${session}-${t}-${v}${TAG}.png`; await p.screenshot({clip: await card.boundingBox(), path: f, timeout: 120000});
     info.push({shot: f, ...(await state())});
   }
 }
@@ -50,7 +51,7 @@ await p.goto(BASE + '#floor'); await settle(4000); await p.evaluate(() => src.po
 for (const t of T) {
   await seekPause(t); await settle(3000);
   const tile = await p.$('.tile'); if (!tile) break;
-  const f = `${OUT}/live-${session}-${t}.png`; await tile.screenshot({path: f}); info.push({shot: f, ...(await state())});
+  const f = `${OUT}/live-${session}-${t}${TAG}.png`; await tile.screenshot({path: f}); info.push({shot: f, ...(await state())});
 }
 // 3. member profile 3D panel at a time inside their set
 for (const [pid, t] of MEM) {
@@ -62,11 +63,11 @@ for (const [pid, t] of MEM) {
   const pan = await p.$('.b3v') || await p.$('[class*="b3v"]');
   for (const v of ['front', 'side', 'cam']) {
     await p.evaluate(v => document.querySelector(`.b3v [data-v="${v}"]`)?.click(), v); await settle(2500);
-    const f = `${OUT}/member-${session}-${pid}-${v}.png`;
+    const f = `${OUT}/member-${session}-${pid}-${v}${TAG}.png`;
     if (pan) await pan.screenshot({path: f}); else await p.screenshot({path: f});
     info.push({shot: f, member: id, pid, text: await p.evaluate(() => document.querySelector('.b3v-msg')?.hidden === false ? document.querySelector('.b3v-msg').textContent : 'body shown')});
   }
 }
-fs.writeFileSync(`${OUT}/shots.json`, JSON.stringify({info, errors: errs.slice(0, 20)}, null, 1));
+fs.writeFileSync(`${OUT}/shots${TAG}.json`, JSON.stringify({info, errors: errs.slice(0, 20)}, null, 1));
 console.log(JSON.stringify({info, errors: errs.slice(0, 10)}, null, 1));
 await b.close();

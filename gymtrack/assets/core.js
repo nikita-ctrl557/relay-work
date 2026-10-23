@@ -662,7 +662,9 @@ class ReplaySource {
       this.cfg.machines.push(...c.machines);
       this.cfg.cameras.push({id: c.id, name: c.name, source: c.source, fps: 10, zones: c.zones, exercise_names: c.exercise_names !== false});
       const withSets = new Set(c.data.sets.map(s => s.pid)); for (const p of c.data.people.rows.filter(p => withSets.has(p.id) || p.seen_s >= 45)) this.cfg.members.push({id: `${c.id}-${p.id}`, name: `${c.short} #${p.id}`, tag: p.id, cam: c.id, pid: p.id});
-      if (c.parts?.length) { c.pv = new PartedVideo(c.parts.map(p => ({src: base + p.file, start: p.start, dur: p.dur}))); c.el = c.pv.el; continue; }
+      // play the clean footage (no boxes / ids burned in): the app draws people's boxes and ids from the current data
+      const parts = c.clean_parts?.length ? c.clean_parts : c.parts;
+      if (parts?.length) { c.pv = new PartedVideo(parts.map(p => ({src: base + p.file, start: p.start, dur: p.dur}))); c.el = c.pv.el; c.clean = parts === c.clean_parts; continue; }
       const v = document.createElement("video");
       Object.assign(v, {muted: true, loop: true, playsInline: true, autoplay: true, preload: "auto"});
       for (const [f, type] of [[c.video, "video/mp4"], [c.video_webm, "video/webm"]]) if (f) v.append(Object.assign(document.createElement("source"), {src: base + f, type}));
@@ -828,12 +830,11 @@ class ReplaySource {
     const c = this.cams.find(x => x.id === camId); if (!c) return [];
     const ct = this.ct(c), tl = c.data.timeline, i = tl.indexOf(this.at(c, ct)), a = tl[i], b = tl[i + 1];
     const now = this.peopleAt(c, a);
-    const inSet0 = new Set(c.data.sets.filter(s => s.t0 <= ct && ct <= s.t1).map(s => s.pid));
-    if (!b || b.t - a.t > 2) return now.map(q => ({...q, inSet: inSet0.has(q.pid), pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}));
+    const setNow = new Map(c.data.sets.filter(s => s.t0 <= ct && ct <= s.t1).map(s => [s.pid, s.m])); // pid -> machine of the set under way
+    if (!b || b.t - a.t > 2) return now.map(q => ({...q, inSet: setNow.has(q.pid), setM: setNow.get(q.pid) || null, pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}));
     const k = Math.max(0, Math.min(1, (ct - a.t) / (b.t - a.t))), next = Object.fromEntries(this.peopleAt(c, b).map(q => [q.pid, q]));
     const mix = (a, b) => a == null || b == null ? a : a + (b - a) * k;
-    const inSet = new Set(c.data.sets.filter(s => s.t0 <= ct && ct <= s.t1).map(s => s.pid));
-    return now.map(q => { const n = next[q.pid]; return {inSet: inSet.has(q.pid), ...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k), x: mix(q.x, n.x), y: mix(q.y, n.y)} : q), pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}; });
+    return now.map(q => { const n = next[q.pid]; return {inSet: setNow.has(q.pid), setM: setNow.get(q.pid) || null, ...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k), x: mix(q.x, n.x), y: mix(q.y, n.y)} : q), pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}; });
   }
   poseIdx(c) { // pid -> {t: [], k: [decoded pose]} from the 5-per-second pose log
     if (c._pi) return c._pi;
@@ -878,18 +879,20 @@ class ReplaySource {
       for (const tr of d.tracks) (by[tr.pid] ||= []).push(tr);
       for (const [pid, trs] of Object.entries(by)) {
         trs.sort((a, b) => a.t0 - b.t0);
-        const n = trs.reduce((s, tr) => s + tr.n, 0), t = new Float64Array(n), P = new Float32Array(n * 39), A = new Float32Array(n * 12), U = new Float32Array(n * 13), F = new Float32Array(n);
+        const n = trs.reduce((s, tr) => s + tr.n, 0), t = new Float64Array(n), P = new Float32Array(n * 39), A = new Float32Array(n * 12), U = new Float32Array(n * 13), F = new Float32Array(n), Cf = new Float32Array(n * 13).fill(NaN);
         let o = 0;
         for (const tr of trs) {
           const p = dec(tr.P, 39, tr.n), a = dec(tr.A, 12, tr.n), fb = bytes(tr.F), fv = new DataView(fb.buffer), pu = (tr.u || 1) / 100;
+          // per-joint confidence if the sidecar has one ("C": 13 values, or per frame "|"-encoded like P; 0..1 or 0..100)
+          const cr = tr.C ?? tr.conf, cs = typeof cr === "string" ? dec(cr, 13, tr.n) : null, cmax = Array.isArray(cr) ? Math.max(...cr) : cs ? Math.max(...cs) : 1, ck = cmax > 1.5 ? 1 / 100 : 1;
           for (let i = 0; i < tr.n; i++, o++) {
             t[o] = tr.t0 + i / tr.hz; F[o] = fv.getInt16(i * 2, true) / 100;
             for (let j = 0; j < 39; j++) P[o * 39 + j] = p[i * 39 + j] * pu;
             for (let j = 0; j < 12; j++) A[o * 12 + j] = a[i * 12 + j];
-            for (let j = 0; j < 13; j++) U[o * 13 + j] = tr.U?.[j] ?? NaN;
+            for (let j = 0; j < 13; j++) { U[o * 13 + j] = tr.U?.[j] ?? NaN; if (cs || Array.isArray(cr)) Cf[o * 13 + j] = (cs ? cs[i * 13 + j] : cr[j]) * ck; }
           }
         }
-        idx[pid] = {t, P, A, U, F, n};
+        idx[pid] = {t, P, A, U, F, Cf, n};
       }
     }
     for (const [pid, rows] of Object.entries(raw)) {
@@ -902,6 +905,7 @@ class ReplaySource {
     const cams = (meta.cams || []).map(x => ({...x, seg: segs.find(s => s.name === x.segment) || null}));
     c.p3 = {idx, meta, cams, mobility: d.mobility || {sets: [], people: {}}, angles: meta.angles || []};
   }
+  cleanVideo(camId) { return !!this.cams.find(x => x.id === camId)?.clean; }
   has3d(camId) { return !!this.cams.find(x => x.id === camId)?.p3; }
   /* -> {J: Float32Array(39) metres (plan x, plan y, height), A: {angle: deg}, u: mean 1-sigma cm} or null; linear between samples */
   pose3dAt(camId, pid, ct) {
@@ -916,7 +920,16 @@ class ReplaySource {
     if (r.F) { let d = r.F[b] - r.F[a]; d -= 2 * Math.PI * Math.round(d / (2 * Math.PI)); const y = r.F[a] + d * k; J[39] = Math.cos(y); J[40] = Math.sin(y); } // facing (plan frame)
     names.forEach((nm, j) => { const x = r.A[a * 12 + j], y = r.A[b * 12 + j]; A[nm] = Number.isNaN(y) ? x : x + (y - x) * k; });
     let us = 0, un = 0; for (let j = 0; j < 13; j++) { const u = r.U[a * 13 + j]; if (!Number.isNaN(u)) { us += u; un++; } }
-    return {J, A, u: un ? us / un : null, t: ct};
+    return {J, A, u: un ? us / un : null, c: this.conf3d(r, a), t: ct};
+  }
+  /* per-joint confidence 0..1 at sample i: the sidecar's own if it has one, else from the joint's 1-sigma vs the body's typical one */
+  conf3d(r, i) {
+    const out = new Float32Array(13);
+    if (r.Cf && !Number.isNaN(r.Cf[i * 13])) { for (let j = 0; j < 13; j++) out[j] = Math.max(0, Math.min(1, r.Cf[i * 13 + j])); return out; }
+    const u = Array.from(r.U.subarray(i * 13, i * 13 + 13)).filter(v => !Number.isNaN(v)).sort((x, y) => x - y); if (u.length < 7) return null;
+    const med = u[u.length >> 1] || 1;
+    for (let j = 0; j < 13; j++) { const rel = r.U[i * 13 + j] / med; out[j] = Number.isNaN(rel) ? 1 : rel <= 2 ? 1 : rel >= 5 ? 0.2 : 1 - 0.8 * (rel - 2) / 3; }
+    return out;
   }
   camera3dAt(camId, ct) { // the CCTV camera the 3D was solved with (pose3d frame = plan frame), for the "camera view"
     const c = this.cams.find(x => x.id === camId); const cs = c?.p3?.cams || []; if (!cs.length) return null;

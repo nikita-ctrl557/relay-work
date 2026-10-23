@@ -28,10 +28,13 @@ function geos() {
 }
 
 // [from, to, proximal radius m, side, profile] ; side: 0 centre, 1 left, 2 right
-const LIMBS = [[1, 3, 0.05, 1, "upper"], [3, 5, 0.043, 1, "fore"], [2, 4, 0.05, 2, "upper"], [4, 6, 0.043, 2, "fore"],
-  [7, 9, 0.086, 1, "thigh"], [9, 11, 0.06, 1, "shank"], [8, 10, 0.086, 2, "thigh"], [10, 12, 0.06, 2, "shank"]];
+// (an adult's build: upper arm ~11 cm across, thigh ~19 cm; thin limbs read as a stick figure from across the room)
+const LIMBS = [[1, 3, 0.057, 1, "upper"], [3, 5, 0.048, 1, "fore"], [2, 4, 0.057, 2, "upper"], [4, 6, 0.048, 2, "fore"],
+  [7, 9, 0.095, 1, "thigh"], [9, 11, 0.066, 1, "shank"], [8, 10, 0.095, 2, "thigh"], [10, 12, 0.066, 2, "shank"]];
 // joint caps sized to the limb ends they join (shoulder deltoid a bit bigger)
-const CAPS = [[1, 0.06, 1], [2, 0.06, 2], [3, 0.041, 1], [4, 0.041, 2], [5, 0.029, 1], [6, 0.029, 2], [7, 0.08, 1], [8, 0.08, 2], [9, 0.057, 1], [10, 0.057, 2], [11, 0.034, 1], [12, 0.034, 2]];
+const CAPS = [[1, 0.07, 1], [2, 0.07, 2], [3, 0.047, 1], [4, 0.047, 2], [5, 0.033, 1], [6, 0.033, 2], [7, 0.088, 1], [8, 0.088, 2], [9, 0.063, 1], [10, 0.063, 2], [11, 0.04, 1], [12, 0.04, 2]];
+// cap / hand / foot -> the joint whose confidence it follows
+const CAP_J = CAPS.map(c => c[0]);
 
 /* P: Float32Array(39) plan metres -> 13 THREE.Vector3 in the render frame; off = [dx, dy] plan shift */
 export function jointsFrom(P, off = null, out = null) {
@@ -56,7 +59,8 @@ export function facing(J, out = new THREE.Vector3()) {
   return out.lengthSq() > 1e-8 ? out.normalize() : out.set(0, 0, 1);
 }
 
-/* mats: {body, left, right, joint, head} (any may repeat). Returns {group, set(J), meshes} */
+/* mats: {body, left, right, joint, head, faint} (any may repeat; faint = see-through, for joints the 3D is unsure of).
+   Returns {group, set(J, conf), meshes}; conf: optional 13 per-joint confidences 0..1 (core.js pose3dAt .c) */
 export function makeBody(mats) {
   const g = geos(), group = new THREE.Group(), meshes = [];
   const add = (geo, m) => { const o = new THREE.Mesh(geo, m); o.castShadow = true; o.matrixAutoUpdate = false; group.add(o); meshes.push(o); return o; };
@@ -70,7 +74,12 @@ export function makeBody(mats) {
   const seg = (o, A, B, r) => { v.subVectors(B, A); const L = v.length(); if (L < 1e-4) { o.visible = false; return; } o.visible = true; q.setFromUnitVectors(UP, v.multiplyScalar(1 / L)); p.addVectors(A, B).multiplyScalar(0.5); o.matrix.compose(p, q, s.set(r, L, r)); };
   const ball = (o, c, rx, ry = rx, rz = rx, quat = null) => { o.visible = true; o.matrix.compose(c, quat || q.identity(), s.set(rx, ry, rz)); };
   const basis = (y, zHint, out = new THREE.Quaternion()) => { Yv.copy(y).normalize(); Z.copy(zHint).addScaledVector(Yv, -zHint.dot(Yv)); if (Z.lengthSq() < 1e-8) Z.set(0, 0, 1); Z.normalize(); X.crossVectors(Yv, Z); m4.makeBasis(X, Yv, Z); return out.setFromRotationMatrix(m4); };
-  function set(J) {
+  const base = new Map(meshes.map(o => [o, o.material])); let faded = false;
+  // see-through bodies (fading, neutral stand-ins): a depth-only twin of every mesh drawn just before the body (after
+  // everything opaque; mats.depth must be transparent), so only the body's front surface gets blended (no x-ray look)
+  const twins = mats.depth ? meshes.map(o => { const d = new THREE.Mesh(o.geometry, mats.depth); d.matrixAutoUpdate = false; d.renderOrder = 5; o.renderOrder = 6; d.raycast = () => {}; group.add(d); return d; }) : null;
+  const fade = (o, c) => { const m = mats.faint && c != null && c < 0.5 ? mats.faint : base.get(o) || o.material; if (o.material !== m) o.material = m; };
+  function set(J, conf = null) {
     // overall build from the leg length (bones are rigid in pose3d v2, so this is steady per person)
     const legL = (J[7].distanceTo(J[9]) + J[9].distanceTo(J[11]) + J[8].distanceTo(J[10]) + J[10].distanceTo(J[12])) / 2;
     const k = Math.max(0.85, Math.min(1.15, legL / 0.84));
@@ -81,25 +90,30 @@ export function makeBody(mats) {
     const shW = J[1].distanceTo(J[2]), hpW = J[7].distanceTo(J[8]);
     // torso: from just above the hip line to the shoulder line, oriented by the spine and facing
     top.lerpVectors(hm, sm, 1.0); bot.lerpVectors(hm, sm, 0.1); spine.subVectors(top, bot); const L = spine.length();
-    if (L > 1e-3) { basis(spine, f, tq); torso.visible = true; torso.matrix.compose(p.addVectors(top, bot).multiplyScalar(0.5), tq, s.set(Math.max(0.13, shW / 2 + 0.035 * k), L * 1.02, 0.115 * k)); } else torso.visible = false;
+    if (L > 1e-3) { basis(spine, f, tq); torso.visible = true; torso.matrix.compose(p.addVectors(top, bot).multiplyScalar(0.5), tq, s.set(Math.max(0.15, shW / 2 + 0.045 * k), L * 1.03, 0.125 * k)); } else torso.visible = false;
     // pelvis: a flattened ellipsoid wrapping both hip joints, a little above the hip line
     basis(L > 1e-3 ? spine : UP, f, tq); p.copy(hm).addScaledVector(L > 1e-3 ? spine.clone().normalize() : UP, 0.03);
-    ball(pelvis, p, Math.max(0.13, hpW / 2 + 0.065) * Math.min(k, 1.05), 0.125 * k, 0.11 * k, tq);
+    ball(pelvis, p, Math.max(0.14, hpW / 2 + 0.075) * Math.min(k, 1.05), 0.13 * k, 0.12 * k, tq);
     // head: the nose is on the face; the skull centre sits behind and above it
     hc.copy(J[0]).addScaledVector(f, -0.07 * k); hc.y += 0.03 * k;
-    nb.lerpVectors(sm, hc, 0.62); bot.copy(sm).addScaledVector(d.subVectors(hc, sm).normalize(), -0.03); seg(neck, bot, nb, 0.056 * k);
-    ball(head, hc, 0.08 * k, 0.108 * k, 0.098 * k, basis(d.subVectors(hc, sm), f));
+    nb.lerpVectors(sm, hc, 0.62); bot.copy(sm).addScaledVector(d.subVectors(hc, sm).normalize(), -0.03); seg(neck, bot, nb, 0.06 * k);
+    ball(head, hc, 0.083 * k, 0.11 * k, 0.1 * k, basis(d.subVectors(hc, sm), f));
     // hands: a flat oval beyond each wrist, along the forearm
     for (const [h, el, wr] of [[0, 3, 5], [1, 4, 6]]) {
       d.subVectors(J[wr], J[el]); if (d.lengthSq() < 1e-8) { hands[h].visible = false; continue; } d.normalize();
-      ball(hands[h], p.copy(J[wr]).addScaledVector(d, 0.06 * k), 0.04 * k, 0.07 * k, 0.022 * k, basis(d, f));
+      ball(hands[h], p.copy(J[wr]).addScaledVector(d, 0.065 * k), 0.045 * k, 0.075 * k, 0.026 * k, basis(d, f));
     }
     // feet: from just behind the ankle forward along the body's facing, resting on the floor
     for (const [h, j] of [[0, 11], [1, 12]]) {
       const A = J[j]; p.set(A.x, Math.max(0.035, A.y - 0.045), A.z).addScaledVector(f, 0.055 * k);
-      ball(feet[h], p, 0.048 * k, 0.04 * k, 0.125 * k, basis(UP, f));
+      ball(feet[h], p, 0.052 * k, 0.045 * k, 0.13 * k, basis(UP, f));
     }
+    // low-confidence limbs see-through (a limb is as sure as its less sure end)
+    if (conf || faded) { faded = !!conf; const c = j => conf ? conf[j] ?? 1 : 1;
+      LIMBS.forEach(([a, b], i) => fade(limbs[i], Math.min(c(a), c(b)))); CAP_J.forEach((j, i) => fade(caps[i], c(j)));
+      fade(hands[0], c(5)); fade(hands[1], c(6)); fade(feet[0], c(11)); fade(feet[1], c(12)); }
     for (const o of meshes) o.matrixWorldNeedsUpdate = true;
+    if (twins) meshes.forEach((o, i) => { const d = twins[i]; d.matrix.copy(o.matrix); d.visible = o.visible && o.material !== mats.faint; d.matrixWorldNeedsUpdate = true; });
   }
   return {group, set, meshes};
 }

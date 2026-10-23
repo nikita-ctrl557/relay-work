@@ -289,6 +289,15 @@ code { font: 12.5px var(--f-mono); background: var(--surface-2); padding: 1px 5p
 .tile .hit.lifting:hover, .tile .hit.lifting.hl { border-color: #2bb3ea; }
 .tile .hit:hover span, .tile .hit:focus-visible span, .tile .hit.hl span { opacity: 1; }
 .tile .hit:not([data-member]) { cursor: help; }
+/* clean footage: the app draws each person's box and id (the same ids as the Floor map and profiles) */
+.tile .hit .hid { display: none; }
+.tile.drawn .hit { border: 1.5px solid rgba(255, 255, 255, .55); box-shadow: 0 0 0 1px rgba(0, 0, 0, .25); }
+.tile.drawn .hit[data-member] { border-color: rgba(255, 176, 32, .8); }
+.tile.drawn .hit.lifting { border-color: #2bb3ea; }
+.tile.drawn .hit .hid { display: block; position: absolute; left: -1.5px; bottom: 100%; margin-bottom: 1px; font: 600 10.5px/1.35 var(--f-body); font-style: normal; color: #fff; background: rgba(22, 28, 34, .78); padding: 0 4px; border-radius: 3px; white-space: nowrap; pointer-events: none; }
+.tile.drawn .hit.lifting .hid { background: #0b7fb0; }
+.tile.drawn .hit:hover .hid, .tile.drawn .hit.hl .hid { opacity: 0; }
+@media (max-width: 640px) { .tile.drawn .hit .hid { font-size: 9.5px; padding: 0 3px; } }
 .no-preview .tile video, .no-preview .tile canvas.skel, .no-preview .tile canvas.skel3d, .no-preview .tile img { visibility: hidden; }
 .no-preview .tile .frame { background: #1a2027; }
 

@@ -37,12 +37,12 @@ export function mountCamOverlay(frame, video) {
   function bodyFor(pid) {
     let b = bodies.get(pid); if (b) return b;
     const std = (o = {}) => new THREE.MeshStandardMaterial({color: COL.idle, roughness: 0.55, metalness: 0.0, ...o});
-    const mats = {body: std(), joint: std({roughness: 0.4}), head: std()};
+    const mats = {body: std(), joint: std({roughness: 0.4}), head: std(), faint: std({transparent: true, opacity: 0.3, depthWrite: false})};
     b = {body: makeBody(mats), mats, J: null, col: null}; scene.add(b.body.group); bodies.set(pid, b); return b;
   }
   function tint(b, c) {
     if (b.col === c) return; b.col = c; const col = new THREE.Color(c);
-    b.mats.body.color.copy(col); b.mats.head.color.copy(col).multiplyScalar(0.92); b.mats.joint.color.copy(col).lerp(new THREE.Color(0xffffff), 0.35);
+    b.mats.body.color.copy(col); b.mats.faint.color.copy(col); b.mats.head.color.copy(col).multiplyScalar(0.92); b.mats.joint.color.copy(col).lerp(new THREE.Color(0xffffff), 0.35);
     for (const m of Object.values(b.mats)) m.emissive.copy(col).multiplyScalar(0.18);
   }
   return {
@@ -54,7 +54,7 @@ export function mountCamOverlay(frame, video) {
       if (!on || !cam || !place(cam)) { for (const b of bodies.values()) b.body.group.visible = false; return drawn; }
       for (const q of people) {
         if (!q.pose3d) continue;
-        const b = bodyFor(q.pid); b.J = jointsFrom(q.pose3d.J, null, b.J || undefined); b.body.set(b.J); b.body.group.visible = true;
+        const b = bodyFor(q.pid); b.J = jointsFrom(q.pose3d.J, null, b.J || undefined); b.body.set(b.J, q.pose3d.c || null); b.body.group.visible = true;
         tint(b, q.hov ? COL.hov : q.lift ? COL.lift : COL.idle); drawn.add(q.pid);
       }
       for (const [pid, b] of bodies) if (!drawn.has(pid)) { scene.remove(b.body.group); for (const m of Object.values(b.mats)) m.dispose(); bodies.delete(pid); }

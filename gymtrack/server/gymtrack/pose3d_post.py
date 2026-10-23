@@ -353,3 +353,241 @@ def bone_cv(X):
     a, b = np.array(P3.BONES).T
     bl = np.linalg.norm(X[:, a] - X[:, b], axis=-1)
     return float(np.median(bl.std(0) / np.maximum(bl.mean(0), 1e-6)))
+
+
+# ---------------------------------------------------------------------------------------------------------
+# constrained refinement on the playback grid (v3): all plausibility rules as terms of one robust solve, so
+# fixing a pose never costs reprojection that the solve did not accept
+# ---------------------------------------------------------------------------------------------------------
+
+N_EXTRA = 20
+_relu = P3._relu
+_smoothmin = P3._smoothmin
+
+
+def _hfwd(X, hand):
+    """Horizontal facing (T, 3) from pelvis + chest (as exported)."""
+    lat = _unit(_unit(X[:, LHIP] - X[:, RHIP]) + _unit(X[:, LSH] - X[:, RSH]))
+    f = hand * np.cross(lat, UP)
+    f[:, 2] = 0
+    return _unit(f)
+
+
+def _pair_min(p0, p1, q0, q1, n=4):
+    """Smooth-ish min distance between two segments, sampled at n points each: (T,)."""
+    s = np.linspace(0, 1, n)
+    P = p0[:, None, :] + (p1 - p0)[:, None, :] * s[:, None]
+    Q = q0[:, None, :] + (q1 - q0)[:, None, :] * s[:, None]
+    d = np.sqrt(((P[:, :, None, :] - Q[:, None, :, :]) ** 2).sum(-1) + 1e-9).reshape(len(p0), -1)
+    m = d.min(1, keepdims=True)
+    return (m - 0.01 * np.log(np.exp(-(d - m) / 0.01).sum(1, keepdims=True)))[:, 0]   # soft-min
+
+
+def extra_terms(X, hand, bend_ok):
+    """(T, N_EXTRA) violations in sigma units: backwards knees (as seen against the facing), legs through each
+    other, arms through the torso, trunk lean back / forward, standing feet off the floor."""
+    T = len(X)
+    out = []
+    fwd = _hfwd(X, hand)
+    for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
+        ha = X[:, an] - X[:, hp]
+        u = _unit(ha)
+        off = (X[:, kn] - X[:, hp]) - u * ((X[:, kn] - X[:, hp]) * u).sum(-1, keepdims=True)
+        fd = fwd - (fwd * u).sum(-1, keepdims=True) * u
+        fdn = np.linalg.norm(fd, axis=-1)
+        fd = fd / np.maximum(fdn, 1e-6)[:, None]
+        o = (off * fd).sum(-1) * np.clip(fdn / 0.3, 0, 1)       # leg along the facing: no preference
+        out.append(_relu(-o + 0.005) / 0.01)
+    # legs apart: thighs >= 10 cm, shanks >= 7 cm
+    out.append(_relu(0.11 - _pair_min(X[:, LHIP], X[:, LKN], X[:, RHIP], X[:, RKN])) / 0.01)
+    out.append(_relu(0.075 - _pair_min(X[:, LKN], X[:, LAN], X[:, RKN], X[:, RAN])) / 0.01)
+    # arms outside the torso: elbows / wrists >= 8 cm from the spine axis (its middle part)
+    mh = (X[:, LHIP] + X[:, RHIP]) / 2
+    ms = (X[:, LSH] + X[:, RSH]) / 2
+    ab = ms - mh
+    L2 = np.maximum((ab * ab).sum(-1), 1e-9)
+    for j in (LEL, REL, LWR, RWR):
+        s = ((X[:, j] - mh) * ab).sum(-1) / L2
+        sc = np.clip(s, 0, 1)
+        d = np.sqrt(((X[:, j] - (mh + ab * sc[:, None])) ** 2).sum(-1) + 1e-9)
+        gate = 1 / (1 + np.exp(-(s - 0.05) / 0.03)) * 1 / (1 + np.exp(-(0.95 - s) / 0.03))
+        out.append(_relu(0.085 - d) / 0.01 * gate)
+    # trunk: back lean <= 25 deg; forward lean <= 45 deg on straight legs unless lifting
+    trunk = _unit(ab)
+    fb = (trunk[:, :2] * fwd[:, :2]).sum(-1)
+    cz = trunk[:, 2]
+    back = 1 / (1 + np.exp(fb / 0.05))
+    out.append(_relu(np.cos(np.radians(25)) - cz) / 0.03 * back)
+    kf = np.minimum((_unit(X[:, LKN] - X[:, LHIP]) * _unit(X[:, LAN] - X[:, LKN])).sum(-1),
+                    (_unit(X[:, RKN] - X[:, RHIP]) * _unit(X[:, RAN] - X[:, RKN])).sum(-1))
+    straight = 1 / (1 + np.exp(-(kf - 0.88) / 0.02))
+    out.append(_relu(np.cos(np.radians(45)) - cz) / 0.03 * straight * (1 - bend_ok))
+    # standing (straight legs, hips up): the lower ankle on the floor
+    za = _smoothmin(X[:, LAN, 2], X[:, RAN, 2], 0.02) - ANKLE_Z
+    up = 1 / (1 + np.exp(-(mh[:, 2] - 0.65) / 0.03))
+    out.append(_relu(za - 0.02) / 0.01 * straight * up)
+    out.append(_relu(-za - 0.02) / 0.01)
+    # elbows <= 150 deg, knees not hyper-extended
+    for a, b, c in ((LSH, LEL, LWR), (RSH, REL, RWR)):
+        co = (_unit(X[:, b] - X[:, a]) * _unit(X[:, c] - X[:, b])).sum(-1)
+        out.append(_relu(-0.87 - co) / 0.03)
+    while len(out) < N_EXTRA:
+        out.append(np.zeros(T))
+    return np.stack(out[:N_EXTRA], 1)
+
+
+class RefineProblem(P3._Problem):
+    """_Problem on the playback grid + extra plausibility terms + stance-foot pins."""
+
+    def __init__(self, cam, uv, w, t, L, hand, prior, bend_ok, pins, prior_sigma=0.04):
+        super().__init__(cam, uv, w, t, L, hand, prior=prior, prior_sigma=prior_sigma, acc_sigma=4.0)
+        self.bend_ok = np.asarray(bend_ok, float)
+        self.pins = pins            # (T, 2, 3) target ankle positions, NaN = free
+        self.pin_sig = 0.012
+
+    def _more(self, X):
+        r = [extra_terms(X, self.hand, self.bend_ok).ravel()]
+        P = self.pins
+        d = np.where(np.isfinite(P), X[:, [LAN, RAN]] - np.nan_to_num(P), 0.0) / self.pin_sig
+        r.append(d.ravel())
+        # bones much stiffer than in the fit: rigid skeleton
+        a, b = np.array(P3.BONES).T
+        r.append(((np.linalg.norm(X[:, a] - X[:, b], axis=-1) - self.L) / 0.004).ravel())
+        return np.concatenate(r)
+
+    def residuals(self, x):
+        X = x.reshape(self.T, 13, 3)
+        return np.concatenate([super().residuals(x), self._more(X)])
+
+    def jac(self, x):
+        from scipy.sparse import coo_matrix, vstack
+        J0 = super().jac(x)
+        X = x.reshape(self.T, 13, 3)
+        T = self.T
+        base = (np.arange(T)[:, None] * 13 + np.arange(13)[None, :]) * 3
+        E0 = extra_terms(X, self.hand, self.bend_ok)
+        h = 1e-5
+        Xp = np.repeat(X[None], 39, axis=0)
+        kk = np.arange(39)
+        Xp[kk, :, kk // 3, kk % 3] += h
+        D = (extra_terms(Xp.reshape(-1, 13, 3), self.hand, np.tile(self.bend_ok, 39)).reshape(39, T, N_EXTRA) - E0[None]) / h
+        R, C, V = [], [], []
+        rows = np.arange(T)[:, None] * N_EXTRA + np.arange(N_EXTRA)[None, :]
+        for k in range(39):
+            d = D[k]
+            nz = d != 0
+            R.append(rows[nz]); C.append(np.broadcast_to(base[:, k // 3:k // 3 + 1] + k % 3, d.shape)[nz]); V.append(d[nz])
+        r0 = T * N_EXTRA
+        P = self.pins
+        okp = np.isfinite(P)
+        rows = r0 + np.arange(T * 6).reshape(T, 2, 3)
+        for s, an in enumerate((LAN, RAN)):
+            for c in range(3):
+                m = okp[:, s, c]
+                R.append(rows[m, s, c]); C.append(base[m, an] + c); V.append(np.full(m.sum(), 1 / self.pin_sig))
+        r0 += T * 6
+        a, b = np.array(P3.BONES).T
+        dv = X[:, a] - X[:, b]
+        u = dv / np.maximum(np.linalg.norm(dv, axis=-1, keepdims=True), 1e-9) / 0.004
+        rows = r0 + np.arange(T)[:, None] * len(a) + np.arange(len(a))[None, :]
+        for c in range(3):
+            R += [rows.ravel(), rows.ravel()]
+            C += [(base[:, a] + c).ravel(), (base[:, b] + c).ravel()]
+            V += [u[..., c].ravel(), -u[..., c].ravel()]
+        r0 += T * len(a)
+        J1 = coo_matrix((np.concatenate(V), (np.concatenate(R), np.concatenate(C))), shape=(r0, T * 39)).tocsr()
+        return vstack([J0, J1]).tocsr()
+
+
+def stance_pins(X, hz=HZ):
+    """(G, 2, 3) pinned ankle targets for stance phases (median position; z on the floor when near it)."""
+    G = len(X)
+    pins = np.full((G, 2, 3), np.nan)
+    for s, an in enumerate((LAN, RAN)):
+        m = stance_mask(X[:, an], hz)
+        i = 0
+        while i < G:
+            if m[i]:
+                j = i
+                while j < G and m[j]:
+                    j += 1
+                p = np.median(X[i:j, an], axis=0)
+                if p[2] < ANKLE_Z + 0.08:
+                    p[2] = ANKLE_Z
+                pins[i:j, s] = p
+                i = j
+            else:
+                i += 1
+    return pins
+
+
+def grid_2d(t, uv, w, g, max_dt=0.4):
+    """2D joints at grid times: interpolated between samples <= max_dt apart; weight 1 at a sample, 0.6 between."""
+    G = len(g)
+    UV = np.zeros((G, 13, 2))
+    W = np.zeros((G, 13))
+    k = np.clip(np.searchsorted(t, g), 1, len(t) - 1) if len(t) > 1 else np.zeros(G, int)
+    for i, gi in enumerate(g):
+        if len(t) == 1:
+            a = b = 0
+        else:
+            a, b = k[i] - 1, k[i]
+        if abs(t[a] - gi) < 0.051 or abs(t[b] - gi) < 0.051:
+            j = a if abs(t[a] - gi) <= abs(t[b] - gi) else b
+            UV[i], W[i] = uv[j], w[j]
+        elif t[a] <= gi <= t[b] and t[b] - t[a] <= max_dt:
+            f = (gi - t[a]) / (t[b] - t[a])
+            UV[i] = uv[a] * (1 - f) + uv[b] * f
+            W[i] = np.minimum(w[a], w[b]) * 0.6
+    return UV, W
+
+
+def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=12):
+    """Robust windowed solve on the grid. Xs: smoothed fitted track (G, 13, 3) used as prior + start."""
+    G = len(g)
+    L = np.asarray(groups, float)[P3.BONE_GROUP]
+    X0 = floor_shift(rebuild(Xs, groups, hand))
+    pins = stance_pins(X0)
+    prior = (Xs, np.ones((G, 13)))
+    out = np.zeros_like(X0)
+    wsum = np.zeros(G)
+    step = max(1, win - overlap)
+    starts = list(range(0, max(G - overlap, 1), step)) if G > win else [0]
+    prev = None
+    for s in starts:
+        e = min(G, s + win)
+        if e - s < min(win, G) and s > 0:
+            s = max(0, e - win)
+        sl = slice(s, e)
+        pr = RefineProblem(cam, UV[sl], W[sl], g[sl], L, hand, (prior[0][sl], prior[1][sl]), bend_ok[sl], pins[sl])
+        x0 = X0[sl].copy()
+        if prev is not None and s < prev:
+            k = prev - s
+            x0[:k] = out[s:prev] / np.maximum(wsum[s:prev], 1e-9)[:, None, None]
+        sol = P3._lm(pr.residuals, pr.jac, x0.ravel(), max_iter=iters)
+        Xw = sol.x.reshape(-1, 13, 3)
+        n = e - s
+        bw = np.ones(n)
+        if s > 0:
+            bw[:min(overlap, n)] = np.linspace(0.1, 1, min(overlap, n))
+        if e < G:
+            bw[-min(overlap, n):] = np.minimum(bw[-min(overlap, n):], np.linspace(1, 0.1, min(overlap, n)))
+        out[sl] += Xw * bw[:, None, None]
+        wsum[sl] += bw
+        prev = e
+    X = out / wsum[:, None, None]
+    return rebuild_soft(X, groups, hand), pins
+
+
+def rebuild_soft(X, groups, hand):
+    """Final exact bone lengths after window blending (tiny corrections only)."""
+    return rebuild(X, groups, hand)
+
+
+def cap_yaw_rate(fwd, hz=HZ, max_deg_s=300.0):
+    yaw = np.unwrap(np.arctan2(fwd[:, 1], fwd[:, 0]))
+    lim = np.radians(max_deg_s) / hz
+    out = yaw.copy()
+    for i in range(1, len(out)):
+        out[i] = out[i - 1] + np.clip(yaw[i] - out[i - 1], -lim, lim)
+    return np.stack([np.cos(out), np.sin(out), np.zeros_like(out)], 1)

@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bench import add_pose3d as AP  # noqa: E402
 from gymtrack import pose3d as P3  # noqa: E402
 from gymtrack import pose3d_post as PP  # noqa: E402
-from gymtrack.camera import PinholeCamera  # noqa: E402
+from gymtrack.camera import PinholeCamera, camera_from_config  # noqa: E402
 
 SAM_MAP = [0, 5, 6, 7, 8, 62, 41, 9, 10, 11, 12, 13, 14]     # MHR70 keypoints -> our 13 joints
 
@@ -130,7 +130,8 @@ def segment_cams(replay, configs, cache=None):
         p = Path(configs)
         cfg = json.load(open(p / f"{seg['name']}-config.json" if p.is_dir() else p))["cameras"][0]
         W = int(cfg.get("width", 640))
-        (_, cam), = AP.segment_cameras(dict(replay, segments=[seg]), cfg, W, int(round(W * 9 / 16)))
+        # the one camera shared with the floor plan and the realistic room (assets/room, make_room.py)
+        cam = camera_from_config(cfg, 640, 360)
         out.append((seg, cam))
     if cache:
         json.dump({"segments": replay["segments"], "n_poses": len(replay["poses"]),
@@ -150,27 +151,94 @@ def sam_groups(Xw):
     return g
 
 
-def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, try_mirror=True):
-    """pieces: [(t, uv, w)] of one person in one segment. Returns list of dict per piece."""
+PAIRS_ARM = [(1, 2), (3, 4), (5, 6)]
+PAIRS_LEG = [(7, 8), (9, 10), (11, 12)]
+
+
+def deswap(uv, w):
+    """Fix left/right label swaps of the 2D detector along a track (Viterbi over {arms, legs} x {kept, swapped}):
+    the labelling whose joints move least between samples wins; a slight preference for the detector's own."""
+    T = len(uv)
+    if T < 3:
+        return uv, w
+    hgt = np.maximum(np.ptp(np.where(w[..., None] > 0, uv, np.nan)[..., 1], axis=1), 20)
+    hgt = np.nan_to_num(hgt, nan=100.0)
+
+    def variant(k, st):
+        u, ww = uv[k].copy(), w[k].copy()
+        for bit, pairs in ((1, PAIRS_ARM), (2, PAIRS_LEG)):
+            if st & bit:
+                for a, b in pairs:
+                    u[[a, b]] = u[[b, a]]
+                    ww[[a, b]] = ww[[b, a]]
+        return u, ww
+    V = [[variant(k, st) for st in range(4)] for k in range(T)]
+    cost = np.array([0.0, 0.08, 0.08, 0.16])
+    back = np.zeros((T, 4), int)
+    for k in range(1, T):
+        nc = np.zeros(4)
+        for st in range(4):
+            u1, w1 = V[k][st]
+            best, bi = np.inf, 0
+            for sp in range(4):
+                u0, w0 = V[k - 1][sp]
+                m = (w0 > 0) & (w1 > 0)
+                d = np.linalg.norm(u1 - u0, axis=-1)[m].mean() / hgt[k] if m.sum() >= 4 else 0.0
+                c = cost[sp] + d
+                if c < best:
+                    best, bi = c, sp
+            nc[st] = best + 0.08 * (bin(st).count("1"))
+            back[k, st] = bi
+        cost = nc
+    st = int(np.argmin(cost))
+    out_u, out_w = uv.copy(), w.copy()
+    for k in range(T - 1, -1, -1):
+        out_u[k], out_w[k] = V[k][st]
+        st = back[k, st]
+    return out_u, out_w
+
+
+HEIGHT_RANGE = (1.55, 1.95)
+
+
+def person_groups(cam, pieces, prior_w):
+    """Bone lengths for one person: calibrated on all their samples (height prior from the learned keyframes
+    when there are some), height kept in HEIGHT_RANGE; short tracks get the population mean height."""
+    allt = np.concatenate([p[0] for p in pieces])
+    o = np.argsort(allt)
+    uv = np.concatenate([p[1] for p in pieces])[o]
+    w = np.concatenate([p[2] for p in pieces])[o]
+    hp = (P3.DEFAULT_HEIGHT, 0.08)
+    if prior_w is not None and len(prior_w[0]) >= 4:
+        hp = (float(np.clip(np.median(sam_groups(prior_w[1]) / P3.RATIO_V), *HEIGHT_RANGE)), 0.04)
+    groups, h = P3.calibrate_bones(cam, uv, w, cam.flip, height_prior=hp)
+    if len(allt) < 40 and prior_w is None:
+        target = P3.DEFAULT_HEIGHT
+    else:
+        target = float(np.clip(h, *HEIGHT_RANGE))
+    return groups * target / h, target
+
+
+def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, try_mirror=True, sets=(), present=()):
+    """pieces: [(t, uv, w)] of one person in one segment; sets: [(t0, t1)] of their sets (bending allowed);
+    present: [(t0, t1)] when the tracker shows them on screen (tracks are extended to cover it).
+    Returns list of dict per piece."""
     prior_w = None
     if sam is not None and use_prior:
         tk, Xc, fk = sam
         Xw, sc = sam_to_world(cam, Xc, fk, W, Hh)
         prior_w = (tk, Xw)
-    groups = None
-    if prior_w is not None and len(prior_w[0]) >= 4:
-        h = float(np.median(sam_groups(prior_w[1]) / P3.RATIO_V))
-        h = float(np.clip(h, 1.5, 2.0))
-        allt = np.concatenate([p[0] for p in pieces])
-        o = np.argsort(allt)
-        uv = np.concatenate([p[1] for p in pieces])[o]
-        w = np.concatenate([p[2] for p in pieces])[o]
-        groups, _ = P3.calibrate_bones(cam, uv, w, cam.flip, height_prior=(h, 0.04))
+    pieces = [(t,) + deswap(uv, w) for t, uv, w in pieces]
+    try:
+        groups, height = person_groups(cam, pieces, prior_w)
+    except Exception as ex:  # noqa
+        groups, height = P3.RATIO_V * P3.DEFAULT_HEIGHT, P3.DEFAULT_HEIGHT
     out = []
     for t, uv, w in pieces:
+        t_all, uv_all, w_all = t, uv, w
         if step > 1:
             t, uv, w = t[::step], uv[::step], w[::step]
-        if len(t) < 6:
+        if len(t) < 4:
             continue
         prior = None
         if prior_w is not None:
@@ -185,13 +253,36 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, t
         except Exception as ex:  # noqa
             print("fit failed", repr(ex), flush=True)
             continue
-        groups = res["groups"]
-        item = {"t": t, "uv": uv, "w": w, "X": res["X"], "unc": res["unc"], "groups": res["groups"],
-                "height": res["height"], "hand": res["hand"], "n_prior": 0 if prior is None else int((prior[1] == 1).all(1).sum())}
+        item = {"t": t_all, "uv": uv_all, "w": w_all, "X": res["X"], "unc": res["unc"], "groups": groups,
+                "height": height, "hand": res["hand"], "n_prior": 0 if prior is None else int((prior[1] == 1).all(1).sum())}
         if refine:
-            item["R"] = PP.refine_track(t, res["X"], res["unc"], res["groups"], res["hand"], hz=hz)
+            item["R"] = refine_v3(cam, t, res["X"], res["unc"], t_all, uv_all, w_all, groups, res["hand"], hz, sets, present)
         out.append(item)
     return out
+
+
+def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_hold=0.8):
+    """Fitted samples -> steady grid: smooth, then the constrained solve (2D, rigid bones, floor, pinned stance
+    feet, plausibility), facing with a capped turn rate; ends held to cover the time the person is on screen."""
+    g, Xs = PP.resample_smooth(t, X, U, hz)
+    UV, Wg = PP.grid_2d(t2, uv2, w2, g)
+    bend = np.zeros(len(g))
+    for a, b in sets:
+        bend[(g >= a - 1) & (g <= b + 1)] = 1.0
+    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend)
+    # hold the end poses while the tracker still shows the person (<= max_hold s each side)
+    pre = post = 0
+    for a, b in present:
+        if a < g[0] <= b + 1e-6:
+            pre = max(pre, int(np.floor(min(g[0] - a, max_hold) * hz)))
+        if a - 1e-6 <= g[-1] < b:
+            post = max(post, int(np.floor(min(b - g[-1], max_hold) * hz)))
+    if pre or post:
+        g = np.r_[g[0] - np.arange(pre, 0, -1) / hz, g, g[-1] + np.arange(1, post + 1) / hz]
+        Xr = np.concatenate([np.repeat(Xr[:1], pre, 0), Xr, np.repeat(Xr[-1:], post, 0)])
+    fwd = PP.cap_yaw_rate(PP._hfwd(Xr, hand), hz)
+    Ug = np.stack([np.interp(g, t, np.nan_to_num(U[:, j], nan=0.3)) for j in range(13)], 1)
+    return {"t": np.round(g, 3), "X": Xr, "fwd": fwd, "U": Ug, "pins": pins}
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -241,9 +332,43 @@ def encode_track(pid, t, X, A, fwd, U, hz):
 # ---------------------------------------------------------------------------------------------------------
 
 def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0, people=None, window=None,
-         log=print, min_frames=8, member_s=45, phases="ABC"):
+         log=print, min_frames=5, member_s=45, phases="ABC", extra2d=None):
     W, Hh = 640, 360
     t_start = time.time()
+    if extra2d:     # 2D poses filled in for on-screen people the replay had none for (bench.fill_poses2d)
+        ex2 = json.load(open(extra2d))["poses"]
+        byt = {round(e["t"], 2): e for e in replay["poses"]}
+        n_add = 0
+        for e in ex2:
+            k = round(e["t"], 2)
+            if k in byt:
+                have = {p for p, _ in byt[k]["k"]}
+                add = [r for r in e["k"] if r[0] not in have]
+                byt[k] = dict(byt[k], k=byt[k]["k"] + add)
+            else:
+                byt[k] = {"t": e["t"], "k": e["k"]}
+                add = e["k"]
+            n_add += len(add)
+        replay = dict(replay, poses=[byt[k] for k in sorted(byt)])
+        log(f"{cam_id}: + {n_add} filled-in 2D poses")
+    sets_by = {}
+    for st in replay.get("sets", []):
+        if st.get("pid") is not None:
+            sets_by.setdefault(st["pid"], []).append((st["t0"], st["t1"]))
+    pres = {}
+    tl = replay.get("timeline", [])
+    for e in tl:
+        for q in e["p"]:
+            pres.setdefault(q[0], []).append(e["t"])
+    present = {}
+    for pid, ts in pres.items():
+        runs, s0 = [], ts[0]
+        for a_, b_ in zip(ts[:-1], ts[1:]):
+            if b_ - a_ > 2.0:
+                runs.append((s0, a_ + 1.0))
+                s0 = b_
+        runs.append((s0, ts[-1] + 1.0))
+        present[pid] = runs
     sam, n_rec, n_match = load_sam(sam_dir, cam_id, replay, W, Hh)
     log(f"{cam_id}: SAM crops {n_rec}, matched to people {n_match}, people with learned prior {len(sam)}")
     setp = {s["pid"] for s in replay.get("sets", []) if s.get("pid") is not None}
@@ -283,8 +408,8 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
             cam = segcams[si][1]
             # A (lifters): every pose sample, B (regulars): every 2nd, C (passers-by): every 2nd, no mirror search
             step = 1 if ph == "A" else 2
-            h = hz if ph != "C" else hz / 2
-            futs[ex.submit(fit_person, cam, pieces, s_, W, Hh, h, step, True, True, ph != "C")] = (ph, si, pid)
+            futs[ex.submit(fit_person, cam, pieces, s_, W, Hh, hz, step, True, True, ph != "C",
+                           sets_by.get(pid, []), present.get(pid, []))] = (ph, si, pid)
         done = 0
         for f in as_completed(futs):
             ph, si, pid = futs[f]
@@ -306,14 +431,8 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             R = it["R"]
             ang = P3.joint_angles(R["X"], it["hand"])
             A = np.stack([ang[k] for k in P3.ANGLES], 1)
-            # split where the original samples had a gap > MAX_GAP (no invented motion through long gaps)
-            obs_t = it["t"]
-            for i0, i1 in PP.split_gaps(obs_t):
-                m = (R["t"] >= obs_t[i0] - 1e-6) & (R["t"] <= obs_t[i1 - 1] + 1e-6)
-                if m.sum() < 3:
-                    continue
-                h = 1.0 / np.median(np.diff(R["t"]))
-                tracks.append((ph, encode_track(pid, R["t"][m], R["X"][m], A[m], R["fwd"][m], R["U"][m], round(float(h), 2))))
+            # one steady track per piece (pieces are split at > 2 s without a 2D sample; shorter gaps are bridged)
+            tracks.append((ph, encode_track(pid, R["t"], R["X"], A, R["fwd"], R["U"], hz)))
             angles_by_pid.setdefault(pid, []).append((R["t"], A))
             q = P3.quality(cam, it["t"], it["uv"], it["w"], interp_track(R["t"], R["X"], it["t"]), it["hand"])
             q["jitter_mps2"] = PP.jitter(R["t"], R["X"])
@@ -382,13 +501,14 @@ def main(argv=None):
     ap.add_argument("--window")
     ap.add_argument("--cams-cache")
     ap.add_argument("--phases", default="ABC", help="only these priority groups (to run them separately / merge)")
+    ap.add_argument("--extra2d", help="filled-in 2D poses (bench.fill_poses2d output)")
     a = ap.parse_args(argv)
     replay = json.load(open(a.replay))
     cam_id = a.cam_id or Path(a.replay).stem
     segcams = segment_cams(replay, a.configs, a.cams_cache)
     people = {int(p) for p in a.people.split(",")} if a.people else None
     window = tuple(float(v) for v in a.window.split(",")) if a.window else None
-    out = make(replay, segcams, a.sam, cam_id, a.hz, a.jobs, a.max_mb, people, window, phases=a.phases)
+    out = make(replay, segcams, a.sam, cam_id, a.hz, a.jobs, a.max_mb, people, window, phases=a.phases, extra2d=a.extra2d)
     path = a.out or a.replay.replace(".json", ".pose3d.json")
     json.dump(out, open(path + ".tmp", "w"), separators=(",", ":"))
     os.replace(path + ".tmp", path)

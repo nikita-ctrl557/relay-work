@@ -116,8 +116,8 @@ class RTMPoseEstimator:
         px, py = sx_out[0].argmax(1), sy_out[0].argmax(1)
         vx, vy = sx_out[0].max(1), sy_out[0].max(1)
         score = np.minimum(vx, vy)
-        if float(np.mean(score[[5, 6, 11, 12]])) < self.conf:
-            return None
+        if float(np.mean(np.sort(score[[5, 6, 11, 12]])[-2:])) < self.conf:
+            return None  # needs two confident torso joints (shoulders of someone cut off at the hips will do)
         u, v = px / 2.0, py / 2.0  # SimCC split ratio 2
         X, Y = (u - M[0, 2]) / sx, (v - M[1, 2]) / sy
         out = np.zeros((33, 3), np.float32)

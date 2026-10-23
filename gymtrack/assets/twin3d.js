@@ -7,7 +7,8 @@
 */
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import {makeBody, jointsFrom, footMid} from "./body3d.js";
+import {makeBody, jointsFrom} from "./body3d.js";
+import {floorMap, fitH, mapBody, newPlacer, stepPlacer, isObstacle} from "./mapplace.js";
 
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const dark = () => matchMedia("(prefers-color-scheme: dark)").matches && document.documentElement.dataset.theme !== "light" || document.documentElement.dataset.theme === "dark";
@@ -211,7 +212,7 @@ function rampColor(t) {
 const UNUSED = 0xa4adb6, LIFT = 0x007faf, REST = 0xf29d0c, CAM = 0x2fbf5a;
 const fmtMin = s => s >= 3600 ? `${(s / 3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s / 60)}m` : `${Math.round(s)}s`;
 
-export function mountTwin(host, {plan, machines, people, states, heat, layer = () => "both", cams = [], usage = () => ({}), onOpen, onHover, onMachine, labelOf, room = null, clock = null}) {
+export function mountTwin(host, {plan, machines, people, states, heat, layer = () => "both", cams = [], usage = () => ({}), onOpen, onHover, onMachine, labelOf, room = null, clock = null, cam3d = null}) {
   const P = palette(); mats(P);
   let peopleMode = pref("people2", "skel"), colourMode = pref("colour", "live"), roomOn = !!room && pref("room", "real") === "real";
   const wrap = document.createElement("div"); wrap.className = "s3d twin";
@@ -219,7 +220,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   wrap.innerHTML = `<div class="s3d-labels"></div><div class="tw-legend" aria-live="polite"></div>
     <div class="s3d-bar tw-bar"><div class="tw-views"><button data-v="iso" aria-pressed="true">Overview</button><button data-v="top">Top</button>${cams.some(c => c.pose) || room ? `<button data-v="cam">Camera</button>` : ""}</div>
     <button class="tw-tog" data-tog="opts" aria-expanded="false">Display</button><button class="tw-tog" data-tog="key" aria-expanded="false">Legend</button>
-    <div class="tw-opts">${room ? seg("rm", [["real", "Realistic"], ["model", "Model"]], roomOn ? "real" : "model") : ""}${seg("pm", [["skel", "Body"], ["fig", "Marker"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Status"], ["heat", "Usage"]], colourMode)}</div>
+    <div class="tw-opts">${room ? seg("rm", [["real", "Realistic"], ["model", "Model"]], roomOn ? "real" : "model") : ""}${seg("pm", [["skel", "Body"], ["fig", "Simple"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Status"], ["heat", "Usage"]], colourMode)}</div>
     <span class="s3d-hint">${matchMedia("(pointer: coarse)").matches ? "Drag to rotate · pinch to zoom" : "Drag to rotate · scroll to zoom"}</span></div>`;
   host.append(wrap);
   const labels = wrap.querySelector(".s3d-labels"), legend = wrap.querySelector(".tw-legend");
@@ -400,32 +401,24 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     paintFloor();
   }
 
-  // people
-  const ppl = new Map(), boneGeo = new THREE.CylinderGeometry(0.045, 0.045, 1, 8), jointGeo = new THREE.SphereGeometry(0.055, 10, 8), headGeo = new THREE.SphereGeometry(0.13, 16, 12);
-  const bodyGeo = new THREE.CapsuleGeometry(0.23, 1.1, 4, 12), shadowGeo = new THREE.CircleGeometry(0.42, 28), ringGeo = new THREE.RingGeometry(0.44, 0.56, 36);
-  const COL = {move: UNUSED, station: REST, lift: LIFT}, WHITE = new THREE.Color(0xffffff);
+  // people: measured 3D bodies mapped onto this room's floor (mapplace.js); everyone else a neutral standing body
+  const ppl = new Map(), shadowGeo = new THREE.CircleGeometry(0.36, 28), ringGeo = new THREE.RingGeometry(0.44, 0.56, 36);
+  const COL = {move: UNUSED, station: REST, lift: LIFT}, WHITE = new THREE.Color(0xffffff), depthOnly = new THREE.MeshBasicMaterial({colorWrite: false, transparent: true});
   let hoverPid = null;
-  const camFor = id => cams.find(c => c.id === id)?.pose || {x: CX, y: z1 + 8};
   function person(key) {
     let p = ppl.get(key); if (p) return p;
-    const mat = new THREE.MeshStandardMaterial({color: COL.move, roughness: 0.5, transparent: true, opacity: 0}), white = new THREE.MeshStandardMaterial({color: 0xffffff, transparent: true, opacity: 0}), skel = new THREE.Group();
-    const bones = [...SKEL_EDGES, [13, 0]].map(() => { const b = new THREE.Mesh(boneGeo, mat); b.castShadow = true; skel.add(b); return b; });
-    const joints = Array.from({length: 13}, (_, i) => { const j = new THREE.Mesh(i === 0 ? headGeo : jointGeo, i === 0 ? mat : white); j.castShadow = true; skel.add(j); return j; });
-    const body = new THREE.Mesh(bodyGeo, mat); body.castShadow = true; body.position.y = 0.78;
-    const head = new THREE.Mesh(headGeo, mat); head.position.y = 1.62; head.castShadow = true;
-    const fig = group(body, head);
-    const jmat = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: 0.5, transparent: true, opacity: 0});
-    const b3 = makeBody({body: mat, joint: jmat}); b3.group.visible = false; b3.meshes.forEach(o => o.userData.pkey = key);
+    const std = o => new THREE.MeshStandardMaterial({color: COL.move, roughness: 0.55, transparent: true, opacity: 0, ...o});
+    const mat = std({depthWrite: false, depthFunc: THREE.LessEqualDepth}), jmat = std({roughness: 0.5, depthWrite: false, depthFunc: THREE.LessEqualDepth}), faint = std({depthWrite: false});
+    const b3 = makeBody({body: mat, joint: jmat, faint, depth: depthOnly}); b3.group.visible = false; b3.meshes.forEach(o => o.userData.pkey = key);
     const shadow = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({color: 0x000000, transparent: true, opacity: 0, depthWrite: false})); shadow.rotation.x = -Math.PI / 2;
     const halo = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({color: LIFT, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide})); halo.rotation.x = -Math.PI / 2;
-    scene.add(skel, fig, shadow, halo, b3.group);
-    [body, head, ...bones, ...joints].forEach(o => o.userData.pkey = key);
+    scene.add(shadow, halo, b3.group);
     const tag = document.createElement("button"); tag.className = "s3d-tag"; labels.append(tag);
     tag.onmouseenter = () => setHover(key); tag.onmouseleave = () => setHover(null); tag.onclick = () => onOpen?.(ppl.get(key)?.q);
-    p = {mat, white, jmat, b3, J3: null, skel, bones, joints, fig, shadow, halo, tag, pos: null, target: null, q: null, alpha: 0, want: 1}; ppl.set(key, p); return p;
+    p = {mat, jmat, faint, b3, J3: null, Jm: null, A: null, conf: null, shadow, halo, tag, pos: null, q: null, alpha: 0, want: 1, yaw: null, neutral: true}; ppl.set(key, p); return p;
   }
   const setHover = k => { hoverPid = k; onHover?.(k == null ? null : ppl.get(k)?.q?.pid); };
-  // in the realistic room people stand where their feet meet the floor through the same camera that built the room
+  // the tracker's feet point: bottom-centre of the box through the same camera that built the room (1 Hz, a fallback)
   const roomFeet = q => {
     if (!roomCur || !q.box) return null;
     const {W: w, H: h, C, D} = roomCur.d, u = (q.box[0] + q.box[2] / 2) * w, v = (q.box[1] + q.box[3]) * h;
@@ -433,28 +426,64 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const t = -C[2] / dz; if (t > 40) return null;
     return [C[0] + t * (D[0][0] * u + D[0][1] * v + D[0][2]), C[1] + t * (D[1][0] * u + D[1][1] * v + D[1][2])];
   };
+  // 3D frame -> this map's floor: through the realistic room's camera, else the floor plan's calibration
+  const mapCache = new Map();
+  const floorMapNow = t => {
+    const cam = cam3d?.(t); if (!cam) return null;
+    let key, ctx;
+    if (roomCur) { key = roomCur.d; ctx = {d: roomCur.d}; }
+    else { const cal = cams.find(c => c.calib)?.calib; if (!cal) return null; key = cal; ctx = {pix2floor: fitH(cal.image, cal.plan), w: 640, h: 360}; }
+    let m = mapCache.get(cam); if (!m) mapCache.set(cam, m = new Map());
+    if (!m.has(key)) m.set(key, floorMap(cam, ctx));
+    return m.get(key);
+  };
+  const obstacles = (room?.equipment || []).filter(isObstacle);
+  const placers = new Map(); // per person, kept a few seconds after they leave so a brief dropout does not jump
+  let frameKey = null, lastT = null;
+  const wallT = () => performance.now() / 1000;
   function sync() {
-    const seen = new Set();
+    const t = clock?.() ?? wallT(), fk = roomCur ? "room" : "plan";
+    if (fk !== frameKey || (lastT != null && Math.abs(t - lastT) > 5)) { placers.clear(); frameKey = fk; } // other frame, or a seek
+    lastT = t;
+    const seen = new Set(), fm = floorMapNow(t);
     for (const q of people()) {
-      const rf = roomFeet(q);
-      if (!rf && (q.x == null || q.y == null || q.x < x0 - 1 || q.x > x1 + 1 || q.y < z0 - 1 || q.y > z1 + 1)) continue;
-      const key = (q.camera || "") + ":" + q.pid, p = person(key); seen.add(key);
-      p.q = q; p.want = 1; p.target = rf ? new THREE.Vector3(rf[0], 0, rf[1]) : new THREE.Vector3(q.x, 0, q.y); if (!p.pos) p.pos = p.target.clone();
+      const rf = roomFeet(q) || (roomCur || q.x == null || q.y == null ? null : [q.x, q.y]);
+      const key = (q.camera || "") + ":" + q.pid;
+      let Jm = null, A = null;
+      if (q.pose3d?.J) { const r = mapBody(q.pose3d.J, fm); if (r) { Jm = r.J; A = fm ? r.A : null; } } // no camera for the 3D: shape only, placed by the tracker
+      if (!rf && !A && !placers.get(key)?.st.pos) continue;
+      const pl = placers.get(key) || (placers.set(key, {st: newPlacer()}), placers.get(key)); pl.seen = t;
+      const eq = q.setM ? eqOf(q.setM) : null;
+      const pos = stepPlacer(pl.st, t, A, rf, {set: eq, obstacles, free: q.planted && q.zone ? [q.zone] : []});
+      if (!pos || pos[0] < x0 - 2 || pos[0] > x1 + 2 || pos[1] < z0 - 2 || pos[1] > z1 + 2) continue;
+      const p = person(key); seen.add(key);
+      p.q = q; p.want = 1; p.Jm = Jm; p.A = Jm ? (A || [(Jm[33] + Jm[36]) / 2, (Jm[34] + Jm[37]) / 2]) : null; p.conf = q.pose3d?.c || null; p.s = fm?.s || 1;
+      const np = new THREE.Vector3(pos[0], 0, pos[1]);
+      const dtp = p.t == null ? 0 : t - p.t;
+      if (p.pos && dtp > 1e-3 && dtp < 1) p.vel = (p.vel || new THREE.Vector3()).lerp(np.clone().sub(p.pos).multiplyScalar(1 / dtp), Math.min(1, dtp / 0.4));
+      p.pos = np; p.t = t;
       const lift = q.inSet || q.activity && q.activity !== "standing";
       p.mat.color.setHex(lift ? COL.lift : q.planted && q.zone ? COL.station : COL.move);
-      p.jmat.color.copy(p.mat.color).lerp(WHITE, 0.55);
+      p.jmat.color.copy(p.mat.color).lerp(WHITE, 0.55); p.faint.color.copy(p.mat.color);
       p.full = labelOf(q); p.short = (q.label.match(/#\d+/) || [q.label])[0] + (lift ? " · " + (typeof actName === "function" && q.activity ? actName(q.activity) : "lifting") : ""); p.tag.classList.toggle("link", !!q.member);
     }
     for (const [k, p] of ppl) if (!seen.has(k)) p.want = 0;
+    for (const [k, pl] of placers) if (t - pl.seen > 4 || pl.seen > t + 1) placers.delete(k);
   }
-  function skeletonAt(p) { // 2D pose -> joints standing on an upright plane at the feet, facing that person's camera
-    const pose = p.q.pose; if (!pose) return null;
-    const A = 16 / 9, mid = (a, b) => pose[a] && pose[b] ? [(pose[a][0] + pose[b][0]) / 2, (pose[a][1] + pose[b][1]) / 2] : pose[a] || pose[b];
-    const sh = mid(1, 2), hp = mid(7, 8), ft = mid(11, 12) || (p.q.box ? [p.q.box[0] + p.q.box[2] / 2, p.q.box[1] + p.q.box[3]] : null);
-    if (!sh || !hp || !ft) return null;
-    const torso = Math.hypot((sh[0] - hp[0]) * A, sh[1] - hp[1]); if (torso < 1e-3) return null;
-    const s = 0.55 / torso, cp = camFor(p.q.camera), view = new THREE.Vector3(p.pos.x - cp.x, 0, p.pos.z - cp.y).normalize(), right = new THREE.Vector3().crossVectors(view, Y).normalize();
-    return pose.map(pt => pt ? p.pos.clone().addScaledVector(right, (pt[0] - ft[0]) * A * s).add(new THREE.Vector3(0, Math.max(0, (ft[1] - pt[1]) * s), 0)) : null);
+  // neutral standing body (people without a measured 3D pose): 1.72 m, arms relaxed, facing where they walk or the camera
+  const NEUTRAL = [[0.09, 0, 1.6], [0, 0.19, 1.43], [0, -0.19, 1.43], [0.02, 0.22, 1.13], [0.02, -0.22, 1.13], [0.05, 0.22, 0.87], [0.05, -0.22, 0.87],
+    [0, 0.1, 0.93], [0, -0.1, 0.93], [0.03, 0.1, 0.5], [0.03, -0.1, 0.5], [-0.01, 0.11, 0.08], [-0.01, -0.11, 0.08]];
+  const neutralP = new Float32Array(41);
+  function neutralAt(p) {
+    let want = null;
+    if (p.vel && p.vel.lengthSq() > 0.25 * 0.25) want = Math.atan2(p.vel.z, p.vel.x);
+    else { const c = roomCur ? {x: roomCur.d.C[0], y: roomCur.d.C[1]} : cams.find(c => c.pose)?.pose; if (c) want = Math.atan2(c.y - p.pos.z, c.x - p.pos.x); }
+    if (want == null) want = p.yaw ?? 0;
+    if (p.yaw == null) p.yaw = want; else { let d = want - p.yaw; d -= 2 * Math.PI * Math.round(d / (2 * Math.PI)); p.yaw += d * 0.08; }
+    const fx = Math.cos(p.yaw), fy = Math.sin(p.yaw), lx = fy, ly = -fx, s = p.s || 1;
+    NEUTRAL.forEach(([f, l, z], i) => { neutralP[i * 3] = p.pos.x + s * (f * fx + l * lx); neutralP[i * 3 + 1] = p.pos.z + s * (f * fy + l * ly); neutralP[i * 3 + 2] = s * z; });
+    neutralP[39] = fx; neutralP[40] = fy;
+    return neutralP;
   }
 
   // views and modes
@@ -511,7 +540,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   let downAt = null, hoverM = null, selM = null;
   renderer.domElement.addEventListener("pointerdown", e => downAt = [e.clientX, e.clientY]);
   const pickP = e => { const r = renderer.domElement.getBoundingClientRect(); ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); ray.setFromCamera(ndc, camera);
-    const objs = []; for (const p of ppl.values()) if (p.alpha > 0.3) objs.push(p.b3.group.visible ? p.b3.group : p.skel.visible ? p.skel : p.fig);
+    const objs = []; for (const p of ppl.values()) if (p.alpha > 0.3 && p.b3.group.visible) objs.push(p.b3.group);
     return ray.intersectObjects(objs, true).find(h => h.object.visible)?.object.userData.pkey; };
   renderer.domElement.addEventListener("pointerup", e => { if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) < 8) { const pk = pickP(e); if (pk && ppl.get(pk)?.q) { onOpen?.(ppl.get(pk).q); downAt = null; return; } const m = pick(e); selM = m || null; if (m) onMachine?.(m); } downAt = null; });
   renderer.domElement.addEventListener("pointermove", e => { if (e.buttons) return; const pk = pickP(e) || null; if (pk !== hoverPid && (pk || hoverPid && !ppl.get(hoverPid)?.tag.matches(":hover"))) setHover(pk); hoverM = pk ? null : pick(e) || null; renderer.domElement.style.cursor = pk || hoverM ? "pointer" : ""; });
@@ -528,11 +557,11 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   }
   const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
 
-  let raf, last = 0, heatAt = -1e9, colAt = -1e9, segAt_ = -1e9; const tmp = new THREE.Vector3();
+  let raf, last = 0, heatAt = -1e9, colAt = -1e9, segAt_ = -1e9; const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
   const sp = v => { tmp.copy(v).project(camera); return tmp.z < 1 && Math.abs(tmp.x) < 1.05 && Math.abs(tmp.y) < 1.05 ? tmp.clone() : null; };
   function frame(ts) {
     raf = requestAnimationFrame(frame);
-    if (ts - last > 30) { last = ts; sync(); }
+    if (ts - last > 12) { last = ts; sync(); }
     if (ts - heatAt > 3000) { heatAt = ts; lastHeat = heat(); }
     if (ts - colAt > 1000) { colAt = ts; applyColours(); }
     if (anim) { anim.t = Math.min(1, (ts - (anim.s ??= ts)) / 700); /* time-based: slow devices land in the same place */ const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.l0, anim.l1, e); camera.fov = anim.f0 + (anim.f1 - anim.f0) * e; camera.updateProjectionMatrix(); if (anim.t >= 1) anim = null; }
@@ -542,46 +571,56 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     if (roomCam.visible !== (roomOn && !!roomCur && camera.position.distanceTo(roomCam.position) > 4.5)) roomCam.visible = !roomCam.visible;
     const rect = renderer.domElement.getBoundingClientRect(), W = rect.width, H = rect.height, showP = layer() !== "heat" && peopleMode !== "off";
     const taken = []; // screen rects already used by people tags; machine labels avoid them
-    const placeTag = (tag, s) => { const x = (s.x + 1) / 2 * W, y = (1 - s.y) / 2 * H, w = tag.offsetWidth || 30, h = tag.offsetHeight || 18; taken.push({l: x - w / 2, r: x + w / 2, t: y - h, b: y}); tag.style.display = ""; tag.style.transform = `translate(${((s.x + 1) / 2 * W).toFixed(1)}px, ${((1 - s.y) / 2 * H).toFixed(1)}px) translate(-50%, -100%)`; };
+    const placeTag = (tag, s) => { // above the head, kept inside the picture
+      const w = tag.offsetWidth || 30, h = tag.offsetHeight || 18, x = Math.max(w / 2 + 2, Math.min(W - w / 2 - 2, (s.x + 1) / 2 * W));
+      let y = Math.max(h + 2, Math.min(H - 2, (1 - s.y) / 2 * H));
+      for (let i = 0; i < 2 && taken.some(q => x - w / 2 < q.r && x + w / 2 > q.l && y - h < q.b && y > q.t) && y - h - 2 > h + 2; i++) y -= h + 2; // stacked heads: lift the tag
+      taken.push({l: x - w / 2, r: x + w / 2, t: y - h, b: y}); tag.style.display = ""; tag.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`; };
+    const bodyR = []; // screen rects of the drawn bodies: no label may cover one
     for (const [k, p] of [...ppl]) {
       p.alpha += ((showP ? p.want : 0) - p.alpha) * 0.12;
-      if (p.want === 0 && p.alpha < 0.02) { scene.remove(p.skel, p.fig, p.shadow, p.halo, p.b3.group); p.mat.dispose(); p.white.dispose(); p.jmat.dispose(); p.tag.remove(); ppl.delete(k); continue; }
-      p.pos.lerp(p.target, 0.18);
-      const hl = hoverPid === k, a = Math.max(0, Math.min(1, p.alpha)), P3 = showP && peopleMode === "skel" ? p.q.pose3d?.J : null;
-      // measured 3D body: joints relative to the feet, stood on the floor where the tracker places the person (next to their machine)
-      const J3 = P3 ? (p.J3 = jointsFrom(P3, (fm => [p.pos.x - fm[0], p.pos.z - fm[1]])(footMid(P3)), p.J3 || undefined)) : null;
-      const J = !J3 && showP && peopleMode === "skel" ? skeletonAt(p) : null;
-      p.mat.opacity = a; p.white.opacity = a; p.jmat.opacity = a; p.mat.transparent = p.white.transparent = p.jmat.transparent = a < 0.99;
-      p.b3.group.visible = !!J3 && a > 0.02; if (J3) { p.b3.set(J3); p.b3.group.scale.setScalar(1); }
-      p.skel.visible = !!J && a > 0.02; p.fig.visible = !J && !J3 && a > 0.02;
-      p.shadow.position.set(p.pos.x, 0.015, p.pos.z); p.shadow.material.opacity = 0.16 * a; p.shadow.visible = a > 0.02;
+      if (p.want === 0 && p.alpha < 0.02) { scene.remove(p.shadow, p.halo, p.b3.group); p.mat.dispose(); p.jmat.dispose(); p.faint.dispose(); p.tag.remove(); ppl.delete(k); continue; }
+      const hl = hoverPid === k, a = Math.max(0, Math.min(1, p.alpha));
+      // measured 3D body (already on this map's floor) moved to the placer's feet point; or the neutral body there
+      const use3d = showP && peopleMode === "skel" && !!p.Jm;
+      p.neutral = !use3d;
+      const J = p.J3 = use3d ? jointsFrom(p.Jm, [p.pos.x - p.A[0], p.pos.z - p.A[1]], p.J3 || undefined) : jointsFrom(neutralAt(p), null, p.J3 || undefined);
+      const op = a * (use3d ? 1 : 0.7);
+      p.mat.opacity = op; p.jmat.opacity = op; p.faint.opacity = op * 0.3; p.mat.transparent = p.jmat.transparent = true;
+      p.b3.group.visible = showP && a > 0.02;
+      if (p.b3.group.visible) p.b3.set(J, use3d ? p.conf : null);
+      p.shadow.position.set(p.pos.x, 0.015, p.pos.z); p.shadow.material.opacity = 0.16 * a; p.shadow.visible = showP && a > 0.02;
       p.halo.position.set(p.pos.x, 0.025, p.pos.z); p.halo.material.opacity = hl ? 0.85 * a : 0; p.halo.visible = hl;
-      p.fig.position.copy(p.pos); p.fig.scale.setScalar(hl ? 1.08 : 1);
-      if (J) {
-        const sh = J[1] && J[2] ? J[1].clone().add(J[2]).multiplyScalar(0.5) : null;
-        [...SKEL_EDGES, [13, 0]].forEach(([a2, b], i) => { const A = a2 === 13 ? sh : J[a2], B = J[b], bone = p.bones[i]; if (!A || !B) { bone.visible = false; return; } const v = B.clone().sub(A), len = v.length(); bone.visible = len > 1e-3; bone.position.copy(A).addScaledVector(v, 0.5); bone.quaternion.setFromUnitVectors(Y, v.normalize()); bone.scale.set(hl ? 1.35 : 1, len, hl ? 1.35 : 1); });
-        J.forEach((Pt, i) => { const j = p.joints[i]; j.visible = !!Pt; if (Pt) j.position.copy(Pt); });
-      }
       p.tag.classList.toggle("hl", hl); const txt = hl ? p.full : p.short; if (p.tag.textContent !== txt) p.tag.textContent = txt;
-      p.tag.style.opacity = a.toFixed(2);
-      const top = J3 ? J3[0] : J?.[0], s = showP && a > 0.05 ? sp(top ? top.clone().add(new THREE.Vector3(0, 0.34, 0)) : p.pos.clone().add(new THREE.Vector3(0, 2.0, 0))) : null;
+      p.tag.style.opacity = (use3d ? a : a * 0.8).toFixed(2);
+      if (!showP || a <= 0.05) { p.tag.style.display = "none"; continue; }
+      // the body's outline on screen
+      let l = Infinity, r = -Infinity, tp = Infinity, bt = -Infinity;
+      for (const i of [0, 1, 2, 5, 6, 11, 12]) { const v = sp(J[i]); if (!v) continue; const x = (v.x + 1) / 2 * W, y = (1 - v.y) / 2 * H; l = Math.min(l, x); r = Math.max(r, x); tp = Math.min(tp, y); bt = Math.max(bt, y); }
+      if (l < r + 1) { const pad = Math.max(4, (bt - tp) * 0.12); bodyR.push({l: l - pad, r: r + pad, t: tp - pad * 1.6, b: bt + pad * 0.5, k}); }
+      const s = sp(J[0].clone().add(new THREE.Vector3(0, 0.3, 0)));
       if (s) placeTag(p.tag, s); else p.tag.style.display = "none";
     }
-    // machine labels: always shown, de-overlapped in screen space (busy/in-use win; idle ones give way)
-    const placed = [...taken], order = machineObjs.map(mo => ({mo, s: sp(mo.top)})).filter(x => { if (!x.s) x.mo.tag.style.display = "none"; return x.s; })
+    // machine labels: de-overlapped in screen space (busy/in-use win; idle ones give way); never over a body or a person tag
+    const placed = [...taken, ...bodyR];
+    for (const el of [legend, wrap.querySelector(".tw-bar")]) { const r = el?.getBoundingClientRect(); if (r?.width) placed.push({l: r.left - rect.left, r: r.right - rect.left, t: r.top - rect.top, b: r.bottom - rect.top}); } // overlays on the canvas
+    const order = machineObjs.map(mo => ({mo, s: sp(mo.top), s2: sp(tmp2.set(mo.top.x, 0.15, mo.top.z))})).filter(x => { if (!x.s && !x.s2) x.mo.tag.style.display = "none"; return x.s || x.s2; })
       .sort((a, b) => (b.mo.prio + (hoverM === b.mo.id ? 5 : 0)) - (a.mo.prio + (hoverM === a.mo.id ? 5 : 0)));
-    for (const {mo, s} of order) {
+    for (const {mo, s, s2} of order) {
       const focus = hoverM === mo.id || selM === mo.id;
       mo.tag.classList.toggle("hl", focus);
       if (compact && mo.prio < (colourMode === "heat" ? 1.6 : 2) && !focus) { mo.tag.style.display = "none"; continue; }
       const w = mo.tag.offsetWidth || 80, h = mo.tag.offsetHeight || 20;
-      let cx = (s.x + 1) / 2 * W, cy = (1 - s.y) / 2 * H, ok = false;
-      for (let tries = 0; tries < 4; tries++) {
-        const r = {l: cx - w / 2, r: cx + w / 2, t: cy - h, b: cy};
-        if (!placed.some(q => r.l < q.r + 3 && r.r > q.l - 3 && r.t < q.b + 2 && r.b > q.t - 2)) { placed.push(r); ok = true; break; }
-        cy -= h + 4;
+      let cx = 0, cy = 0, ok = false;
+      // above the machine first, then around it, then at its foot (always next to the machine it names)
+      const spots = [];
+      for (const a of [s, s2]) if (a) for (const [dx, dy] of [[0, 0], [0, -1], [0, 1], [-1, 0], [1, 0], [0, -2], [0, 2], [-1, -1], [1, -1], [-1, 1], [1, 1], [-1.6, 0], [1.6, 0], [0, -3], [0, 3], [-2.2, -1], [2.2, -1], [-2.2, 1], [2.2, 1], [0, -4]]) spots.push([(a.x + 1) / 2 * W + dx * (w / 2 + 8), (1 - a.y) / 2 * H + dy * (h + 4)]);
+      for (const [x, y] of spots) {
+        const r = {l: x - w / 2, r: x + w / 2, t: y - h, b: y};
+        if (r.l < 2 || r.r > W - 2 || r.t < 2 || r.b > H - 2) continue;
+        if (!placed.some(q => r.l < q.r + 3 && r.r > q.l - 3 && r.t < q.b + 2 && r.b > q.t - 2)) { placed.push(r); cx = x; cy = y; ok = true; break; }
       }
-      if (!ok && (mo.prio === 0 || compact) && !focus) { mo.tag.style.display = "none"; continue; }
+      if (!ok) { if (!focus || !spots.length) { mo.tag.style.display = "none"; continue; } [cx, cy] = spots[0]; }
       mo.tag.style.display = ""; mo.tag.style.transform = `translate(${cx.toFixed(1)}px, ${cy.toFixed(1)}px) translate(-50%, -100%)`;
     }
     renderer.render(scene, camera);

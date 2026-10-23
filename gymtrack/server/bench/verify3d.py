@@ -14,7 +14,7 @@ B body       bone-length CV, backwards knees, folded elbows, pipeline hard limit
              floating while standing, body height outliers, implausible trunk lean, arms through the torso,
              legs through each other
 C temporal   joint acceleration (jitter), stance foot slide in the data (Live overlay / profile) and as drawn
-             on the Floor map (body anchored at the room-feet point of the 1 Hz tracker box, app lerp),
+             on the Floor map (as assets/mapplace.js places it: 3D mapped onto the room floor, tracker fallback),
              facing flips > 90 deg in 0.3 s, left/right swaps, sample rate, frozen frames
 D reality    reprojection of the 3D joints through the solved camera vs the 2D detections (all samples, and
              overlays on >= 20 random + >= 10 busy video frames -> contact sheets), the Floor-map body seen
@@ -259,7 +259,7 @@ class Session:
                 box = box + (np.array(n[4:8], float) - box) * k
                 if x is not None and n[9] is not None:
                     x, y = x + (n[9] - x) * k, y + (n[10] - y) * k
-            out.append({"pid": pid, "box": box, "x": x, "y": y, "zone": q[2]})
+            out.append({"pid": pid, "box": box, "x": x, "y": y, "zone": q[2], "planted": bool(q[3])})
         return out
 
 
@@ -331,6 +331,241 @@ def in_set(sess, pid, t):
 
 
 # ---------------------------------------------------------------------------------------------------------
+# Floor-map placement: a line-for-line port of assets/mapplace.js (what twin3d.js draws in the realistic room).
+# 3D bodies are mapped from the 3D camera's plan frame onto the room's floor through the image (homography),
+# keep metric proportions (local rotation, room height scale), ankles mapped exactly; the placer follows the
+# mapped 3D feet, else the 1 Hz tracker room-feet point smoothed at <= 2 m/s; lifters kept at their machine.
+# ---------------------------------------------------------------------------------------------------------
+MP_WALK, MP_TAU_FALL, MP_TAU_OFF, MP_TAU_SNAP, MP_SET_MARGIN, MP_EQ_CLEAR, MP_RESET_GAP = 2.0, 0.5, 0.5, 0.4, 0.6, 0.12, 2.0
+
+
+def _mp_apply(H, x, y):
+    w = H[2, 0] * x + H[2, 1] * y + H[2, 2]
+    if not w > 1e-9:
+        return None
+    return np.array([(H[0, 0] * x + H[0, 1] * y + H[0, 2]) / w, (H[1, 0] * x + H[1, 1] * y + H[1, 2]) / w])
+
+
+def _mp_cam_floor(cam):
+    M = cam._M()
+    t = -M @ cam.C
+    K = np.array([[cam.f, 0, cam.cx], [0, cam.f, cam.cy], [0, 0, 1.0]])
+    return K @ np.c_[M[:, 0], M[:, 1], t]
+
+
+def map_floor(cam, room):
+    """mapplace.js floorMap: (H plan3d floor -> room floor, s body scale) or None."""
+    if cam is None or room is None:
+        return None
+    key = (id(cam), id(room))
+    if key in _MP_CACHE:
+        return _MP_CACHE[key]
+    C, D = np.array(room["C"], float), np.array(room["D"], float)
+    P2F = np.array([[C[i] * D[2, j] - C[2] * D[i, j] for j in range(3)] for i in range(2)] + [list(D[2])])
+    cw, ch = cam.width or 640, cam.height or 360
+    Hm = P2F @ np.diag([room["W"] / cw, room["H"] / ch, 1.0]) @ _mp_cam_floor(cam)
+    Hm = Hm / (Hm[2, 2] or 1)
+    if Hm[2, 2] < 0:
+        Hm = -Hm
+    G = np.linalg.inv(_mp_cam_floor(cam))
+    zs = []
+    for gy in np.arange(0.45, 0.95 + 1e-9, 0.1):
+        for gx in np.arange(0.1, 0.9 + 1e-9, 0.1):
+            a = _mp_apply(G, gx * cw, gy * ch)
+            if a is None:
+                continue
+            A = _mp_apply(Hm, a[0], a[1])
+            hp = cam.project(np.array([a[0], a[1], 1.7]))
+            if A is None or not np.isfinite(hp).all():
+                continue
+            d = D @ np.array([hp[0] * room["W"] / cw, hp[1] * room["H"] / ch, 1.0])
+            dd = d[0] ** 2 + d[1] ** 2
+            if dd < 1e-9:
+                continue
+            t = ((A[0] - C[0]) * d[0] + (A[1] - C[1]) * d[1]) / dd
+            if t > 0:
+                zs.append((C[2] + t * d[2]) / 1.7)
+    s = float(np.clip(sorted(zs)[len(zs) >> 1], 0.75, 1.25)) if len(zs) >= 5 else 1.0
+    _MP_CACHE[key] = (Hm, s)
+    return _MP_CACHE[key]
+
+
+_MP_CACHE = {}
+
+
+def _mp_rot(Hm, x, y):
+    e = 0.02
+    p, px, py = _mp_apply(Hm, x, y), _mp_apply(Hm, x + e, y), _mp_apply(Hm, x, y + e)
+    if p is None or px is None or py is None:
+        return np.eye(2)
+    a, b, c, d = (px[0] - p[0]) / e, (py[0] - p[0]) / e, (px[1] - p[1]) / e, (py[1] - p[1]) / e
+    if a * d - b * c >= 0:
+        t = np.arctan2(c - b, a + d)
+        return np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+    t = np.arctan2(b + c, a - d)
+    return np.array([[np.cos(t), np.sin(t)], [np.sin(t), -np.cos(t)]])
+
+
+def map_body(X, mf):
+    """mapplace.js mapBody: 3D joints (13, 3) -> (body on the map (13, 3), mapped feet A (2,)) or (None, None)."""
+    a = (X[LAN, :2] + X[RAN, :2]) / 2
+    if mf is None:
+        return X.copy(), a
+    Hm, s = mf
+    A = _mp_apply(Hm, a[0], a[1])
+    if A is None:
+        return None, None
+    R = _mp_rot(Hm, a[0], a[1])
+    J = np.empty_like(X)
+    J[:, :2] = A + s * (X[:, :2] - a) @ R.T
+    J[:, 2] = s * X[:, 2]
+    for i, w in ((LAN, 1.0), (RAN, 1.0), (LKN, 0.5), (RKN, 0.5)):
+        q = _mp_apply(Hm, X[i, 0], X[i, 1])
+        if q is not None:
+            J[i, :2] += (q - J[i, :2]) * w
+    return J, (J[LAN, :2] + J[RAN, :2]) / 2
+
+
+def _mp_toward(p, q, dt, tau):
+    k = 1 - np.exp(-dt / tau)
+    d = (q - p) * k
+    l = np.hypot(*d)
+    if l > MP_WALK * dt and l > 0:
+        d = d * (MP_WALK * dt / l)
+    return p + d
+
+
+def _mp_push(p, e):
+    ex, ey, dx, dy = e["w"] / 2 + MP_EQ_CLEAR, e["d"] / 2 + MP_EQ_CLEAR, p[0] - e["x"], p[1] - e["y"]
+    if abs(dx) >= e["w"] / 2 or abs(dy) >= e["d"] / 2:
+        return p
+    if ex - abs(dx) < ey - abs(dy):
+        return np.array([e["x"] + (ex if dx >= 0 else -ex), p[1]])
+    return np.array([p[0], e["y"] + (ey if dy >= 0 else -ey)])
+
+
+def mp_obstacle(e):
+    return e.get("h", 0) >= 1.0 and "rack" not in e["machine"].lower() and e["w"] > 0 and e["d"] > 0
+
+
+class Placer:
+    """mapplace.js newPlacer / stepPlacer."""
+
+    def __init__(self):
+        self.t, self.base, self.off, self.c, self.src, self.pos = None, None, np.zeros(2), np.zeros(2), None, None
+
+    def step(self, t, A, rf, sete=None, obstacles=(), free=()):
+        dt = np.inf if self.t is None else t - self.t
+        if not (0 <= dt <= MP_RESET_GAP) or self.base is None:
+            p = A if A is not None else rf
+            if p is None:
+                self.t = t
+                return self.pos
+            self.base, self.off, self.c, self.src, self.t = np.array(p, float), np.zeros(2), np.zeros(2), "3d" if A is not None else "trk", t
+        else:
+            self.t = t
+            if A is not None:
+                if self.src != "3d":
+                    self.off, self.src = self.base - A, "3d"
+                l = np.hypot(*self.off)
+                if l > 1e-4:
+                    nl = max(l * np.exp(-dt / MP_TAU_OFF), l - MP_WALK * dt)
+                    self.off = self.off * ((0.0 if nl < 0.005 else nl) / l)
+                d = A + self.off - self.base
+                l = np.hypot(*d)
+                if l > MP_WALK * dt and l > 0:
+                    d = d * (MP_WALK * dt / l)
+                self.base = self.base + d
+                self.off = self.base - A
+            elif rf is not None:
+                self.src = "trk"
+                self.base = _mp_toward(self.base, np.asarray(rf, float), dt, MP_TAU_FALL)
+        b = self.base
+        if sete is not None:
+            tgt = np.array([np.clip(b[0], sete["x"] - sete["w"] / 2 - MP_SET_MARGIN, sete["x"] + sete["w"] / 2 + MP_SET_MARGIN),
+                            np.clip(b[1], sete["y"] - sete["d"] / 2 - MP_SET_MARGIN, sete["y"] + sete["d"] / 2 + MP_SET_MARGIN)])
+        else:
+            tgt = b
+        self.c = _mp_toward(self.c, tgt - b, dt, MP_TAU_SNAP) if np.isfinite(dt) and dt <= MP_RESET_GAP else tgt - b
+        def out(q):
+            for e in obstacles:
+                if (sete is None or e["machine"] != sete["machine"]) and e["machine"] not in free:
+                    q = _mp_push(q, e)
+            return q
+        p = out(b + self.c)
+        if self.pos is not None and np.isfinite(dt) and dt <= MP_RESET_GAP:
+            d = p - self.pos
+            l = np.hypot(*d)
+            if l > MP_WALK * dt and l > 0:
+                d = d * (MP_WALK * dt / l)
+            p = out(self.pos + d)
+        self.pos = p
+        return p
+
+
+def map_inputs(S, pid, ct, q=None):
+    """What twin3d.js feeds the placer for pid at ct: (mapped body J or None, A, rf, set equipment, free machines, present)."""
+    if q is None:
+        q = next((q for q in S.people_at(ct) if q["pid"] == pid), None)
+    if q is None:
+        return None, None, None, None, (), False
+    room = S.room_at(ct)
+    rf = room_feet(room, q["box"]) if room else None
+    if rf is None and q["x"] is not None:
+        rf = np.array([q["x"], q["y"]])
+    J = A = None
+    X = p3_at(S.p3[pid], ct)[0] if pid in S.p3 else None
+    if X is not None and np.isfinite(X).all():
+        J, A = map_body(X, map_floor(S.cam3d_at(ct), room))
+    if not hasattr(S, "_eq"):
+        S._eq = {e["machine"]: e for e in S.equip}
+    sete = next((S._eq.get(s["m"]) for s in S.rp.get("sets", []) if s.get("pid") == pid and s["t0"] <= ct <= s["t1"]), None)
+    free = (q["zone"],) if q.get("planted") and q["zone"] else ()
+    return J, A, rf, sete, free, True
+
+
+def map_positions_at_timeline(S, step=0.1):
+    """Placer run for everyone over the whole session; {pid: [(t, pos)]} at the tracker timeline's times."""
+    obst = [e for e in S.equip if mp_obstacle(e)]
+    tlt = np.array([e["t"] for e in S.tl])
+    ticks = np.union1d(np.round(np.arange(tlt[0], tlt[-1] + 1e-9, step), 3), tlt)
+    tl_set = set(np.round(tlt, 3).tolist())
+    pls, out = {}, {}
+    for ct in ticks:
+        rec = round(float(ct), 3) in tl_set
+        for q in S.people_at(ct):
+            J, A, rf, sete, free, _ = map_inputs(S, q["pid"], ct, q)
+            p = pls.setdefault(q["pid"], Placer()).step(ct, A, rf, sete, obst, free)
+            if rec and p is not None:
+                out.setdefault(q["pid"], []).append((float(ct), np.array(p)))
+    return out
+
+
+def map_track(S, pid, g, warm=3.0, step=1 / 30):
+    """Placer run for pid over times g (warmed up `warm` s before, like the app that was already running)."""
+    obst = [e for e in S.equip if mp_obstacle(e)]
+    pl = Placer()
+    pos = np.full((len(g), 2), np.nan)
+    Js = np.full((len(g), 13, 3), np.nan)
+    for ct in np.arange(g[0] - warm, g[0], step):
+        J, A, rf, sete, free, here = map_inputs(S, pid, ct)
+        if here:
+            pl.step(ct, A, rf, sete, obst, free)
+    for i, ct in enumerate(g):
+        J, A, rf, sete, free, here = map_inputs(S, pid, ct)
+        if not here:
+            continue
+        p = pl.step(ct, A, rf, sete, obst, free)
+        if p is None:
+            continue
+        pos[i] = p
+        if J is not None:
+            Js[i] = J
+            Js[i, :, :2] += p - A
+    return pos, Js
+
+
+# ---------------------------------------------------------------------------------------------------------
 # A identity
 # ---------------------------------------------------------------------------------------------------------
 
@@ -349,26 +584,17 @@ def check_identity(S, ex):
                        "desc": f"3D root jumps {dd[i]:.2f} m in {dt[i]:.2f} s"})
     res["A1_teleports_3d_all"] = tele_all
     res["A1_teleports_3d_members"] = tele_mem
-    # Floor-map positions (realistic room placement from the tracker box, 1 Hz timeline)
+    # Floor-map positions as twin3d.js places them (mapplace.js placer), at the tracker timeline's times
     tm, ta = 0, 0
-    last = {}
-    for e in S.tl:
-        room = S.room_at(e["t"])
-        for q in e["p"]:
-            rf = room_feet(room, q[4:8]) if room else (np.array([q[9], q[10]]) if q[9] is not None else None)
-            if rf is None:
-                continue
-            pid = q[0]
-            if pid in last:
-                t0, p0 = last[pid]
-                dt = e["t"] - t0
-                d = float(np.linalg.norm(rf - p0))
-                if dt <= 2.0 and d > max(1.5, 2.5 * dt):
-                    ta += 1
-                    tm += pid in S.members
-                    ex.append({"kind": "A1 map teleport", "pid": pid, "t": e["t"], "sev": d,
-                               "desc": f"Floor-map position jumps {d:.2f} m in {dt:.1f} s (member={pid in S.members})"})
-            last[pid] = (e["t"], np.asarray(rf))
+    for pid, seq in map_positions_at_timeline(S).items():
+        for (t0, p0), (t1, p1) in zip(seq, seq[1:]):
+            dt = t1 - t0
+            d = float(np.linalg.norm(p1 - p0))
+            if dt <= 2.0 and d > max(1.5, 2.5 * dt):
+                ta += 1
+                tm += pid in S.members
+                ex.append({"kind": "A1 map teleport", "pid": pid, "t": t1, "sev": d,
+                           "desc": f"Floor-map position jumps {d:.2f} m in {dt:.1f} s (member={pid in S.members})"})
     res["A1_teleports_map_members"] = tm
     res["A1_teleports_map_all"] = ta
     # duplicates: two pids on one person (2D keypoint boxes at the same pose sample)
@@ -644,25 +870,11 @@ def check_body(S, ex):
 # ---------------------------------------------------------------------------------------------------------
 
 def map_bodies(S, pid, g):
-    """Floor-map body joints at times g (60 Hz) as twin3d.js draws them in the realistic room: the 3D joints
-    shifted so the mid-ankle sits on p.pos, p.pos lerped 0.18 per frame towards roomFeet(box)."""
+    """Floor-map body joints at times g (60 Hz) as twin3d.js draws them in the realistic room (mapplace.js):
+    the 3D body mapped onto the room's floor, shifted to the placer's position."""
     r = S.p3[pid]
     Xg, _ = p3_at_vec(r, g)
-    pos = np.full((len(g), 2), np.nan)
-    cur = None
-    for i, ct in enumerate(g):
-        q = next((q for q in S.people_at(ct) if q["pid"] == pid), None)
-        rf = room_feet(S.room_at(ct), q["box"]) if q is not None else None
-        if rf is None and q is not None and q["x"] is not None:
-            rf = np.array([q["x"], q["y"]])
-        if rf is None:
-            cur = None
-            continue
-        cur = rf.copy() if cur is None else cur + (rf - cur) * 0.18
-        pos[i] = cur
-    fm = (Xg[:, LAN, :2] + Xg[:, RAN, :2]) / 2
-    J = Xg.copy()
-    J[..., :2] = Xg[..., :2] - fm[:, None] + pos[:, None]
+    pos, J = map_track(S, pid, g)
     return Xg, J, pos
 
 
@@ -889,11 +1101,8 @@ def sample_frames(S, F, out, rng, n_rand, n_busy):
                 if ok.sum() >= 6 and np.isfinite(ph):
                     errs.append((100 * float(np.median(np.linalg.norm(p - uv, axis=1)[ok])) / ph, pid))
                 if room is not None:
-                    q = next((q for q in S.people_at(t) if q["pid"] == pid), None)
-                    rf = room_feet(room, q["box"]) if q else None
-                    if rf is not None:
-                        Jm = X.copy()
-                        Jm[:, :2] += rf - (X[LAN, :2] + X[RAN, :2]) / 2
+                    Jm, _ = map_body(X, map_floor(cam, room))
+                    if Jm is not None:
                         pm = room_project(room, Jm)
                         draw_skel(cv2, im, pm, (255, 220, 0), None, 1)
                         if ok.sum() >= 6 and np.isfinite(ph):
@@ -1046,11 +1255,8 @@ def example_images(S, F, out, ex, n=12):
         if X is not None and cam is not None:
             draw_skel(cv2, im, cam.project(X), (40, 40, 255), None, 2)
             if room is not None:
-                q = next((q for q in S.people_at(e["t"]) if q["pid"] == e["pid"]), None)
-                rf = room_feet(room, q["box"]) if q else None
-                if rf is not None:
-                    Jm = X.copy()
-                    Jm[:, :2] += rf - (X[LAN, :2] + X[RAN, :2]) / 2
+                Jm, _ = map_body(X, map_floor(cam, room))
+                if Jm is not None:
                     draw_skel(cv2, im, room_project(room, Jm), (255, 220, 0), None, 1)
             # side view inset (plan-frame body seen from the camera's right): shows lean / knee direction
             ins = np.full((150, 110, 3), 30, np.uint8)

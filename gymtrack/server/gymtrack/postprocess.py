@@ -99,6 +99,8 @@ def finish_sets(data: dict, cfg, cam=None) -> dict:
         except TypeError:  # older stitch() without camera geometry
             remap = stitch(data)
         info["stitched"] = len(remap or {})
+        st = data.get("stitch") or {}
+        info["identity_cuts"], info["identity_relinks"] = st.get("identity_cuts", 0), st.get("identity_relinks", 0)
         info["cut_off_poses"] = drop_cut_off_poses(data)
         for e in data.get("poses", []):
             if e.get("c"):

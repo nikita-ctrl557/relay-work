@@ -213,6 +213,8 @@ class PersonDetector:
 GATE = (0.25, 0.7)  # feet-distance gate for frame-to-frame matches: body heights, + per second unseen
 ANCHOR = True  # allow matches across a box that grew/shrank because legs or head were hidden
 
+ADOPT_RD_VETO = 0.40  # reid.py signature distance above which a new track can't continue a lost person's ID
+
 APP_PARTS = ((0.15, 0.35), (0.35, 0.55), (0.55, 0.75), (0.75, 0.95))  # shoulders, chest, hips/shorts, legs
 
 
@@ -268,6 +270,7 @@ class Track:
     look_n: int = 0                                  # clean appearance updates so far
     conf: float = 0.0                                # last detection confidence
     looks: list = field(default_factory=list)        # [(t, signature)] ~1/s, clean views: for offline stitching only
+    sigs: list = field(default_factory=list)         # [(t, reid.signature)] every clean posed detection: identity check only
     uid: int = 0                                     # internal key (tentative tracks have no public id yet)
 
     @property
@@ -455,24 +458,35 @@ class PeopleTracker:
     def visible(self, t: float) -> list[Track]:
         return [tr for tr in self.tracks.values() if tr.hits >= self.min_hits and t - tr.last <= self.every * 1.5 and tr.is_person]
 
+    def identity_summary(self) -> dict[int, list]:
+        """{track id: [(t, robust signature)]} of clean posed views (reid.py), for the offline identity check
+        (stitch.py). In-memory, per recording: don't persist it."""
+        return {tr.id: list(tr.sigs) for tr in self.all_tracks() if tr.sigs}
+
     def appearance_summary(self) -> dict[int, list]:
         """{track id: [(t, signature as list)]} of clean views, for the offline stitcher (stitch.py).
         In-memory, per recording: don't persist it (it is a body-appearance signature)."""
         return {tr.id: [(ts, v.tolist()) for ts, v in tr.looks] for tr in self.all_tracks() if tr.looks}
 
     def _update_poses(self, frame: np.ndarray, t: float, full: np.ndarray | None = None):
+        from . import reid
         from .activity import classify
+        from .pose import JOINTS13
         k = full.shape[1] / frame.shape[1] if full is not None else 1.0
         src = full if full is not None else frame
-        min_h = 0.07 if hasattr(self.pose, "sess") else 0.12  # RTMPose copes with smaller people
+        FH, FW = frame.shape[:2]
+        # every detected person gets a pose sample, also when small or cut off by the frame edge (standing
+        # right under the camera): the crop is padded, and joints outside the picture are marked unseen
+        min_h = 0.04 if hasattr(self.pose, "sess") else 0.12
+        light = None
+        now = [tr for tr in self.tracks.values() if tr.last == t]
         for tr in self.tracks.values():
             if tr.last != t:
                 continue  # not detected this round
-            if tr.box[3] < min_h * frame.shape[0]:
-                continue  # too small/far for a reliable pose
+            if tr.box[3] < min_h * FH:
+                continue  # too small/far for any pose
             bx, by, bw, bh = tr.box
-            if by + bh >= 0.985 * frame.shape[0] or bx <= 0.015 * frame.shape[1] or bx + bw >= 0.985 * frame.shape[1]:
-                continue  # body cut off by the frame edge: a skeleton would be guesswork
+            cut = by + bh >= 0.985 * FH or bx <= 0.015 * FW or bx + bw >= 0.985 * FW
             # steady crop: smooth the box the pose model sees, so detector jitter doesn't shake the skeleton
             pb = getattr(tr, "pose_box", None)
             tr.pose_box = tr.box if pb is None or t - getattr(tr, "pose_t", -9) > 1.0 else tuple(0.6 * a + 0.4 * b for a, b in zip(pb, tr.box))
@@ -481,10 +495,23 @@ class PeopleTracker:
                 kp = kp.copy(); kp[:, :2] /= k
             if kp is not None:
                 kp = self._smooth_pose(tr, kp, t)
+                if cut:  # joints the model placed outside the picture are guesses: unseen
+                    out = (kp[:, 0] < 0) | (kp[:, 0] > FW - 1) | (kp[:, 1] < 0) | (kp[:, 1] > FH - 1)
+                    kp = kp.copy()
+                    kp[out, 2] = 0.0
             tr.pose_tries += 1
             if kp is None:
                 continue
             tr.pose_hits += 1
+            if not cut and bh >= self.APP_KEEP_MIN_H * 4 / 3:
+                occl = max([cover(tr.box, o.box) for o in now if o is not tr] or [0.0])
+                if occl < 0.15:
+                    light = light or reid.frame_light(src)
+                    kp13 = kp[JOINTS13].copy()
+                    kp13[:, :2] *= k
+                    sg = reid.signature(src, tuple(v * k for v in tr.box), kp13, light)
+                    if sg is not None:
+                        tr.sigs.append((t, sg.astype(np.float16)))
             tr.kps = [k for k in tr.kps if t - k[0] <= 8.0] + [(t, kp)]
             if self.exercise_names and t - tr.act_at >= 1.0 and len(tr.kps) >= 6:
                 tr.act_at = t
@@ -647,6 +674,10 @@ class PeopleTracker:
             if gap > self.reid_s:
                 continue
             dm, _ = floor_moved(fm, c.kf.last_obs, tr.kf.last_obs)
+            if len(c.sigs) >= 3 and len(tr.sigs) >= 2:  # robust clothing signatures clearly differ: someone else
+                from .reid import distance, mean_sig
+                if distance(mean_sig([v for _, v in c.sigs[-10:]]), mean_sig([v for _, v in tr.sigs])) > ADOPT_RD_VETO:
+                    continue
             sim = float(c.look @ tr.look)
             near = gap <= self.max_age and dm <= self._drift(gap)
             same_spot = dm <= 0.5 + 0.1 * gap and sim >= self._need(self.SAME_SPOT_SIM, tr.box[3])
@@ -673,6 +704,7 @@ class PeopleTracker:
         tr.pose_tries += c.pose_tries
         tr.pose_hits += c.pose_hits
         tr.looks = c.looks + tr.looks
+        tr.sigs = c.sigs + tr.sigs
         v = 0.7 * c.look + 0.3 * tr.look
         tr.look, tr.look_n = v / (np.linalg.norm(v) + 1e-6), c.look_n + tr.look_n
         return True
