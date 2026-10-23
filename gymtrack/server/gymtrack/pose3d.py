@@ -436,9 +436,28 @@ def root_depths(cam: PinholeCamera, uv, L):
     return d_foot, d_scale
 
 
-def init_frame(cam: PinholeCamera, uv, L, hand=1.0, root_depth=None):
+def init_frame(cam: PinholeCamera, uv, L, hand=1.0, root_depth=None, w=None):
     """Single-frame 3D guess (13, 3) from 2D joints (13, 2) pixels and bone lengths. root_depth: horizontal
-    distance of the hips from the camera (default: above the feet)."""
+    distance of the hips from the camera (default: above the feet). w: joint visibility (13,); with the legs
+    unseen (cut off by the frame, hidden) the person is assumed standing: hips at standing height on their
+    rays, legs straight down to the floor; unseen arm joints hang down."""
+    uv = np.asarray(uv, float)
+    if w is not None:
+        w = np.asarray(w, float) > 0
+        if not w[[LKN, RKN, LAN, RAN]].any() and (w[[LHIP, RHIP]].any() or w[[LSH, RSH]].any()):
+            return _init_standing(cam, uv, w, L, hand)
+        if not w.all():
+            # unseen joints: borrow a plausible image position so the rays are not garbage
+            uv = uv.copy()
+            for j, k in ((LKN, RKN), (LAN, RAN), (LEL, REL), (LWR, RWR), (LHIP, RHIP), (LSH, RSH)):
+                for a, b in ((j, k), (k, j)):
+                    if not w[a] and w[b]:
+                        uv[a] = uv[b]
+            if not w[[LKN, RKN, LAN, RAN]].all() and w[[LHIP, RHIP]].any():
+                hipv = uv[[LHIP, RHIP]][w[[LHIP, RHIP]]].mean(0)
+                for j in (LKN, RKN, LAN, RAN):
+                    if not w[j] and not w[{LKN: RKN, RKN: LKN, LAN: RAN, RAN: LAN}[j]]:
+                        uv[j] = hipv
     uv = np.asarray(uv, float)
     rays = cam.ray(uv)
     C = cam.C
@@ -470,6 +489,44 @@ def init_frame(cam: PinholeCamera, uv, L, hand=1.0, root_depth=None):
     for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
         place(kn, hp, lambda p: (p - X[hp]) @ fwd)
         place(an, kn, lambda p: -abs(p[2] - ANKLE_Z))
+    return X
+
+
+def _init_standing(cam, uv, w, L, hand):
+    Lmap = {tuple(sorted(b)): L[i] for i, b in enumerate(BONES)}
+    Lg = lambda a, b: Lmap[tuple(sorted((a, b)))]
+    X = np.zeros((NJ, 3))
+    if w[[LHIP, RHIP]].any():
+        hv = uv[[LHIP, RHIP]][w[[LHIP, RHIP]]].mean(0)
+        mh = cam.backproject_to_height(hv, Lg(LHIP, LKN) + Lg(LKN, LAN) + ANKLE_Z - 0.02)
+    else:
+        sv = uv[[LSH, RSH]][w[[LSH, RSH]]].mean(0)
+        mh = cam.backproject_to_height(sv, Lg(LHIP, LKN) + Lg(LKN, LAN) + ANKLE_Z + Lg(LSH, LHIP) * 0.97) - np.array([0, 0, Lg(LSH, LHIP) * 0.97])
+    if not np.all(np.isfinite(mh)) or cam.depth(mh) < 1.0:
+        r = cam.ray(uv[[LSH, RSH, LHIP, RHIP]][w[[LSH, RSH, LHIP, RHIP]]].mean(0))
+        mh = cam.C + r * 2.0
+        mh[2] = 0.95
+    v = mh - cam.C
+    v[2] = 0
+    v = _unit(v)
+    lat = np.cross(UP, v)                      # perpendicular to the view, horizontal
+    if w[LSH] and w[RSH]:                      # facing the camera iff the left shoulder is on the image right
+        facing_cam = uv[LSH, 0] > uv[RSH, 0]
+        fwd = -v if facing_cam else v
+        lat = _unit(np.cross(UP, fwd)) * hand
+    hw, sw = Lg(LHIP, RHIP), Lg(LSH, RSH)
+    X[LHIP], X[RHIP] = mh + lat * hw / 2, mh - lat * hw / 2
+    tv = np.sqrt(max(Lg(LSH, LHIP) ** 2 - ((sw - hw) / 2) ** 2, 0.05))
+    ms = mh + UP * tv
+    X[LSH], X[RSH] = ms + lat * sw / 2, ms - lat * sw / 2
+    fwd = _unit(hand * np.cross(lat, UP))
+    X[NOSE] = ms + UP * 0.8 * np.sqrt(max(Lg(NOSE, LSH) ** 2 - (sw / 2) ** 2, 0.004)) + fwd * 0.08
+    for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
+        X[kn] = X[hp] - UP * Lg(hp, kn) + fwd * 0.02
+        X[an] = X[kn] - UP * Lg(kn, an)
+    for sh, el, wr in ((LSH, LEL, LWR), (RSH, REL, RWR)):
+        X[el] = X[sh] - UP * Lg(sh, el)
+        X[wr] = X[el] - UP * Lg(el, wr) * 0.9 + fwd * Lg(el, wr) * 0.4
     return X
 
 
@@ -517,7 +574,7 @@ def calibrate_bones(cam: PinholeCamera, uv, w, hand=1.0, n_frames: int = 40, hei
     T = len(uv)
     idx = np.unique(np.linspace(0, T - 1, min(T, n_frames)).round().astype(int))
     L0 = bone_lengths(height_prior[0])
-    X0 = np.stack([init_frame(cam, uv[i], L0, hand) for i in idx])
+    X0 = np.stack([init_frame(cam, uv[i], L0, hand, w=np.asarray(w)[i]) for i in idx])
     ok = np.isfinite(X0).all((1, 2))           # a degenerate frame (e.g. joints off the image) can't start the solve
     if not ok.all() and ok.sum() >= 2:
         idx, X0 = idx[ok], X0[ok]
@@ -542,7 +599,7 @@ def _robust_cost(r, f=1.5):
     return float((f * f * (np.sqrt(1 + (r / f) ** 2) - 1)).sum())
 
 
-def _lm(fun, jac, x0, max_iter=40, f_scale=1.5, tol=1e-4):
+def _lm(fun, jac, x0, max_iter=40, f_scale=1.5, tol=1e-4, robust=None):
     """Levenberg-Marquardt with IRLS soft-L1 weights and a sparse direct solve of the normal equations
     (much faster than scipy's lsmr trust-region for these banded problems). Same cost as
     least_squares(loss="soft_l1", f_scale=f_scale)."""
@@ -550,11 +607,19 @@ def _lm(fun, jac, x0, max_iter=40, f_scale=1.5, tol=1e-4):
     from scipy.sparse.linalg import spsolve
     x = np.asarray(x0, float).copy()
     r = fun(x)
-    cost = _robust_cost(r, f_scale)
+    costf = _robust_cost
+    if robust is not None:      # soft-L1 only on these residuals (observations); the rest stay quadratic
+        rob = np.asarray(robust, bool)
+
+        def costf(rr, f, _m=rob):
+            return _robust_cost(rr[_m], f) + 0.5 * float((rr[~_m] ** 2).sum())
+    cost = costf(r, f_scale)
     lam = 1e-2
     J = jac(x)
     for _ in range(max_iter):
         w = 1.0 / np.sqrt(1 + (r / f_scale) ** 2)
+        if robust is not None:
+            w = np.where(rob, w, 1.0)
         JW = diags(w) @ J
         A = (J.T @ JW).tocsc()
         g = JW.T @ r
@@ -564,7 +629,7 @@ def _lm(fun, jac, x0, max_iter=40, f_scale=1.5, tol=1e-4):
             dx = spsolve(A + diags(lam * d), -g)
             xn = x + dx
             rn = fun(xn)
-            cn = _robust_cost(rn, f_scale)
+            cn = costf(rn, f_scale)
             if cn < cost:
                 improved = True
                 break
@@ -620,9 +685,9 @@ def fit_track(cam: PinholeCamera, t, uv, w=None, hand: float | None = None, grou
     L = groups[BONE_GROUP]
     if prior is not None:
         P, pm = prior
-        X_init = np.stack([P[i] if pm[i].all() else init_frame(cam, uv[i], L, hand) for i in range(T)])
+        X_init = np.stack([P[i] if pm[i].all() else init_frame(cam, uv[i], L, hand, w=w[i]) for i in range(T)])
     else:
-        X_init = np.stack([init_frame(cam, uv[i], L, hand) for i in range(T)])
+        X_init = np.stack([init_frame(cam, uv[i], L, hand, w=w[i]) for i in range(T)])
     X = np.zeros((T, NJ, 3))
     U = np.zeros((T, NJ))
     wsum = np.zeros(T)
@@ -653,7 +718,7 @@ def fit_track(cam: PinholeCamera, t, uv, w=None, hand: float | None = None, grou
             ds = np.array([root_depths(cam, uv[i], L) for i in range(s, e)])
             Xs = None
             if np.median(np.abs(ds[:, 0] - ds[:, 1])) > 0.25:
-                Xs = np.stack([init_frame(cam, uv[i], L, hand, ds[i - s, 1]) for i in range(s, e)])
+                Xs = np.stack([init_frame(cam, uv[i], L, hand, ds[i - s, 1], w=w[i]) for i in range(s, e)])
                 starts.append(Xs)
             if try_mirror:   # the same 2D seen as the body turned the other way
                 starts += [mirror_depth(cam, X0)] + ([mirror_depth(cam, Xs)] if Xs is not None else [])

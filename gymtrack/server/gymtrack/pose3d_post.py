@@ -360,7 +360,8 @@ def bone_cv(X):
 # fixing a pose never costs reprojection that the solve did not accept
 # ---------------------------------------------------------------------------------------------------------
 
-N_EXTRA = 20
+N_EXTRA = 32
+EXTRA_W = 3.0      # plausibility terms are firm: a body that breaks them looks wrong at a glance
 _relu = P3._relu
 _smoothmin = P3._smoothmin
 
@@ -383,7 +384,7 @@ def _pair_min(p0, p1, q0, q1, n=4):
     return (m - 0.01 * np.log(np.exp(-(d - m) / 0.01).sum(1, keepdims=True)))[:, 0]   # soft-min
 
 
-def extra_terms(X, hand, bend_ok):
+def extra_terms(X, hand, bend_ok, cam=None):
     """(T, N_EXTRA) violations in sigma units: backwards knees (as seen against the facing), legs through each
     other, arms through the torso, trunk lean back / forward, standing feet off the floor."""
     T = len(X)
@@ -399,8 +400,8 @@ def extra_terms(X, hand, bend_ok):
         o = (off * fd).sum(-1) * np.clip(fdn / 0.3, 0, 1)       # leg along the facing: no preference
         out.append(_relu(-o + 0.005) / 0.01)
     # legs apart: thighs >= 10 cm, shanks >= 7 cm
-    out.append(_relu(0.11 - _pair_min(X[:, LHIP], X[:, LKN], X[:, RHIP], X[:, RKN])) / 0.01)
-    out.append(_relu(0.075 - _pair_min(X[:, LKN], X[:, LAN], X[:, RKN], X[:, RAN])) / 0.01)
+    out.append(_relu(0.12 - _pair_min(X[:, LHIP], X[:, LKN], X[:, RHIP], X[:, RKN])) / 0.01)
+    out.append(_relu(0.085 - _pair_min(X[:, LKN], X[:, LAN], X[:, RKN], X[:, RAN])) / 0.01)
     # arms outside the torso: elbows / wrists >= 8 cm from the spine axis (its middle part)
     mh = (X[:, LHIP] + X[:, RHIP]) / 2
     ms = (X[:, LSH] + X[:, RSH]) / 2
@@ -431,22 +432,40 @@ def extra_terms(X, hand, bend_ok):
     for a, b, c in ((LSH, LEL, LWR), (RSH, REL, RWR)):
         co = (_unit(X[:, b] - X[:, a]) * _unit(X[:, c] - X[:, b])).sum(-1)
         out.append(_relu(-0.87 - co) / 0.03)
+    # people stand on the floor: pelvis between 0.3 and 1.15 m, head below 2.05 m, nobody at the camera
+    out.append(_relu(mh[:, 2] - 1.15) / 0.02)
+    out.append(_relu(0.3 - mh[:, 2]) / 0.02)
+    out.append(_relu(X[:, NOSE, 2] - 2.05) / 0.02)
+    if cam is not None:
+        z = cam.depth(X)
+        out.append((_relu(1.0 - z) / 0.05).sum(1))
+    # the fit's own hard joint limits, firmer here
+    lim = P3._limits(X, hand)[:, :P3.N_HARD]
+    out += [lim[:, k] for k in range(P3.N_HARD)]
     while len(out) < N_EXTRA:
         out.append(np.zeros(T))
-    return np.stack(out[:N_EXTRA], 1)
+    return np.stack(out[:N_EXTRA], 1) * EXTRA_W
 
 
 class RefineProblem(P3._Problem):
     """_Problem on the playback grid + extra plausibility terms + stance-foot pins."""
 
     def __init__(self, cam, uv, w, t, L, hand, prior, bend_ok, pins, prior_sigma=0.04):
-        super().__init__(cam, uv, w, t, L, hand, prior=prior, prior_sigma=prior_sigma, acc_sigma=4.0)
+        super().__init__(cam, uv, w, t, L, hand, prior=prior, prior_sigma=prior_sigma, acc_sigma=1.5)
         self.bend_ok = np.asarray(bend_ok, float)
         self.pins = pins            # (T, 2, 3) target ankle positions, NaN = free
         self.pin_sig = 0.012
 
+    def robust_mask(self, x):
+        """soft-L1 on the 2D observations and the prior (they can be wrong); constraints stay quadratic."""
+        n = len(P3._Problem.residuals(self, x))
+        m = np.zeros(len(self.residuals(x)), bool)
+        m[:self.T * 26] = True
+        m[n - self.T * 39:n] = True
+        return m
+
     def _more(self, X):
-        r = [extra_terms(X, self.hand, self.bend_ok).ravel()]
+        r = [extra_terms(X, self.hand, self.bend_ok, self.cam).ravel()]
         P = self.pins
         d = np.where(np.isfinite(P), X[:, [LAN, RAN]] - np.nan_to_num(P), 0.0) / self.pin_sig
         r.append(d.ravel())
@@ -465,12 +484,12 @@ class RefineProblem(P3._Problem):
         X = x.reshape(self.T, 13, 3)
         T = self.T
         base = (np.arange(T)[:, None] * 13 + np.arange(13)[None, :]) * 3
-        E0 = extra_terms(X, self.hand, self.bend_ok)
+        E0 = extra_terms(X, self.hand, self.bend_ok, self.cam)
         h = 1e-5
         Xp = np.repeat(X[None], 39, axis=0)
         kk = np.arange(39)
         Xp[kk, :, kk // 3, kk % 3] += h
-        D = (extra_terms(Xp.reshape(-1, 13, 3), self.hand, np.tile(self.bend_ok, 39)).reshape(39, T, N_EXTRA) - E0[None]) / h
+        D = (extra_terms(Xp.reshape(-1, 13, 3), self.hand, np.tile(self.bend_ok, 39), self.cam).reshape(39, T, N_EXTRA) - E0[None]) / h
         R, C, V = [], [], []
         rows = np.arange(T)[:, None] * N_EXTRA + np.arange(N_EXTRA)[None, :]
         for k in range(39):
@@ -542,13 +561,26 @@ def grid_2d(t, uv, w, g, max_dt=0.4):
     return UV, W
 
 
-def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=12):
+def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=None):
+    import os
+    iters = iters or int(os.environ.get("REFINE_ITERS", 20))
     """Robust windowed solve on the grid. Xs: smoothed fitted track (G, 13, 3) used as prior + start."""
     G = len(g)
     L = np.asarray(groups, float)[P3.BONE_GROUP]
     X0 = floor_shift(rebuild(Xs, groups, hand))
+    # frames where the fit is physically impossible (off the floor, at the camera): restart from the 2D
+    mh = (X0[:, LHIP, 2] + X0[:, RHIP, 2]) / 2
+    bad = (mh < 0.2) | (mh > 1.3) | (cam.depth(X0).min(1) < 1.0) | ~np.isfinite(X0).all((1, 2))
+    pm = np.ones((G, 13))
+    if bad.any():
+        for i in np.flatnonzero(bad):
+            if (W[i] > 0).sum() >= 6:
+                X0[i] = P3.init_frame(cam, UV[i], L, hand, w=W[i])
+        X0 = floor_shift(X0)
+        pm[bad] = 0.0
     pins = stance_pins(X0)
-    prior = (Xs, np.ones((G, 13)))
+    pins[bad] = np.nan
+    prior = (Xs, pm)
     out = np.zeros_like(X0)
     wsum = np.zeros(G)
     step = max(1, win - overlap)
@@ -564,7 +596,7 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         if prev is not None and s < prev:
             k = prev - s
             x0[:k] = out[s:prev] / np.maximum(wsum[s:prev], 1e-9)[:, None, None]
-        sol = P3._lm(pr.residuals, pr.jac, x0.ravel(), max_iter=iters)
+        sol = P3._lm(pr.residuals, pr.jac, x0.ravel(), max_iter=iters, robust=pr.robust_mask(x0.ravel()))
         Xw = sol.x.reshape(-1, 13, 3)
         n = e - s
         bw = np.ones(n)
@@ -584,10 +616,50 @@ def rebuild_soft(X, groups, hand):
     return rebuild(X, groups, hand)
 
 
-def cap_yaw_rate(fwd, hz=HZ, max_deg_s=300.0):
+def cap_yaw_rate(fwd, hz=HZ, max_deg_s=240.0):
     yaw = np.unwrap(np.arctan2(fwd[:, 1], fwd[:, 0]))
     lim = np.radians(max_deg_s) / hz
     out = yaw.copy()
     for i in range(1, len(out)):
         out[i] = out[i - 1] + np.clip(yaw[i] - out[i - 1], -lim, lim)
     return np.stack([np.cos(out), np.sin(out), np.zeros_like(out)], 1)
+
+
+def fix_flips(cam, t, X, hand, switch=1.2):
+    """Per-sample choice between the fitted body and its depth-mirrored twin (same 2D, turned the other way):
+    Viterbi on smooth turning (horizontal shoulder/hip axis) + plausibility, so a body never spins round
+    for a few samples."""
+    T = len(X)
+    if T < 3:
+        return X
+    Xm = P3.mirror_depth(cam, X)
+    V = [X, Xm]
+    lat = []
+    un = []
+    for Y in V:
+        l = _unit(Y[:, LHIP] - Y[:, RHIP]) + _unit(Y[:, LSH] - Y[:, RSH])
+        l[:, 2] = 0
+        lat.append(_unit(l))
+        lim = P3._limits(Y, hand)[:, :P3.N_HARD]
+        un.append(np.minimum((lim ** 2).sum(1), 50.0) * 0.05)
+    un[1] = un[1] + 0.3
+    cost = np.array([un[0][0], un[1][0]])
+    back = np.zeros((T, 2), int)
+    for i in range(1, T):
+        dt = max(t[i] - t[i - 1], 0.05)
+        nc = np.zeros(2)
+        for s in range(2):
+            c = []
+            for p in range(2):
+                ang = np.degrees(np.arccos(np.clip((lat[s][i] * lat[p][i - 1]).sum(), -1, 1)))
+                c.append(cost[p] + max(0.0, ang - 120 * dt) / 60.0 * switch)
+            back[i, s] = int(np.argmin(c))
+            nc[s] = min(c) + un[s][i]
+        cost = nc
+    s = int(np.argmin(cost))
+    out = X.copy()
+    for i in range(T - 1, -1, -1):
+        if s:
+            out[i] = Xm[i]
+        s = back[i, s]
+    return out

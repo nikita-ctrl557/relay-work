@@ -307,3 +307,58 @@ def test_stitch_crowding_at_a_tracklet_start_does_not_block_linking_its_end():
     d = make(tracks)
     stitch(d)
     assert 2 not in ids_in(d) and 1 in ids_in(d)
+
+
+# --- identity check (reid.py signatures, stitch stage 4) ---------------------------------------------------
+
+def _person_img(shirt, legs):
+    """A frame with one person: shirt-coloured torso block over leg-coloured trousers, on grey."""
+    img = np.full((360, 640, 3), 110, np.uint8)
+    img[100:180, 300:360] = shirt
+    img[180:260, 300:360] = legs
+    return img
+
+
+def _kp13():
+    """13 joints (x, y, conf) of a standing person filling the block drawn by _person_img."""
+    j = {0: (330, 92), 1: (345, 105), 2: (315, 105), 3: (350, 140), 4: (310, 140), 5: (352, 170), 6: (308, 170),
+         7: (342, 180), 8: (318, 180), 9: (342, 220), 10: (318, 220), 11: (342, 258), 12: (318, 258)}
+    return np.array([[*j[k], 1.0] for k in range(13)], np.float32)
+
+
+def test_reid_signature_tells_clothes_apart_and_ignores_exposure():
+    from gymtrack import reid
+    box = (295, 85, 70, 180)
+    red = reid.signature(_person_img(COLOURS["red"], (30, 30, 30)), box, _kp13())
+    red_dim = reid.signature((_person_img(COLOURS["red"], (30, 30, 30)) * 0.75).astype(np.uint8), box, _kp13())
+    blue = reid.signature(_person_img(COLOURS["blue"], (30, 30, 30)), box, _kp13())
+    white = reid.signature(_person_img((235, 235, 235), (30, 30, 30)), box, _kp13())
+    assert reid.distance(red, red_dim) < 0.2          # a darker frame (exposure) is still the same clothes
+    assert reid.distance(red, blue) > 0.5 and reid.distance(white, blue) > 0.5
+    assert reid.signature(_person_img(COLOURS["red"], (30, 30, 30)), box) is not None  # no pose: box regions
+
+
+def test_identity_check_cuts_an_id_whose_clothes_change_and_keeps_a_steady_one():
+    from gymtrack import reid
+    from gymtrack.stitch import stitch
+    box = (295, 85, 70, 180)
+    red = reid.signature(_person_img(COLOURS["red"], (30, 30, 30)), box, _kp13())
+    blue = reid.signature(_person_img(COLOURS["blue"], (200, 200, 200)), box, _kp13())
+    # one ID: red until t=40, then (after its box jumps onto a neighbour) blue
+    jump = lambda t: (0.3, 0.3, 0.05, 0.2) if t < 40 else (0.36, 0.3, 0.05, 0.2)  # noqa: E731
+    d = make({1: (0, 80, jump, None)})
+    sigs = {1: [(t + k / 5, red if t < 40 else blue) for t in range(0, 81) for k in range(5)]}
+    stitch(d, sigs=sigs)
+    assert len(ids_in(d)) == 2 and d["stitch"]["identity_cuts"] == 1
+    d = make({1: (0, 80, jump, None)})
+    stitch(d, sigs={1: [(t + k / 5, red) for t in range(0, 81) for k in range(5)]})
+    assert ids_in(d) == {1}
+
+
+def test_cut_off_people_keep_their_pose_without_the_hidden_joints():
+    from gymtrack.stitch import drop_cut_off_poses
+    v = [500, 700, 480, 800, 520, 800, 470, 900, 530, 900, 470, 990, 530, 995, 490, 999, 510, 999, -1, -1, -1, -1, -1, -1, -1, -1]
+    d = {"timeline": [], "poses": [{"t": 0.0, "k": [[1, list(v)]]}]}
+    drop_cut_off_poses(d)
+    k = d["poses"][0]["k"]
+    assert len(k) == 1 and k[0][1][:10] == v[:10] and k[0][1][14:18] == [-1, -1, -1, -1]

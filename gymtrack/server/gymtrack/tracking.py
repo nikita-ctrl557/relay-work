@@ -15,6 +15,11 @@
 * Appearance: a clothing-colour signature, updated only from clean views (no one else in the box), so it
   isn't contaminated when two people overlap (the old cause of IDs jumping between people). Signatures
   live in memory for this recording only; nothing about a person's appearance is stored.
+* Pose: every detected person gets a 2D pose at the detection rate, also small ones and people cut off by the
+  frame edge (padded crop; joints outside the picture are marked unseen), so 3D can follow everyone.
+* Identity check data: per clean posed detection, a robust clothing signature (reid.py); a new track can't take
+  over a lost person's ID when those clearly differ, and the offline identity check (stitch.py) cuts IDs whose
+  signature changes for good. In memory for this recording only.
 * Identity: a member tag seen inside a person's box names that track for good;
   everyone else is "Person N" (anonymous).
 * Dwell: each track's feet (bottom-centre of the box) are tested against the machine

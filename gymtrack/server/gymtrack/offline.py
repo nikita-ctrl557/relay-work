@@ -68,9 +68,10 @@ def person_obs(tr, frame: np.ndarray, t: float) -> dict:
     x, y, w, h = (float(v) for v in tr.box)
     kp = None
     kps = getattr(tr, "kps", None)
-    if kps and abs(kps[-1][0] - t) < 1e-6:
-        kp = np.asarray(kps[-1][1], np.float32)[JOINTS13]
     H, W = frame.shape[:2]
+    cut = y + h >= 0.985 * H or x <= 0.015 * W or x + w >= 0.985 * W
+    if kps and abs(kps[-1][0] - t) < 1e-6 and not cut:  # a cut-off body's pose (replay/3D only) is too partial to credit sets
+        kp = np.asarray(kps[-1][1], np.float32)[JOINTS13]
     x0, y0, x1, y1 = max(0, int(x)), max(0, int(y)), min(W, int(x + w)), min(H, int(y + h))
     crop = None
     if x1 - x0 >= 4 and y1 - y0 >= 4:

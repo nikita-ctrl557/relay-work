@@ -57,6 +57,8 @@ def _hist(px: np.ndarray, light) -> np.ndarray | None:
     px = px.reshape(-1, 3).astype(np.float32)
     if len(px) < MIN_PX:
         return None
+    if len(px) > 3000:  # big, near people: a regular subsample is as good and much cheaper
+        px = px[::len(px) // 3000 + 1]
     mL, ma, mb = light
     L = px[:, 0] * float(np.clip(L_REF / max(mL, 1.0), 0.6, 1.7))
     a = px[:, 1] - 128.0 - 0.5 * (ma - 128.0)
@@ -64,11 +66,13 @@ def _hist(px: np.ndarray, light) -> np.ndarray | None:
     kl, wl = _soft(L, L_CENT)
     ka, wa = _soft(a, C_CENT)
     kb, wb = _soft(b, C_CENT)
-    h = np.zeros(NB, np.float32)
+    idx, wts = [], []
     for dl, fl in ((0, wl), (1, 1 - wl)):
         for da, fa in ((0, wa), (1, 1 - wa)):
             for db, fb in ((0, wb), (1, 1 - wb)):
-                np.add.at(h, (kl + dl) * NC * NC + (ka + da) * NC + (kb + db), fl * fa * fb)
+                idx.append((kl + dl) * NC * NC + (ka + da) * NC + (kb + db))
+                wts.append(fl * fa * fb)
+    h = np.bincount(np.concatenate(idx), np.concatenate(wts), minlength=NB).astype(np.float32)
     return h / h.sum()
 
 

@@ -264,6 +264,7 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, t
 def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_hold=0.8):
     """Fitted samples -> steady grid: smooth, then the constrained solve (2D, rigid bones, floor, pinned stance
     feet, plausibility), facing with a capped turn rate; ends held to cover the time the person is on screen."""
+    X = PP.fix_flips(cam, t, X, hand)
     g, Xs = PP.resample_smooth(t, X, U, hz)
     UV, Wg = PP.grid_2d(t2, uv2, w2, g)
     bend = np.zeros(len(g))

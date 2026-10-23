@@ -23,7 +23,7 @@ if os.environ.get('DUMP_PRESTITCH'):  # dev only: keep post-processing's input (
     _pp.finish_sets = _dump_fs
 S = '/tmp/claude-0/-home-user-relay-work/851771c1-781b-56fa-9dda-a42b6ec0afa3/scratchpad/'
 OUT = os.environ.get('RUN_DIR', S + 'rerun/')  # where per-segment results go
-cfg, cam = _camera(S + 'yt/segs', seg)
+cfg, cam = _camera(os.environ.get('SEG_DIR', S + 'yt/segs'), seg)
 tl, poses, trace = [], [], []
 t = time.time(); last = [0]
 def prog(f, vt, sp):
