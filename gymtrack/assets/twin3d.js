@@ -117,8 +117,9 @@ const MODELS = {
 };
 function kindOf(m) {
   const s = ` ${m.id} ${m.name} ${m.kind || ""} `.toLowerCase().replace(/[^a-z0-9]+/g, " "), has = re => re.test(s);
-  if (has(/ (squat|power|half) ?rack | rack | platform /)) return "rack";
-  if (has(/ bench /)) return has(/ (press|flat|incline) /) && !has(/ (dumbbell|db) /) ? "benchpress" : "bench";
+  if (has(/ (dumbbells?|db) (racks?|stands?) /)) return "dumbbells";
+  if (has(/ (squat|power|half) ?racks? | racks? | platforms? /)) return "rack";
+  if (has(/ bench(es)? /)) return has(/ bench press(es)? /) ? "benchpress" : "bench";
   if (has(/ (cable|crossover|pulley|lat|pulldown|functional trainer) /)) return "cable";
   if (has(/ (dumbbells?|db) /)) return "dumbbells";
   if (has(/ (treadmill|tread|run|running) /)) return "treadmill";
@@ -232,10 +233,11 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const eqOf = id => room?.equipment?.find(e => e.machine === id), eqRect = e => [[e.x - e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y + e.d / 2], [e.x - e.w / 2, e.y + e.d / 2]];
   const zones = plan.zones.map(z => eqOf(z.machine) ? {...z, poly: eqRect(eqOf(z.machine))} : z);
   // room bounds: the plan plus anything placed around it
-  const items = room ? [] : plan.items || [];
+  const items = plan.items || [];
   let x0 = 0, z0 = 0, x1 = plan.width, z1 = plan.depth;
   if (room?.bounds) ({x0, x1, y0: z0, y1: z1} = room.bounds);
   for (const it of items) { x0 = Math.min(x0, it.x - 0.8); x1 = Math.max(x1, it.x + 0.8); z0 = Math.min(z0, it.y - 0.8); z1 = Math.max(z1, it.y + 0.8); }
+  for (const mr of plan.mirrors || []) for (const [x, y] of [mr.from, mr.to]) { x0 = Math.min(x0, x - 0.1); x1 = Math.max(x1, x + 0.1); z0 = Math.min(z0, y - 0.1); z1 = Math.max(z1, y + 0.1); }
   for (const z of zones) for (const [x, y] of z.poly) { x0 = Math.min(x0, x - 0.3); x1 = Math.max(x1, x + 0.3); z0 = Math.min(z0, y - 0.3); z1 = Math.max(z1, y + 0.3); }
   const RW = x1 - x0, RD = z1 - z0, CX = (x0 + x1) / 2, CZ = (z0 + z1) / 2, WH = plan.height || (RW > 9 ? 4 : 2.8);
 
@@ -256,6 +258,17 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const overlay = new THREE.Mesh(new THREE.PlaneGeometry(RW, RD), new THREE.MeshBasicMaterial({map: ftex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4}));
   overlay.rotation.x = -Math.PI / 2; overlay.position.set(CX, 0.01, CZ); overlay.renderOrder = 1; scene.add(overlay);
   const modelOnly = [floor, base, ...walls];
+  // wall mirrors (plan.mirrors: wall segments in plan metres): a glass panel just in front of the wall
+  const glassM = new THREE.MeshStandardMaterial({color: dark() ? 0x5d7184 : 0xcfdde8, metalness: 0.9, roughness: 0.08, transparent: true, opacity: 0.85, envMapIntensity: 1});
+  for (const mr of plan.mirrors || []) {
+    const [ax, ay] = mr.from, [bx, by] = mr.to, len = Math.hypot(bx - ax, by - ay), lo = mr.bottom ?? 0.3, hi = Math.min(mr.top ?? 2.4, WH - 0.05);
+    if (len < 0.2 || hi <= lo) continue;
+    const g = new THREE.Mesh(new THREE.BoxGeometry(len, hi - lo, 0.02), glassM), nx = -(by - ay) / len, ny = (bx - ax) / len, toC = (CX - ax) * nx + (CZ - ay) * ny >= 0 ? 1 : -1;
+    g.position.set((ax + bx) / 2 + nx * toC * 0.03, (lo + hi) / 2, (ay + by) / 2 + ny * toC * 0.03); g.rotation.y = -Math.atan2(by - ay, bx - ax);
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(len + 0.06, hi - lo + 0.06, 0.012), new THREE.MeshStandardMaterial({color: P.black, roughness: 0.6}));
+    frame.position.copy(g.position).add(new THREE.Vector3(-nx * toC * 0.012, 0, -ny * toC * 0.012)); frame.rotation.copy(g.rotation);
+    scene.add(frame, g); modelOnly.push(frame, g);
+  }
   let lastHeat = null;
   function paintFloor() {
     const g = fc.getContext("2d"), s = PX, L = layer(), h = lastHeat;
