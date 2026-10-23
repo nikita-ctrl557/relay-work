@@ -178,47 +178,77 @@ def person_tracks(timeline: list[dict]) -> dict[int, list[tuple[float, float | N
     return out
 
 
-def attribute(flips: list[Flip], rack: RackModel, poses: list[dict], timeline: list[dict], *,
-              t_end: float, hand_window: float = 3.0, max_hand_px: float | None = 160.0,
+def attribute(events: list, rack: RackModel, poses: list[dict], timeline: list[dict], *,
+              t_end: float, t_start: float = 0.0, hand_window: float = 3.0, max_hand_px: float | None = 160.0,
               grace_s: float = 60.0, slot_xy=None) -> dict:
-    """Turn slot flips into pickups / returns / unreturned events. See module doc for the rules.
-    slot_xy(slot, t) -> (x, y) full-frame pixels of the slot at time t (camera drift); default: slot.x, slot.y.
-    The hand is searched from the start of the occlusion that hid the slot just before the flip to 1 s after."""
+    """Turn rack events (RackEvent, or Flip = single-slot event) into pickups / returns / unreturned.
+
+    * pickup / return: credited to the person whose wrist is nearest the (first) slot from the start of the
+      occlusion that hid it just before the change to 1 s after (`hand_window` s before at least).
+    * a pickup not re-racked by `grace_s` after the lifter was last seen on this camera -> UNRETURNED at that
+      moment, located at the lifter's last floor position (plan metres from the replay timeline);
+      resolved by the next return to any of its slots (`resolved_by`, `resolved_t`).
+    * slots already empty when the footage starts are "out at start" (pid None) - kept for completeness.
+    * a pickup whose lifter is still around (or the grace period hasn't run out) at t_end stays "pending".
+    slot_xy(slot, t) -> (x, y) full-frame pixels of the slot at time t (camera drift); default slot.x, slot.y.
+    """
     tracks = person_tracks(timeline)
-    pickups, returns, unreturned = [], [], []
+    pickups, returns, unreturned, pending = [], [], [], []
     out_now: dict[str, dict] = {}            # slot -> open pickup
-    for f in sorted(flips, key=lambda f: f.t):
-        s = rack.slot(f.slot)
-        lo = min(f.t - hand_window, f.t_hidden - 1.0) if f.t_hidden is not None else f.t - hand_window
-        hi = f.t + 1.0
-        x, y = slot_xy(s, f.t) if slot_xy else (s.x, s.y)
-        pid, dist, _ = nearest_hand(poses, (lo + hi) / 2, x, y, rack.frame_size, (hi - lo) / 2, max_hand_px)
-        ev = {"t": round(f.t, 2), "slot": s.id, "rack": s.rack, "weight": s.weight, "pid": pid, "hand_px": dist}
-        if not f.full:
+    for e in sorted(events, key=lambda e: e.t):
+        slots = getattr(e, "slots", None) or [e.slot]
+        s = rack.slot(slots[0])
+        lo = min(e.t - hand_window, e.t_hidden - 1.0) if e.t_hidden is not None else e.t - hand_window
+        hi = e.t + 1.0
+        x, y = slot_xy(s, e.t) if slot_xy else (s.x, s.y)
+        at_start = (not e.full) and e.t - t_start < 3.0
+        pid, dist, _ = (None, None, None) if at_start else nearest_hand(
+            poses, (lo + hi) / 2, x, y, rack.frame_size, (hi - lo) / 2, max_hand_px)
+        ws = [rack.slot(q).weight for q in slots]
+        ev = {"t": round(e.t, 2), "slots": slots, "rack": s.rack, "weight": ws[0] if len(set(ws)) == 1 else None,
+              "count": len(slots), "kg": sum(w or 0 for w in ws), "pid": pid, "hand_px": dist,
+              "window": [round(lo, 1), round(hi, 1)]}
+        if not e.full:
+            ev["out_at_start"] = at_start
             pickups.append(ev)
-            out_now[s.id] = ev
+            for q in slots:
+                out_now[q] = ev
         else:
             returns.append(ev)
-            p = out_now.pop(s.id, None)
-            if p is not None:
-                ev["pickup_t"], ev["pickup_pid"] = p["t"], p["pid"]
-                p["returned_t"], p["returned_by"] = ev["t"], pid
-    # pickups not put back by the time the lifter left the camera -> unreturned (at their departure)
+            for q in slots:
+                p = out_now.pop(q, None)
+                # a return may land in a neighbouring patch of the same column (patch spill): match the column
+                if p is None:
+                    col = column_of(q)
+                    near = [k for k in out_now if column_of(k) == col and
+                            abs(int(k.rsplit("/", 1)[1]) - int(q.rsplit("/", 1)[1])) <= 1]
+                    p = out_now.pop(near[0], None) if near else None
+                if p is not None and "returned_t" not in p:
+                    p["returned_t"], p["returned_by"] = ev["t"], pid
+                    ev.setdefault("pickup_t", p["t"])
+                    ev.setdefault("pickup_pid", p["pid"])
     for p in pickups:
-        tr = tracks.get(p["pid"], []) if p["pid"] is not None else []
-        seen_after = [r for r in tr if r[0] >= p["t"]]
-        left_t = seen_after[-1][0] if seen_after else p["t"]
         ret_t = p.get("returned_t")
+        if p["out_at_start"]:
+            left_t = p["t"]
+        else:
+            tr = tracks.get(p["pid"], []) if p["pid"] is not None else []
+            seen_after = [r for r in tr if r[0] >= p["t"]]
+            left_t = seen_after[-1][0] if seen_after else p["t"]
         if ret_t is not None and ret_t <= left_t + grace_s:
             continue                     # re-racked during their visit (or right after)
-        if left_t >= t_end - grace_s and ret_t is None:
-            continue                     # still around when the footage ends: can't judge yet
-        pos = [(r[1], r[2]) for r in seen_after if r[1] is not None]
+        if ret_t is None and left_t + grace_s >= t_end:
+            pending.append(dict(p, last_seen=left_t))   # lifter still around / too close to the end to judge
+            continue
+        pos = []
+        if p["pid"] is not None:
+            pos = [(r[1], r[2]) for r in tracks.get(p["pid"], []) if r[0] >= p["t"] and r[1] is not None]
         x, y = pos[-1] if pos else (None, None)   # lifter's last floor position (where they trained)
-        unreturned.append({"t": round(left_t, 2), "pickup_t": p["t"], "weight": p["weight"], "slot": p["slot"],
-                           "pid": p["pid"], "x": x, "y": y,
+        unreturned.append({"t": round(left_t + (0 if p["out_at_start"] else grace_s), 2), "pickup_t": p["t"],
+                           "weight": p["weight"], "count": p["count"], "kg": p["kg"], "slot": p["slots"][0],
+                           "slots": p["slots"], "pid": p["pid"], "out_at_start": p["out_at_start"], "x": x, "y": y,
                            "resolved_by": p.get("returned_by"), "resolved_t": ret_t})
-    return {"pickups": pickups, "returns": returns, "unreturned": unreturned}
+    return {"pickups": pickups, "returns": returns, "unreturned": unreturned, "pending": pending}
 
 
 def offenders(events_by_cam: dict[str, dict], t_end_by_cam: dict[str, float], names: dict | None = None) -> list[dict]:
@@ -233,7 +263,7 @@ def offenders(events_by_cam: dict[str, dict], t_end_by_cam: dict[str, float], na
             a = agg.setdefault(key, {"camera": cam, "pid": u["pid"], "name": (names or {}).get(key, f"Person {u['pid']}"),
                                      "left_out": 0, "kg": 0.0, "kg_min": 0.0, "events": []})
             end = u["resolved_t"] if u["resolved_t"] is not None else t_end_by_cam[cam]
-            w = u["weight"] or 0.0
+            w = u.get("kg", u["weight"] or 0.0)
             a["left_out"] += 1
             a["kg"] += w
             a["kg_min"] += w * max(0.0, end - u["t"]) / 60
@@ -285,17 +315,80 @@ def flips_from_scores(t: np.ndarray, score: np.ndarray, slot_ids, *, on: float =
     flips = []
     for j, sid in enumerate(slot_ids):
         st = SlotState(on=on, off=off, hold_s=hold_s)
-        hidden_since = None
+        occ_runs: list[float] = []          # start times of occlusion runs
+        was_hidden = False
         for k in range(len(t)):
             v = score[k, j]
             if np.isnan(v):
-                if hidden_since is None:
-                    hidden_since = t[k]
-                st.update(t[k], None)
+                if not was_hidden:
+                    occ_runs.append(float(t[k]))
+                was_hidden = True
                 continue
+            was_hidden = False
             got = st.update(t[k], float(v))
             if got is not None:
-                flips.append(Flip(float(st.flip_t), str(sid), got, hidden_since))
-            if st._cand is None:
-                hidden_since = None
+                prior = [r for r in occ_runs if r <= st.flip_t]
+                th = prior[-1] if prior and st.flip_t - prior[-1] < 120 else None
+                flips.append(Flip(float(st.flip_t), str(sid), got, th))
     return sorted(flips, key=lambda f: f.t)
+
+
+@dataclass
+class RackEvent:
+    t: float
+    full: bool                    # True = return, False = pickup
+    rack: str
+    slots: list[str]              # one representative slot per dumbbell
+    weight: float | None          # per dumbbell
+    t_hidden: float | None = None
+
+    @property
+    def count(self):
+        return len(self.slots)
+
+
+def group_flips(flips: list[Flip], rack: RackModel, scores_at=None, window_s: float = 6.0) -> list[RackEvent]:
+    """One physical dumbbell often flips 2-3 neighbouring slot patches (patches overlap a head's neighbours);
+    a pair taken together flips the same level on both sides. Flips of the same kind on the same rack within
+    window_s are one event; within it, each column's run of adjacent slots is ONE dumbbell, represented by its
+    middle slot (or the highest-scoring one if scores_at(slot_id, t) is given)."""
+    evs: list[RackEvent] = []
+    used = [False] * len(flips)
+    for i, f in enumerate(flips):
+        if used[i]:
+            continue
+        r = rack.slot(f.slot).rack
+        grp = [f]
+        used[i] = True
+        for j in range(i + 1, len(flips)):
+            g = flips[j]
+            if g.t - f.t > window_s:
+                break
+            if not used[j] and g.full == f.full and rack.slot(g.slot).rack == r:
+                grp.append(g)
+                used[j] = True
+        by_col: dict[str, list[int]] = {}
+        for g in grp:
+            by_col.setdefault(column_of(g.slot), []).append(int(g.slot.rsplit("/", 1)[1]))
+        reps = []
+        for col, idx in sorted(by_col.items()):
+            idx = sorted(set(idx))
+            runs, cur = [], [idx[0]]
+            for k in idx[1:]:
+                if k == cur[-1] + 1:
+                    cur.append(k)
+                else:
+                    runs.append(cur)
+                    cur = [k]
+            runs.append(cur)
+            for run in runs:
+                ids = [f"{col}/{k}" for k in run]
+                if scores_at is not None:
+                    reps.append(max(ids, key=lambda sid: scores_at(sid, f.t)))
+                else:
+                    reps.append(ids[len(ids) // 2])
+        ws = [rack.slot(s).weight for s in reps]
+        th = [g.t_hidden for g in grp if g.t_hidden is not None]
+        evs.append(RackEvent(min(g.t for g in grp), f.full, r, reps, ws[0] if len(set(ws)) == 1 else None,
+                             min(th) if th else None))
+    return evs
