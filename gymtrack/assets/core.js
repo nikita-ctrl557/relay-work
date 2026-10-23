@@ -670,6 +670,7 @@ class ReplaySource {
       v.addEventListener("canplay", () => v.play().catch(() => {}), {once: true});
       c.el = v;
     }
+    this.pose3dReady = this.loadPose3d();
     const kick = () => this.cams.forEach(c => (c.pv || c.el).play().catch(() => {}));
     addEventListener("pointerdown", kick, {once: true});
   }
@@ -687,7 +688,8 @@ class ReplaySource {
     const sets = c.data.sets.filter(s => s.pid === m.pid).sort((a, b) => a.t0 - b.t0);
     const sources = (c.video_clean ? [[c.video_clean, "video/mp4"]] : [[c.video, "video/mp4"], [c.video_webm, "video/webm"]]).filter(([f]) => f).map(([f, type]) => ({src: this.base + f, type}));
     const parts = (c.clean_parts?.length ? c.clean_parts : c.parts?.length ? c.parts : null)?.map(p => ({src: this.base + p.file, start: p.start, dur: p.dur})) || null;
-    return {camera: c.name, camId: c.id, pid: m.pid, samples, sets, sources, parts, duration: c.data.duration, pose: t => this.poseAt(c, m.pid, t)};
+    return {camera: c.name, camId: c.id, pid: m.pid, samples, sets, sources, parts, duration: c.data.duration, pose: t => this.poseAt(c, m.pid, t),
+      pose3dReady: this.pose3dReady, has3d: () => !!c.p3?.idx[m.pid], pose3d: t => this.pose3dAt(c, m.pid, t), camera3d: t => this.camera3dAt(c.id, t), mobility3d: () => this.mobility3d(c.id, m.pid)};
   }
   personStats(c, pid, ct, full = false) { // full: the whole recording (totals, history); otherwise up to playback time
     const lim = full ? Infinity : ct;
@@ -787,10 +789,10 @@ class ReplaySource {
     const c = this.cams.find(x => x.id === camId); if (!c) return [];
     const ct = this.ct(c), tl = c.data.timeline, i = tl.indexOf(this.at(c, ct)), a = tl[i], b = tl[i + 1];
     const now = this.peopleAt(c, a);
-    if (!b || b.t - a.t > 2) return now;
+    if (!b || b.t - a.t > 2) return now.map(q => ({...q, pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}));
     const k = Math.max(0, Math.min(1, (ct - a.t) / (b.t - a.t))), next = Object.fromEntries(this.peopleAt(c, b).map(q => [q.pid, q]));
     const mix = (a, b) => a == null || b == null ? a : a + (b - a) * k;
-    return now.map(q => { const n = next[q.pid]; return {...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k), x: mix(q.x, n.x), y: mix(q.y, n.y)} : q), pose: this.poseAt(c, q.pid, ct)}; });
+    return now.map(q => { const n = next[q.pid]; return {...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k), x: mix(q.x, n.x), y: mix(q.y, n.y)} : q), pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}; });
   }
   poseIdx(c) { // pid -> {t: [], k: [decoded pose]} from the 5-per-second pose log
     if (c._pi) return c._pi;
@@ -806,6 +808,55 @@ class ReplaySource {
     if (Math.abs(ct - r.t[a]) > 0.6 && Math.abs(r.t[b] - ct) > 0.6) return null;
     if (b === a || r.t[b] - r.t[a] > 0.8) return r.k[Math.abs(ct - r.t[a]) <= Math.abs(r.t[b] - ct) ? a : b];
     return lerpPose(r.k[a], r.k[b], Math.max(0, Math.min(1, (ct - r.t[a]) / (r.t[b] - r.t[a]))));
+  }
+  /* ---- monocular 3D body pose (bench/add_pose3d.py): "<data>.pose3d.json" sidecar, or merged into the data file ---- */
+  async loadPose3d() { // background: the app works (2D only) until this resolves; a missing sidecar is not an error
+    await Promise.all(this.cams.map(async c => {
+      let d = c.data.poses3d ? c.data : null;
+      if (!d) {
+        const f = c.pose3d_file || (c.data_file || c.id + ".json").replace(/\.json$/, "") + ".pose3d.json";
+        try { const r = await fetch(this.base + f); if (r.ok && /json/.test(r.headers.get("content-type") || "json")) d = await r.json(); } catch {}
+      }
+      if (d?.poses3d?.length) this.indexPose3d(c, d);
+    }));
+    return this.cams.some(c => c.p3);
+  }
+  indexPose3d(c, d) {
+    const raw = {}, meta = d.pose3d_meta || {};
+    for (const e of d.poses3d) for (const row of e.k) { const [pid, P, , A, U] = row; if (!P || P.length < 39) continue; (raw[pid] ||= []).push([e.t, P, A || [], U || []]); }
+    const idx = {};
+    for (const [pid, rows] of Object.entries(raw)) {
+      rows.sort((a, b) => a[0] - b[0]);
+      const n = rows.length, t = new Float64Array(n), P = new Float32Array(n * 39), A = new Float32Array(n * 12), U = new Float32Array(n * 13).fill(NaN);
+      rows.forEach(([tt, p, a, u], i) => { t[i] = tt; for (let j = 0; j < 39; j++) P[i * 39 + j] = p[j] / 100; for (let j = 0; j < 12; j++) A[i * 12 + j] = a[j] ?? NaN; for (let j = 0; j < 13; j++) if (u[j] != null) U[i * 13 + j] = u[j]; });
+      idx[pid] = {t, P, A, U, n};
+    }
+    const segs = c.data.segments || [];
+    const cams = (meta.cams || []).map(x => ({...x, seg: segs.find(s => s.name === x.segment) || null}));
+    c.p3 = {idx, meta, cams, mobility: d.mobility || {sets: [], people: {}}, angles: meta.angles || []};
+  }
+  has3d(camId) { return !!this.cams.find(x => x.id === camId)?.p3; }
+  /* -> {J: Float32Array(39) metres (plan x, plan y, height), A: {angle: deg}, u: mean 1-sigma cm} or null; linear between samples */
+  pose3dAt(camId, pid, ct) {
+    const c = typeof camId === "string" ? this.cams.find(x => x.id === camId) : camId, r = c?.p3?.idx[pid]; if (!r) return null;
+    const T = r.t, n = r.n; if (ct < T[0] - 0.35 || ct > T[n - 1] + 0.35) return null;
+    let lo = 0, hi = n - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m] <= ct) lo = m; else hi = m - 1; }
+    let a = lo, b = Math.min(lo + 1, n - 1), k = 0;
+    if (b > a && T[b] - T[a] <= 0.8) k = Math.max(0, Math.min(1, (ct - T[a]) / (T[b] - T[a])));
+    else { if (b > a && Math.abs(T[b] - ct) < Math.abs(ct - T[a])) a = b; b = a; if (Math.abs(ct - T[a]) > 0.6) return null; }
+    const J = new Float32Array(39), A = {}, names = c.p3.angles;
+    for (let j = 0; j < 39; j++) J[j] = r.P[a * 39 + j] + (r.P[b * 39 + j] - r.P[a * 39 + j]) * k;
+    names.forEach((nm, j) => { const x = r.A[a * 12 + j], y = r.A[b * 12 + j]; A[nm] = Number.isNaN(y) ? x : x + (y - x) * k; });
+    let us = 0, un = 0; for (let j = 0; j < 13; j++) { const u = r.U[a * 13 + j]; if (!Number.isNaN(u)) { us += u; un++; } }
+    return {J, A, u: un ? us / un : null, t: ct};
+  }
+  camera3dAt(camId, ct) { // the CCTV camera the 3D was solved with (pose3d frame = plan frame), for the "camera view"
+    const c = this.cams.find(x => x.id === camId); const cs = c?.p3?.cams || []; if (!cs.length) return null;
+    return (cs.find(x => x.seg && ct >= x.seg.start && ct < x.seg.end) || cs[0]).camera || null;
+  }
+  mobility3d(camId, pid) {
+    const c = this.cams.find(x => x.id === camId); const m = c?.p3?.mobility; if (!m) return null;
+    return {sets: (m.sets || []).filter(s => s.pid === pid).sort((a, b) => a.t0 - b.t0), best: m.people?.[pid] || m.people?.[String(pid)] || null, height: c.p3.meta.people?.[pid]?.height_m || null};
   }
   poseClip(memberId) { // the member's posture: their longest set with pose data, or their best-seen 20 s
     const m = this.cfg.members.find(x => x.id === memberId), c = m && this.cams.find(x => x.id === m.cam); if (!c) return null;
