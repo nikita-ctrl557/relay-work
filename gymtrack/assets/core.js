@@ -820,9 +820,11 @@ class ReplaySource {
   }
   /* ---- monocular 3D body pose (bench/add_pose3d.py): "<data>.pose3d.json" sidecar, or merged into the data file ---- */
   async loadPose3d() { // background: the app works (2D only) until this resolves; a missing sidecar is not an error
+    // a manifest that names "pose3d_file" for any camera is authoritative (null = none); otherwise probe "<data>.pose3d.json"
+    const listed = this.cams.some(c => "pose3d_file" in c);
     await Promise.all(this.cams.map(async c => {
       let d = c.data.poses3d ? c.data : null;
-      if (!d) {
+      if (!d && (c.pose3d_file || !listed)) {
         const f = c.pose3d_file || (c.data_file || c.id + ".json").replace(/\.json$/, "") + ".pose3d.json";
         try { const r = await fetch(this.base + f); if (r.ok && /json/.test(r.headers.get("content-type") || "json")) d = await r.json(); } catch {}
       }

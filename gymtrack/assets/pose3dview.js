@@ -54,8 +54,8 @@ export function mountBody3D(host, {tr, state, seek}) {
   const pressed = () => host.querySelectorAll("[data-v]").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === view));
   function goal(k) { // camera position for a quick view, around the current body
     const f = J ? facing(J, new THREE.Vector3()) : new THREE.Vector3(0, 0, 1), side = new THREE.Vector3().crossVectors(THREE.Object3D.DEFAULT_UP, f), t = pelvis.clone();
-    if (k === "front") return t.clone().addScaledVector(f, 4.1).add(new THREE.Vector3(0, 0.45, 0));
-    if (k === "side") return t.clone().addScaledVector(side, 4.1).add(new THREE.Vector3(0, 0.45, 0));
+    if (k === "front") return t.clone().addScaledVector(f, 3.6).add(new THREE.Vector3(0, 0.45, 0));
+    if (k === "side") return t.clone().addScaledVector(side, 3.6).add(new THREE.Vector3(0, 0.45, 0));
     return t.clone().add(new THREE.Vector3(0, 4.6, 0)).addScaledVector(f, -0.05);
   }
   function setView(k, now = false) {
