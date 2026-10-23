@@ -557,7 +557,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   }
   const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
 
-  let raf, last = 0, heatAt = -1e9, colAt = -1e9, segAt_ = -1e9; const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
+  let raf, last = 0, heatAt = -1e9, colAt = -1e9, segAt_ = -1e9; const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(); let lastFrame = null;
   const sp = v => { tmp.copy(v).project(camera); return tmp.z < 1 && Math.abs(tmp.x) < 1.05 && Math.abs(tmp.y) < 1.05 ? tmp.clone() : null; };
   function frame(ts) {
     raf = requestAnimationFrame(frame);
@@ -577,8 +577,9 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       for (let i = 0; i < 2 && taken.some(q => x - w / 2 < q.r && x + w / 2 > q.l && y - h < q.b && y > q.t) && y - h - 2 > h + 2; i++) y -= h + 2; // stacked heads: lift the tag
       taken.push({l: x - w / 2, r: x + w / 2, t: y - h, b: y}); tag.style.display = ""; tag.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`; };
     const bodyR = []; // screen rects of the drawn bodies: no label may cover one
+    const fadeK = 1 - Math.exp(-Math.min(0.5, (ts - (lastFrame ?? ts - 16)) / 1000) / 0.13); lastFrame = ts; // time-based: slow devices fade as fast
     for (const [k, p] of [...ppl]) {
-      p.alpha += ((showP ? p.want : 0) - p.alpha) * 0.12;
+      p.alpha += ((showP ? p.want : 0) - p.alpha) * fadeK;
       if (p.want === 0 && p.alpha < 0.02) { scene.remove(p.shadow, p.halo, p.b3.group); p.mat.dispose(); p.jmat.dispose(); p.faint.dispose(); p.tag.remove(); ppl.delete(k); continue; }
       const hl = hoverPid === k, a = Math.max(0, Math.min(1, p.alpha));
       // measured 3D body (already on this map's floor) moved to the placer's feet point; or the neutral body there

@@ -8,7 +8,7 @@ of clothing colour along the ID. This module measures that change robustly and c
 * signature(): per detection, colour histograms of five body regions -- torso (shoulders to hips), thighs
   (hips to knees), shins (knees to ankles), upper arms (sleeves or skin) and head (hair) -- sampled along the pose's own bones when there is one (so sitting or bending doesn't pull in background), else at
   fixed fractions of the box. Lab colour, normalised for the frame's lighting (global median shift of a/b
-  for white balance, L scaled to a reference exposure), coarse 5x3x3 bins (dark / light and chroma
+  for white balance, L scaled to a reference exposure), soft 5x5x5 bins (dark / light and chroma
   matter more than hue detail at these sizes). Hellinger distance per region, weighted mean over the regions
   both sides have (torso counts most). Pure numpy/OpenCV, CPU, no learned model, no licence strings attached.
 * change_points(): binary segmentation of one ID's signature sequence (1 s means of clean views): the split
@@ -25,8 +25,9 @@ import numpy as np
 NOSE, LSH, RSH, LEL, REL, LWR, RWR, LHIP, RHIP, LKN, RKN, LAN, RAN = range(13)
 
 L_CENT = np.array([25, 70, 115, 165, 220], np.float32)   # 5 soft lightness bins (after exposure normalisation)
-C_CENT = np.array([-14, 0, 14], np.float32)              # 3 soft chroma bins per axis (a, b minus neutral)
-NB = 45
+C_CENT = np.array([-32, -12, 0, 12, 32], np.float32)     # 5 soft chroma bins per axis (a, b minus neutral)
+NC = len(C_CENT)
+NB = len(L_CENT) * NC * NC
 REGIONS = ("torso", "thighs", "shins", "upper arms", "head")
 R_WEIGHT = np.array([0.4, 0.2, 0.15, 0.15, 0.1], np.float32)
 SIG_LEN = NB * len(REGIONS)
@@ -67,7 +68,7 @@ def _hist(px: np.ndarray, light) -> np.ndarray | None:
     for dl, fl in ((0, wl), (1, 1 - wl)):
         for da, fa in ((0, wa), (1, 1 - wa)):
             for db, fb in ((0, wb), (1, 1 - wb)):
-                np.add.at(h, (kl + dl) * 9 + (ka + da) * 3 + (kb + db), fl * fa * fb)
+                np.add.at(h, (kl + dl) * NC * NC + (ka + da) * NC + (kb + db), fl * fa * fb)
     return h / h.sum()
 
 

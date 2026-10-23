@@ -43,8 +43,10 @@ SLACK = 0.7           # m: detector box noise, feet hidden by a bench
 EDGE = 0.02           # a box this close to the frame border has left / entered the picture
 RD_VETO = 0.40        # robust signature distance (reid.py) above which two tracklet ends are different people
 RD_RELINK = 0.24      # ... below which a piece cut off by the identity check may be re-linked
-CUT_STRONG = 0.36     # identity check: a change this large between the two sides is a different person
-CUT_WEAK = 0.26       # ... this large only with an opportunity (someone right next to them, or the ID was lost)
+CUT_SURE = 0.50       # identity check: this large a change between the two sides is another person, whatever the boxes did
+CUT_WEAK = 0.36       # ... this large only with evidence in the boxes (a jump onto someone, an overlap, a gap)
+CUT_TALL = 0.30       # ... with that evidence and the shoulder height changing too
+CUT_SAME_H = 0.47     # ... with that evidence but the same shoulder height
 EXC_RUN = 0.42        # a short run this unlike the ID's appearance before and after it is someone else ...
 EXC_ONE = 0.45        # ... a single second, this unlike
 EXC_CTX = 0.26        # ... when before and after agree at least this well
@@ -350,28 +352,6 @@ def _link_stage(tl, geo: _Geo, looks: dict, sigs: dict, doors, max_gap_s: float,
     return {q: root(q) for q in remap}, links
 
 
-def _opportunity(tl_by_id: dict, tl_at: dict, times, pid: int, t: float, win: float = 3.0) -> bool:
-    """Could an ID have slid onto someone else around time t: somebody right next to them, the ID briefly lost
-    (no box for >= 2 s), or the box at the frame edge (people leave / enter there)?"""
-    own = tl_by_id.get(pid, [])
-    ts = [x[0] for x in own if abs(x[0] - t) <= win]
-    if not ts or np.max(np.diff([t - win] + ts + [t + win])) >= 2.0 and len(ts) < 2 * win:
-        return True
-    for tt, b in own:
-        if abs(tt - t) > win:
-            continue
-        if _at_edge(b):
-            return True
-        for q, o in tl_at.get(tt, ()):
-            if q == pid:
-                continue
-            cd = abs(b[0] + b[2] / 2 - o[0] - o[2] / 2) / max(b[2], o[2], 1e-6)
-            fy = abs(b[1] + b[3] - o[1] - o[3]) / max(b[3], o[3], 1e-6)
-            if cd < 1.0 and fy < 0.5:
-                return True
-    return False
-
-
 def shoulder_heights(poses, geo: _Geo, model) -> dict[int, list]:
     """{id: [(t, metres)]}: height of the shoulders above the floor while standing straight with the feet in the
     picture, from the camera's pinhole fit (horizon row, camera height). Absolute values are rough (the fit is
@@ -410,7 +390,7 @@ def _height_change(hs, t: float, win: float = 8.0):
     return abs(float(np.median(a)) - float(np.median(b)))
 
 
-def identity_cuts(tl, sigs: dict, min_bins: int = 4, heights=None) -> dict[int, list[float]]:
+def identity_cuts(tl, sigs: dict, min_bins: int = 4, heights=None, excursions: list | None = None) -> dict[int, list[float]]:
     """{id: [cut times]} where an ID's clothing changes to someone else's for good (reid.change_points), kept
     only when the change is large, or moderate with an opportunity for a swap at that moment or a change of
     body height (shoulders) across it. A moderate change at the same height with nobody near is posture or
@@ -438,36 +418,60 @@ def identity_cuts(tl, sigs: dict, min_bins: int = 4, heights=None) -> dict[int, 
                 md = distance(mean_sig(S[b[i]:k]), mean_sig(S[k:b[i + 2]]))
                 tc = (ts[k - 1] + ts[k]) / 2
                 dh = _height_change((heights or {}).get(pid), tc)
-                if dh is not None and dh >= HEIGHT_CUT:
-                    ok = md == md and md >= CUT_WEAK - 0.06
-                elif dh is not None and dh <= HEIGHT_SAME:
-                    ok = md == md and md >= CUT_STRONG + 0.06
-                else:
-                    ok = md == md and (md >= CUT_STRONG or (md >= CUT_WEAK and _opportunity(tl_by_id, tl_at, times, pid, tc)))
+                ev = _swap_evidence(tl_by_id[pid], tl_at, pid, ts[k - 1], ts[k])
+                ok = _accept_cut(md, dh, ev)
+                if DIAG is not None:
+                    DIAG.append({"pid": pid, "t": tc, "kind": "cp", "md": md, "dh": dh, "ev": ev, "ok": ok})
                 if not ok and (bad is None or md < bad[0] or bad[0] != bad[0]):
                     bad = (md, k)
             if bad is None:
                 break
             cuts.remove(bad[1])
         # short excursions: a few seconds on somebody else in the middle of an otherwise consistent ID (an
-        # occlusion swap that swapped back), too short for the change-point test's minimum piece
+        # occlusion swap that swapped back), too short for the change-point test. Colour alone can't tell these
+        # from a turn or a shadow, so they are only candidates: stitch() moves one to another ID only if that
+        # person was missing exactly then and looks like it (_give_back)
         b = [0] + cuts + [len(ts)]
         for i in range(len(b) - 1):
-            for r0, r1 in _excursions(ts, S, b[i], b[i + 1]):
-                # a swap shows in the boxes too: the ID's box jumps onto the other person, or the two overlap
-                ev = [r > 0 and _swap_evidence(tl_by_id[pid], tl_at, pid, ts[r - 1], ts[r]) for r in (r0, r1) if 0 < r < len(ts)]
-                if (all(ev) if r1 - r0 == 1 else any(ev)) and ev:
-                    cuts += [r0, r1]
-        cuts = sorted(set(k for k in cuts if 0 < k < len(ts)))
+            for r0, r1, d_r in _excursions(ts, S, b[i], b[i + 1]):
+                ta = _cut_time(tl_by_id[pid], ts[r0 - 1], ts[r0]) if r0 > 0 else ts[r0] - 0.6
+                tb = _cut_time(tl_by_id[pid], ts[r1 - 1], ts[r1]) if r1 < len(ts) else ts[r1 - 1] + 0.6
+                if excursions is not None:
+                    excursions.append((pid, ta, tb))
+                if DIAG is not None:
+                    DIAG.append({"pid": pid, "t": ts[r0], "t1": ts[r1 - 1], "kind": "exc", "md": d_r, "L": r1 - r0, "dh": None, "ev": None})
         if cuts:
             out[pid] = sorted(set(_cut_time(tl_by_id[pid], ts[k - 1], ts[k]) for k in cuts))
     return out
 
 
+DIAG = None  # set to a list to collect the identity check's decisions (bench / tuning)
+
+
+def _accept_cut(md: float, dh, ev: bool) -> bool:
+    """Is a change of appearance md (robust signature distance between the two sides) another person?
+    Very large: yes. Moderate: only with evidence in the boxes (the ID jumped onto someone, overlapped someone,
+    or was lost for a moment), and the body height across the change agreeing with that."""
+    if md != md:
+        return False
+    if md >= CUT_SURE:
+        return True
+    if not ev:
+        return False
+    if dh is not None and dh >= HEIGHT_CUT:
+        return md >= CUT_TALL
+    if dh is not None and dh <= HEIGHT_SAME:
+        return md >= CUT_SAME_H
+    return md >= CUT_WEAK
+
+
 def _swap_evidence(boxes, tl_at: dict, pid: int, ta: float, tb: float) -> bool:
-    """Between ta and tb, did the ID's box jump (> 0.3 body sizes), or overlap someone else's box heavily?"""
+    """Between ta and tb (+-1 s): did the ID's box jump (> 0.3 body sizes), overlap someone else's box heavily,
+    or go missing for 2 s or more? That is how an ID moves to another person."""
     from .motion import cover
     seq = [(t, b) for t, b in boxes if ta - 1.0 <= t <= tb + 1.0]
+    if not seq or any(t1 - t0 >= 2.0 for (t0, _), (t1, _) in zip(seq, seq[1:])):
+        return True
     for (t0, b0), (t1, b1) in zip(seq, seq[1:]):
         w, h = max(b0[2], b1[2], 1e-6), max(b0[3], b1[3], 1e-6)
         if abs(b0[0] + b0[2] / 2 - b1[0] - b1[2] / 2) / w + abs(b0[1] + b0[3] - b1[1] - b1[3]) / h > 0.3:
@@ -515,49 +519,105 @@ def _excursions(ts, S, lo: int, hi: int, ctx: int = 8, max_len: int = 6):
             d_r = min(ds)
             need = EXC_ONE if L == 1 else EXC_RUN
             if d_r == d_r and d_r >= need and (best is None or d_r - need > best[0]):
-                best = (d_r - need, j)
+                best = (d_r - need, j, d_r)
         if best is not None:
-            out.append((i, best[1]))
+            out.append((i, best[1], best[2]))
             i = best[1] + 1
         else:
             i += 1
     return out
 
 
-def _fill_gaps(tl, sigs: dict, geo: _Geo, pieces: set, max_len: float = 8.0) -> dict[int, int]:
-    """Short pieces cut off an ID usually belong to someone whose own ID was missing for exactly those seconds
-    (the two IDs swapped and swapped back). Give such a piece to the ID that is absent throughout it, was within
-    walking reach just before and just after, and looks like it (robust signature), if exactly one does."""
+def _give_back(tl, sigs: dict, geo: _Geo, spans) -> list[tuple[int, float, float, int]]:
+    """Short excursions of an ID onto somebody else, [(id, t from, t to)]: usually that somebody's own ID was
+    missing for exactly those seconds (the two IDs swapped and swapped back). Returns [(id, from, to, owner)] for
+    the spans where exactly one ID was absent throughout, within walking reach just before and just after, and
+    looks like the excursion (robust signature) clearly better than the ID it was on."""
     from .reid import distance, mean_sig
     samples = _samples_of(tl)
-    out = {}
-    for pid in sorted(pieces):
-        seq = samples.get(pid)
-        if not seq or seq[-1][0] - seq[0][0] > max_len or not sigs.get(pid):
+    out = []
+    for pid, ta, tb in spans:
+        seq = [x for x in samples.get(pid, []) if ta <= x[0] < tb]
+        mine = [v for t, v in sigs.get(pid, []) if ta <= t < tb]
+        rest = [v for t, v in sigs.get(pid, []) if (ta - 15 <= t < ta or tb <= t < tb + 15)]
+        if not seq or not mine:
             continue
+        exc = mean_sig(mine)
+        d_own = distance(exc, mean_sig(rest)) if len(rest) >= 3 else 1.0
         t0, t1 = seq[0][0], seq[-1][0]
-        mine = mean_sig([v for _, v in sigs[pid]])
         cands = []
         for q, qs in samples.items():
-            if q == pid or q in out or any(t0 - 0.5 <= t <= t1 + 0.5 for t, _, _ in qs):
+            if q == pid or any(t0 - 0.5 <= t <= t1 + 0.5 for t, _, _ in qs):
                 continue
             before = [x for x in qs if t0 - 3.0 <= x[0] < t0]
             after = [x for x in qs if t1 < x[0] <= t1 + 3.0]
             if not before or not after:
                 continue
             gb, ga = t0 - before[-1][0], after[0][0] - t1
-            if geo.dist(before[-1][1], seq[0][1]) > SLACK + WALK * gb or geo.dist(seq[-1][1], after[0][1]) > SLACK + WALK * ga:
+            if geo.moved(before[-1][1], seq[0][1]) > SLACK + WALK * gb or geo.moved(seq[-1][1], after[0][1]) > SLACK + WALK * ga:
                 continue
             near = [v for t, v in sigs.get(q, []) if t0 - 15 <= t <= t1 + 15]
             if len(near) < 3:
                 continue
-            d = distance(mine, mean_sig(near))
-            if d == d and d <= RD_RELINK:
+            d = distance(exc, mean_sig(near))
+            if d == d and d <= RD_RELINK and d < d_own - 0.1:
                 cands.append((d, q))
         cands.sort()
         if cands and (len(cands) == 1 or cands[1][0] - cands[0][0] >= 0.05):
-            out[pid] = cands[0][1]
+            out.append((pid, ta, tb, cands[0][1]))
     return out
+
+
+def _apply_give_back(data: dict, sigs: dict, back) -> int:
+    """Relabel each excursion's samples (timeline, poses, sets, signatures) to its owner."""
+    if not back:
+        return 0
+    for pid, ta, tb, q in back:
+        _apply_split(data, {pid: [(pid, -1e18, ta), (q, ta, tb), (pid, tb, 1e18)]})
+        moved = [x for x in sigs.get(pid, []) if ta <= x[0] < tb]
+        sigs[pid] = [x for x in sigs.get(pid, []) if not ta <= x[0] < tb]
+        sigs[q] = sorted(sigs.get(q, []) + moved, key=lambda x: x[0])
+    return len(back)
+
+
+def identity_check(data: dict, geo: _Geo, sigs: dict, looks: dict | None = None, doors=(), max_gap_s: float = MAX_GAP_S, cam=None):
+    """Stage 4 of stitch(), in place: excursions handed back to their owner, change-point cuts, re-linking of the
+    pieces. Returns (cuts, excursions given back, {piece id: linked to id}, link records)."""
+    tl = data["timeline"]
+    looks = looks if looks is not None else {}
+    exc: list = []
+    model = (getattr(cam, "calib", None) or {}).get("model")
+    cuts = identity_cuts(tl, sigs, heights=shoulder_heights(data.get("poses", []), geo, model), excursions=exc)
+    n_back = _apply_give_back(data, sigs, _give_back(tl, sigs, geo, exc))  # before the cuts: ids still as found
+    samples = _samples_of(tl)
+    next_id = max(list(samples) or [0]) + 1
+    cut_of: dict[int, list] = {}
+    forbid = set()
+    n_cut = 0
+    for pid, cs in cuts.items():
+        if pid not in samples:
+            continue
+        seq = samples[pid]
+        cs = [c for c in cs if seq[0][0] < c < seq[-1][0]]
+        if not cs:
+            continue
+        bounds = [seq[0][0] - 1e-6] + cs + [seq[-1][0] + 1e-6]
+        parts = []
+        for k in range(len(bounds) - 1):
+            nid = pid if k == 0 else next_id
+            if k:
+                next_id += 1
+                forbid.add((parts[-1][0], nid))
+            parts.append((nid, bounds[k], bounds[k + 1]))
+        cut_of[pid] = parts
+        n_cut += len(parts) - 1
+    final2, links2 = {}, []
+    if cut_of:
+        _apply_split(data, cut_of, looks, sigs)
+        pieces = {nid for parts in cut_of.values() for nid, _, _ in parts}
+        final2, links2 = _link_stage(tl, geo, looks, sigs, doors, max_gap_s, pieces=pieces, forbid=forbid)
+        _apply_map(data, final2)
+    return n_cut, n_back, final2, links2
 
 
 def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap_s: float = MAX_GAP_S,
@@ -607,38 +667,11 @@ def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap
             if q in side:
                 side[r] = sorted(side.get(r, []) + side.pop(q), key=lambda x: x[0])
     # 4. identity check: cut IDs whose clothing changes for good, re-link the pieces only on clear matches
-    n_cut, final2, links2 = 0, {}, []
+    n_cut, final2, links2, n_back = 0, {}, [], 0
     if split and sigs:
-        cuts = identity_cuts(tl, sigs, heights=shoulder_heights(data.get("poses", []), geo, ((getattr(cam, "calib", None) or {}).get("model"))))
-        samples = _samples_of(tl)
-        next_id = max([next_id] + list(samples)) + 1
-        cut_of: dict[int, list] = {}
-        forbid = set()
-        for pid, cs in cuts.items():
-            if pid not in samples:
-                continue
-            seq = samples[pid]
-            bounds = [seq[0][0] - 1e-6] + cs + [seq[-1][0] + 1e-6]
-            parts = []
-            for k in range(len(bounds) - 1):
-                nid = pid if k == 0 else next_id
-                if k:
-                    next_id += 1
-                    forbid.add((parts[-1][0], nid))
-                parts.append((nid, bounds[k], bounds[k + 1]))
-            cut_of[pid] = parts
-            n_cut += len(parts) - 1
-        if cut_of:
-            _apply_split(data, cut_of, looks, sigs)
-            pieces = {nid for parts in cut_of.values() for nid, _, _ in parts}
-            fill = _fill_gaps(tl, sigs, geo, pieces)
-            _apply_map(data, fill)
-            for q, r in fill.items():
-                sigs[r] = sorted(sigs.get(r, []) + sigs.pop(q, []), key=lambda x: x[0])
-            final2, links2 = _link_stage(tl, geo, looks, sigs, doors, max_gap_s, pieces=pieces - set(fill), forbid=forbid)
-            _apply_map(data, final2)
-            final2 = {**fill, **final2}
-    if not final and not split_of and not n_cut:
+        n_cut, n_back, final2, links2 = identity_check(data, geo, sigs, looks, doors, max_gap_s, cam)
+
+    if not final and not split_of and not n_cut and not n_back:
         return {}
     allmap = {q: final2.get(r, r) for q, r in final.items()}
     allmap.update({q: r for q, r in final2.items() if q not in allmap})
@@ -657,7 +690,7 @@ def stitch(data: dict, cam=None, plan_size=None, doors=None, looks=None, max_gap
         data["people"]["rows"] = list(merged.values())
         data["people"]["tracked"] = len(merged)
     data["stitch"] = {"merged": len(final), "split": sum(len(v) - 1 for v in split_of.values()), "links": links,
-                      "identity_cuts": n_cut, "identity_relinks": len(final2), "relinks": links2}
+                      "identity_cuts": n_cut, "given_back": n_back, "identity_relinks": len(final2), "relinks": links2}
     return allmap
 
 
