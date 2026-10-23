@@ -235,7 +235,8 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         from .pose import make_pose_estimator
         plan = (cfg.plan["width"], cfg.plan["depth"]) if cfg.plan else None
         tracker = PeopleTracker(cam.zones, PersonDetector(), detect_every_s=detect_every_s, pose=make_pose_estimator(),
-                                homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names, ignore=cam.ignore)
+                                homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names, ignore=cam.ignore,
+                                calib_image=(cam.calib or {}).get("image"))
     names = {m.id: m.name for m in cfg.members}
     tag_names = {m.tag: m.name for m in cfg.members}
     writer, background = None, None
