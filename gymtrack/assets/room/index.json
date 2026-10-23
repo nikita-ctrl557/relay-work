@@ -1,0 +1,257 @@
+{
+ "about": "Realistic room: textured depth meshes of each camera framing. Depth: Depth Anything V2 Small (Apache-2.0); metric scale and placement from the calibrated floor (bench/make_room.py).",
+ "sessions": {
+  "cables": {
+   "segments": [
+    {
+     "seg": "cables0",
+     "t0": 0.0,
+     "t1": 604.9,
+     "file": "cables0.json"
+    },
+    {
+     "seg": "cables1",
+     "t0": 604.9,
+     "t1": 679.8,
+     "file": "cables1.json"
+    }
+   ],
+   "default": "cables0",
+   "bounds": {
+    "x0": 0.51,
+    "x1": 9.49,
+    "y0": -0.13,
+    "y1": 7.27
+   },
+   "height": 3.6,
+   "equipment": [
+    {
+     "machine": "c-cable",
+     "x": 2.04,
+     "y": 5.55,
+     "w": 1.26,
+     "d": 0.49,
+     "h": 2.3,
+     "views": 2,
+     "measured": true
+    },
+    {
+     "machine": "c-bench",
+     "x": 3.68,
+     "y": 2.85,
+     "w": 0.4,
+     "d": 0.88,
+     "h": 0.39,
+     "views": 2,
+     "measured": true
+    },
+    {
+     "machine": "c-decline",
+     "x": 3.61,
+     "y": 5.19,
+     "w": 1.63,
+     "d": 0.69,
+     "h": 0.65,
+     "views": 2,
+     "measured": true
+    },
+    {
+     "machine": "c-dumbbells",
+     "x": 6.24,
+     "y": 4.72,
+     "w": 2.16,
+     "d": 1.58,
+     "h": 1.32,
+     "views": 2,
+     "measured": true
+    },
+    {
+     "machine": "c-racks",
+     "x": 2.81,
+     "y": 1.15,
+     "w": 3.1,
+     "d": 1.5,
+     "h": 1.94,
+     "views": 2,
+     "measured": true
+    },
+    {
+     "machine": "c-rack3",
+     "x": 7.97,
+     "y": 0.81,
+     "w": 1.42,
+     "d": 0.96,
+     "h": 0.88,
+     "views": 2,
+     "measured": true
+    },
+    {
+     "machine": "c-seated",
+     "x": 1.55,
+     "y": 2.74,
+     "w": 0.7,
+     "d": 1.7,
+     "h": 1.62,
+     "views": 2,
+     "measured": true
+    }
+   ]
+  },
+  "floor": {
+   "segments": [
+    {
+     "seg": "floor0",
+     "t0": 0.0,
+     "t1": 69.9,
+     "file": "floor0.json"
+    },
+    {
+     "seg": "floor1",
+     "t0": 69.9,
+     "t1": 144.8,
+     "file": "floor1.json"
+    },
+    {
+     "seg": "floor2",
+     "t0": 144.8,
+     "t1": 479.7,
+     "file": "floor2.json"
+    },
+    {
+     "seg": "floor3",
+     "t0": 479.7,
+     "t1": 539.6,
+     "file": "floor3.json"
+    },
+    {
+     "seg": "floor4",
+     "t0": 539.6,
+     "t1": 654.5,
+     "file": "floor4.json"
+    },
+    {
+     "seg": "floor5",
+     "t0": 654.5,
+     "t1": 924.4,
+     "file": "floor5.json"
+    },
+    {
+     "seg": "floor6",
+     "t0": 924.4,
+     "t1": 2139.3,
+     "file": "floor6.json"
+    }
+   ],
+   "default": "floor6",
+   "bounds": {
+    "x0": 1.47,
+    "x1": 14.38,
+    "y0": -0.65,
+    "y1": 10.33
+   },
+   "height": 3.6,
+   "equipment": [
+    {
+     "machine": "cable",
+     "x": 3.54,
+     "y": 7.61,
+     "w": 1.13,
+     "d": 0.59,
+     "h": 2.13,
+     "views": 7,
+     "measured": true
+    },
+    {
+     "machine": "seated",
+     "x": 2.74,
+     "y": 3.92,
+     "w": 0.4,
+     "d": 1.35,
+     "h": 1.14,
+     "views": 7,
+     "measured": true
+    },
+    {
+     "machine": "bench",
+     "x": 5.06,
+     "y": 7.05,
+     "w": 1.93,
+     "d": 0.98,
+     "h": 0.62,
+     "views": 7,
+     "measured": true
+    },
+    {
+     "machine": "dumbbells",
+     "x": 7.68,
+     "y": 6.93,
+     "w": 2.02,
+     "d": 1.19,
+     "h": 1.28,
+     "views": 7,
+     "measured": true
+    },
+    {
+     "machine": "pl-row",
+     "x": 9.77,
+     "y": 6.39,
+     "w": 0.82,
+     "d": 1.14,
+     "h": 0.85,
+     "views": 7,
+     "measured": true
+    },
+    {
+     "machine": "pl-press",
+     "x": 10.62,
+     "y": 6.79,
+     "w": 1.32,
+     "d": 1.4,
+     "h": 0.88,
+     "views": 5,
+     "measured": true
+    },
+    {
+     "machine": "rack1",
+     "x": 3.4,
+     "y": 1.13,
+     "w": 1.58,
+     "d": 2.45,
+     "h": 1.56,
+     "views": 7,
+     "measured": true
+    },
+    {
+     "machine": "rack2",
+     "x": 6.29,
+     "y": 0.78,
+     "w": 2.76,
+     "d": 1.53,
+     "h": 1.43,
+     "views": 7,
+     "measured": true
+    },
+    {
+     "machine": "back-a",
+     "x": 10.04,
+     "y": 0.45,
+     "w": 2.23,
+     "d": 1.06,
+     "h": 0.83,
+     "views": 6,
+     "measured": true
+    },
+    {
+     "machine": "back-b",
+     "x": 12.39,
+     "y": 1.26,
+     "w": 2.66,
+     "d": 2.01,
+     "h": 1.18,
+     "views": 7,
+     "measured": true
+    }
+   ]
+  }
+ }
+}

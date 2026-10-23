@@ -151,6 +151,51 @@ export function cameraPose(meta, calib) {
   return {x, y, h: Math.abs(nd) * (r[1] + r[2]) / 2};
 }
 
+/* ---------- realistic room: a textured depth mesh of what each camera framing sees (bench/make_room.py) ----------
+   Per framing: a people-free plate of the footage (texture) and a grid of depths along the pixel rays, put in
+   metres on the calibrated floor. Vertex = C + depth * (D @ [u, v, 1]) in plan coordinates (x, y, up). */
+const ROOM = new URL("./room/", import.meta.url).href;
+let roomIdx = null;
+export async function loadRoom(planId) {
+  roomIdx ||= fetch(ROOM + "index.json").then(r => r.ok ? r.json() : null).catch(() => null);
+  const ix = await roomIdx, s = ix?.sessions?.[planId];
+  return s ? {...s, base: ROOM} : null;
+}
+const unb64 = t => { const b = atob(t), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+function roomMesh(d, tex) {
+  const {gw, gh, W, H, far, C, D} = d, n = gw * gh, zq = new Uint16Array(unb64(d.depth).buffer, 0, n), cells = unb64(d.cells);
+  // cells cut at depth jumps get a back layer: the same pixels pushed to the far side of the jump, so the camera's own
+  // view stays seamless and other angles see the occluded background there instead of a hole or a stretched sheet
+  let nb = 0; for (let c = 0; c < (gw - 1) * (gh - 1); c++) if (!(cells[c >> 3] >> (c & 7) & 1)) nb++;
+  const N = n + nb * 4, pos = new Float32Array(N * 3), uv = new Float32Array(N * 2), idx = new (N > 65535 ? Uint32Array : Uint16Array)(((gw - 1) * (gh - 1)) * 6);
+  const put = (k, u, v, z) => {
+    const x = C[0] + z * (D[0][0] * u + D[0][1] * v + D[0][2]), y = C[1] + z * (D[1][0] * u + D[1][1] * v + D[1][2]), h = C[2] + z * (D[2][0] * u + D[2][1] * v + D[2][2]);
+    pos[k * 3] = x; pos[k * 3 + 1] = h; pos[k * 3 + 2] = y; uv[k * 2] = u / W; uv[k * 2 + 1] = 1 - v / H;
+  };
+  const Z = k => zq[k] / 65535 * far, U = j => j * W / (gw - 1), Vv = i => i * H / (gh - 1);
+  for (let i = 0, k = 0; i < gh; i++) for (let j = 0; j < gw; j++, k++) put(k, U(j), Vv(i), Z(k));
+  let c = 0, t = 0, e = n;
+  for (let i = 0; i < gh - 1; i++) for (let j = 0; j < gw - 1; j++, c++) {
+    const a = i * gw + j, b = a + 1, g = a + gw, f = g + 1;
+    if (cells[c >> 3] >> (c & 7) & 1) { idx.set([a, g, b, b, g, f], t); t += 6; continue; }
+    const zb = Math.max(Z(a), Z(b), Z(g), Z(f));
+    put(e, U(j), Vv(i), zb); put(e + 1, U(j + 1), Vv(i), zb); put(e + 2, U(j), Vv(i + 1), zb); put(e + 3, U(j + 1), Vv(i + 1), zb);
+    idx.set([e, e + 2, e + 1, e + 1, e + 2, e + 3], t); t += 6; e += 4;
+  }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.BufferAttribute(pos, 3)); geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1)); geo.computeBoundingSphere();
+  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({map: tex, side: THREE.DoubleSide})); m.userData.room = d.seg;
+  // the room's shell under and behind it: floor and back wall where the camera saw neither (behind equipment, off to the sides)
+  const g = new THREE.Group(); g.add(m);
+  if (d.shell) {
+    const {x0, x1, y0, y1, h} = d.shell, fm = new THREE.MeshBasicMaterial({color: 0x2c2f33}), wm = new THREE.MeshBasicMaterial({color: 0x3a3631});
+    const fl = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, y1 - y0), fm); fl.rotation.x = -Math.PI / 2; fl.position.set((x0 + x1) / 2, -0.01, (y0 + y1) / 2);
+    const wl = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, h), wm); wl.position.set((x0 + x1) / 2, h / 2, y0 - 0.01);
+    g.add(fl, wl);
+  }
+  g.userData.room = d.seg; return g;
+}
+
 /* ---------- the view ---------- */
 const pref = (k, d) => { try { return localStorage.getItem("gymtrack:twin-" + k) || d; } catch { return d; } };
 const savePref = (k, v) => { try { localStorage.setItem("gymtrack:twin-" + k, v); } catch {} };
@@ -165,15 +210,15 @@ function rampColor(t) {
 const UNUSED = 0xa4adb6, LIFT = 0x007faf, REST = 0xf29d0c, CAM = 0x2fbf5a;
 const fmtMin = s => s >= 3600 ? `${(s / 3600).toFixed(1)}h` : s >= 60 ? `${Math.round(s / 60)}m` : `${Math.round(s)}s`;
 
-export function mountTwin(host, {plan, machines, people, states, heat, layer = () => "both", cams = [], usage = () => ({}), onOpen, onHover, onMachine, labelOf}) {
+export function mountTwin(host, {plan, machines, people, states, heat, layer = () => "both", cams = [], usage = () => ({}), onOpen, onHover, onMachine, labelOf, room = null, clock = null}) {
   const P = palette(); mats(P);
-  let peopleMode = pref("people2", "skel"), colourMode = pref("colour", "live");
+  let peopleMode = pref("people2", "skel"), colourMode = pref("colour", "live"), roomOn = !!room && pref("room", "real") === "real";
   const wrap = document.createElement("div"); wrap.className = "s3d twin";
-  const seg = (g, opts, cur) => `<div class="tw-seg" role="group" aria-label="${g === "pm" ? "People" : "Colour"}"><span>${g === "pm" ? "People" : "Colour"}</span>${opts.map(([k, l]) => `<button data-${g}="${k}" aria-pressed="${k === cur}">${l}</button>`).join("")}</div>`;
+  const segName = {pm: "People", cm: "Colour", rm: "Room"}, seg = (g, opts, cur) => `<div class="tw-seg" role="group" aria-label="${segName[g]}"><span>${segName[g]}</span>${opts.map(([k, l]) => `<button data-${g}="${k}" aria-pressed="${k === cur}">${l}</button>`).join("")}</div>`;
   wrap.innerHTML = `<div class="s3d-labels"></div><div class="tw-legend" aria-live="polite"></div>
-    <div class="s3d-bar tw-bar"><div class="tw-views"><button data-v="iso" aria-pressed="true">Overview</button><button data-v="top">Top</button>${cams.some(c => c.pose) ? `<button data-v="cam">Camera</button>` : ""}</div>
+    <div class="s3d-bar tw-bar"><div class="tw-views"><button data-v="iso" aria-pressed="true">Overview</button><button data-v="top">Top</button>${cams.some(c => c.pose) || room ? `<button data-v="cam">Camera</button>` : ""}</div>
     <button class="tw-tog" data-tog="opts" aria-expanded="false">Display</button><button class="tw-tog" data-tog="key" aria-expanded="false">Legend</button>
-    <div class="tw-opts">${seg("pm", [["skel", "Body"], ["fig", "Marker"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Status"], ["heat", "Usage"]], colourMode)}</div>
+    <div class="tw-opts">${room ? seg("rm", [["real", "Realistic"], ["model", "Model"]], roomOn ? "real" : "model") : ""}${seg("pm", [["skel", "Body"], ["fig", "Marker"], ["off", "Off"]], peopleMode)}${seg("cm", [["live", "Status"], ["heat", "Usage"]], colourMode)}</div>
     <span class="s3d-hint">${matchMedia("(pointer: coarse)").matches ? "Drag to rotate · pinch to zoom" : "Drag to rotate · scroll to zoom"}</span></div>`;
   host.append(wrap);
   const labels = wrap.querySelector(".s3d-labels"), legend = wrap.querySelector(".tw-legend");
@@ -183,11 +228,15 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const scene = new THREE.Scene(); scene.background = new THREE.Color(P.bg);
   const camera = new THREE.PerspectiveCamera(42, 16 / 9, 0.1, 300);
 
+  // with a reconstructed room, equipment stands where the room measured it: the same floor frame as the room and its people
+  const eqOf = id => room?.equipment?.find(e => e.machine === id), eqRect = e => [[e.x - e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y + e.d / 2], [e.x - e.w / 2, e.y + e.d / 2]];
+  const zones = plan.zones.map(z => eqOf(z.machine) ? {...z, poly: eqRect(eqOf(z.machine))} : z);
   // room bounds: the plan plus anything placed around it
-  const items = plan.items || [];
+  const items = room ? [] : plan.items || [];
   let x0 = 0, z0 = 0, x1 = plan.width, z1 = plan.depth;
+  if (room?.bounds) ({x0, x1, y0: z0, y1: z1} = room.bounds);
   for (const it of items) { x0 = Math.min(x0, it.x - 0.8); x1 = Math.max(x1, it.x + 0.8); z0 = Math.min(z0, it.y - 0.8); z1 = Math.max(z1, it.y + 0.8); }
-  for (const z of plan.zones) for (const [x, y] of z.poly) { x0 = Math.min(x0, x - 0.3); x1 = Math.max(x1, x + 0.3); z0 = Math.min(z0, y - 0.3); z1 = Math.max(z1, y + 0.3); }
+  for (const z of zones) for (const [x, y] of z.poly) { x0 = Math.min(x0, x - 0.3); x1 = Math.max(x1, x + 0.3); z0 = Math.min(z0, y - 0.3); z1 = Math.max(z1, y + 0.3); }
   const RW = x1 - x0, RD = z1 - z0, CX = (x0 + x1) / 2, CZ = (z0 + z1) / 2, WH = plan.height || (RW > 9 ? 4 : 2.8);
 
   scene.add(new THREE.HemisphereLight(0xffffff, dark() ? 0x202530 : 0xc8ced6, dark() ? 1.5 : 1.9));
@@ -202,16 +251,23 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   floor.rotation.x = -Math.PI / 2; floor.position.set(CX, 0, CZ); floor.receiveShadow = true; scene.add(floor);
   const base = box(RW + 0.3, 0.15, RD + 0.3, new THREE.MeshStandardMaterial({color: P.wallEdge}), CX, -0.076, CZ); base.castShadow = false; scene.add(base);
   const wallM = new THREE.MeshStandardMaterial({color: P.wall, roughness: 0.9});
-  scene.add(box(RW + 0.3, WH, 0.15, wallM, CX, WH / 2, z0 - 0.075), box(0.15, WH, RD + 0.15, wallM, x0 - 0.075, WH / 2, CZ + 0.075));
+  const walls = [box(RW + 0.3, WH, 0.15, wallM, CX, WH / 2, z0 - 0.075), box(0.15, WH, RD + 0.15, wallM, x0 - 0.075, WH / 2, CZ + 0.075)]; scene.add(...walls);
+  // realistic room: the floor drawing (zones, traffic) lies on the reconstructed floor as a see-through overlay
+  const overlay = new THREE.Mesh(new THREE.PlaneGeometry(RW, RD), new THREE.MeshBasicMaterial({map: ftex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4}));
+  overlay.rotation.x = -Math.PI / 2; overlay.position.set(CX, 0.01, CZ); overlay.renderOrder = 1; scene.add(overlay);
+  const modelOnly = [floor, base, ...walls];
   let lastHeat = null;
   function paintFloor() {
     const g = fc.getContext("2d"), s = PX, L = layer(), h = lastHeat;
-    g.fillStyle = HEX(P.floor); g.fillRect(0, 0, fc.width, fc.height);
-    g.strokeStyle = HEX(P.floorLine); g.lineWidth = 1;
-    for (let x = Math.ceil(x0); x <= x1; x++) { g.beginPath(); g.moveTo((x - x0) * s, 0); g.lineTo((x - x0) * s, fc.height); g.stroke(); }
-    for (let z = Math.ceil(z0); z <= z1; z++) { g.beginPath(); g.moveTo(0, (z - z0) * s); g.lineTo(fc.width, (z - z0) * s); g.stroke(); }
+    if (roomOn) g.clearRect(0, 0, fc.width, fc.height);
+    else {
+      g.fillStyle = HEX(P.floor); g.fillRect(0, 0, fc.width, fc.height);
+      g.strokeStyle = HEX(P.floorLine); g.lineWidth = 1;
+      for (let x = Math.ceil(x0); x <= x1; x++) { g.beginPath(); g.moveTo((x - x0) * s, 0); g.lineTo((x - x0) * s, fc.height); g.stroke(); }
+      for (let z = Math.ceil(z0); z <= z1; z++) { g.beginPath(); g.moveTo(0, (z - z0) * s); g.lineTo(fc.width, (z - z0) * s); g.stroke(); }
+    }
     // camera markers: green field-of-view wedge on the floor
-    for (const c of cams) {
+    if (!roomOn) for (const c of cams) {
       if (!c.pose) continue;
       const cx = (c.pose.x - x0) * s, cz = (c.pose.y - z0) * s, ang = Math.atan2(CZ - c.pose.y, CX - c.pose.x), r = Math.max(RW, RD) * 0.62 * s, half = 0.62;
       const grd = g.createRadialGradient(cx, cz, 0, cx, cz, r); grd.addColorStop(0, "rgba(47,191,90,0.22)"); grd.addColorStop(1, "rgba(47,191,90,0.04)");
@@ -219,17 +275,19 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     }
     if (h && L !== "people" && colourMode === "live") { let mx = 0; for (const v of h.grid) mx = Math.max(mx, v); if (mx > 0) for (let i = 0; i < h.grid.length; i++) { const v = h.grid[i]; if (v <= 0) continue; const gx = i % h.W, gy = Math.floor(i / h.W); g.fillStyle = `rgba(240,98,45,${(0.06 + 0.5 * Math.sqrt(v / mx)).toFixed(2)})`; g.fillRect((gx * h.cell - x0) * s, (gy * h.cell - z0) * s, h.cell * s + 0.5, h.cell * s + 0.5); } }
     for (const mo of machineObjs) {
-      g.beginPath(); mo.poly.forEach(([x, y], i) => g[i ? "lineTo" : "moveTo"]((x - x0) * s, (y - z0) * s)); g.closePath();
+      const poly = roomOn && mo.roomPoly || mo.poly;
+      if (roomOn && !mo.strong) continue; // the real room shows the equipment; only machines in use get an outline
+      g.beginPath(); poly.forEach(([x, y], i) => g[i ? "lineTo" : "moveTo"]((x - x0) * s, (y - z0) * s)); g.closePath();
       g.fillStyle = mo.fill; g.fill();
-      g.lineWidth = mo.strong ? 4 : 2.5; g.strokeStyle = mo.stroke; g.setLineDash(mo.strong ? [] : [10, 7]); g.stroke(); g.setLineDash([]);
+      g.lineWidth = mo.strong ? 4 : roomOn ? 2 : 2.5; g.strokeStyle = mo.stroke; g.setLineDash(mo.strong ? [] : [10, 7]); g.stroke(); g.setLineDash([]);
     }
     ftex.needsUpdate = true;
   }
 
   // equipment: tracked zones, then the layout list
-  const machineObjs = [];
+  const machineObjs = [], pickers = new THREE.Group(), pickMat = new THREE.MeshBasicMaterial({visible: false}); scene.add(pickers);
   const place = (obj, x, z, ang) => { obj.position.set(x, 0, z); obj.rotation.y = -ang; scene.add(obj); return obj; };
-  for (const z of plan.zones) {
+  for (const z of zones) {
     const m = machines.find(x => x.id === z.machine) || {id: z.machine, name: z.machine}, k = kindOf(m), fp = footprint(z.poly);
     let obj;
     const long = Math.max(fp.w, fp.d), short = Math.min(fp.w, fp.d), ang = fp.w >= fp.d ? fp.ang : fp.ang + Math.PI / 2;
@@ -243,12 +301,15 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const tag = document.createElement("button"); tag.className = "s3d-tag mach idle"; labels.append(tag);
     tag.onclick = () => { selM = m.id; onMachine?.(m.id); };
     let topY = 0; new THREE.Box3().setFromObject(obj).max.y > 0 && (topY = new THREE.Box3().setFromObject(obj).max.y);
-    machineObjs.push({id: m.id, name: m.name, obj, tint, tag, poly: z.poly, fill: "transparent", stroke: HEX(UNUSED), strong: false, prio: 0, top: new THREE.Vector3(fp.cx, Math.max(0.9, topY) + 0.25, fp.cy)});
+    const eq = eqOf(m.id), roomPoly = eq ? eqRect(eq) : null;
+    if (eq) { const pk = new THREE.Mesh(new THREE.BoxGeometry(eq.w, eq.h, eq.d), pickMat); pk.position.set(eq.x, eq.h / 2, eq.y); pk.userData.machine = m.id; pickers.add(pk); }
+    machineObjs.push({id: m.id, name: m.name, obj, tint, tag, poly: z.poly, roomPoly, fill: "transparent", stroke: HEX(UNUSED), strong: false, prio: 0,
+      top0: new THREE.Vector3(fp.cx, Math.max(0.9, topY) + 0.25, fp.cy), topR: eq ? new THREE.Vector3(eq.x, Math.max(0.9, eq.h) + 0.25, eq.y) : null, top: null});
   }
   for (const it of items) {
     const mk = MODELS[it.type] || MODELS.machine;
     const obj = it.type === "timer" ? MODELS.timer() : mk(it.w, it.d);
-    place(obj, it.x, it.y, (it.rot || 0) * Math.PI / 180);
+    place(obj, it.x, it.y, (it.rot || 0) * Math.PI / 180); modelOnly.push(obj);
     if (it.type === "timer") obj.position.y = it.h || 2.3;
   }
   // cameras: small green markers, like the camera icons on a site map
@@ -256,9 +317,43 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   for (const c of cams) {
     if (!c.pose) continue;
     const g = group(box(0.22, 0.14, 0.28, camG), cyl(0.055, 0.06, M.white, 0, 0, 0.16, "z"));
-    g.position.set(c.pose.x, c.pose.h, c.pose.y); g.lookAt(CX, 0, CZ); scene.add(g);
-    if (c.calib) for (const [px, py] of c.calib.plan) { const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([g.position.clone(), new THREE.Vector3(px, 0.02, py)]), new THREE.LineDashedMaterial({color: CAM, dashSize: 0.2, gapSize: 0.2, transparent: true, opacity: 0.25})); l.computeLineDistances(); scene.add(l); }
-    if (c.pose.h > 0.5) scene.add(box(0.04, c.pose.h, 0.04, camM, c.pose.x, c.pose.h / 2, c.pose.y));
+    g.position.set(c.pose.x, c.pose.h, c.pose.y); g.lookAt(CX, 0, CZ); scene.add(g); modelOnly.push(g);
+    if (c.calib) for (const [px, py] of c.calib.plan) { const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([g.position.clone(), new THREE.Vector3(px, 0.02, py)]), new THREE.LineDashedMaterial({color: CAM, dashSize: 0.2, gapSize: 0.2, transparent: true, opacity: 0.25})); l.computeLineDistances(); scene.add(l); modelOnly.push(l); }
+    if (c.pose.h > 0.5) { const pole = box(0.04, c.pose.h, 0.04, camM, c.pose.x, c.pose.h / 2, c.pose.y); scene.add(pole); modelOnly.push(pole); }
+  }
+
+  // realistic room: one reconstruction per camera framing; the one matching the playing footage is shown
+  const roomG = new THREE.Group(); scene.add(roomG);
+  const roomCam = group(box(0.22, 0.14, 0.28, camG), cyl(0.055, 0.06, M.white, 0, 0, 0.16, "z")); roomCam.visible = false; scene.add(roomCam);
+  const roomCache = new Map(), texLoader = new THREE.TextureLoader();
+  let roomSeg = null, roomCur = null, roomWant = null;
+  const segAt = t => { const sg = room?.segments || []; if (t == null || !sg.length) return sg.find(x => x.seg === room.default) || sg[0]; return sg.find(x => t >= x.t0 && t < x.t1) || (t < sg[0].t0 ? sg[0] : sg[sg.length - 1]); };
+  const loadSeg = sg => {
+    if (!roomCache.has(sg.seg)) roomCache.set(sg.seg, fetch(room.base + sg.file).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(d => new Promise((ok, bad) => texLoader.load(room.base + d.texture, tex => { tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4; ok({d, mesh: roomMesh(d, tex)}); }, undefined, bad))));
+    return roomCache.get(sg.seg);
+  };
+  function showSeg(sg) {
+    if (!sg || roomWant === sg.seg) return; roomWant = sg.seg;
+    loadSeg(sg).then(r => {
+      if (roomWant !== sg.seg || destroyed) return;
+      if (roomCur) roomG.remove(roomCur.mesh);
+      roomCur = r; roomSeg = sg.seg; roomG.add(r.mesh);
+      const v = r.d.view; roomCam.position.fromArray(v.pos); roomCam.lookAt(new THREE.Vector3().fromArray(v.look)); roomCam.up.fromArray(v.up);
+      applyRoom(); if (!userMoved && !anim) setView(curView, !roomShown); roomShown = true;
+    }).catch(e => { console.warn("room", e); roomCache.delete(sg.seg); });
+  }
+  let roomShown = false, destroyed = false;
+  function applyRoom() {
+    const on = roomOn && !!roomCur;
+    roomG.visible = on; roomCam.visible = on; overlay.visible = on;
+    for (const o of modelOnly) o.visible = !on;
+    for (const mo of machineObjs) { mo.obj.visible = !on; mo.top = on && mo.topR || mo.top0; }
+    scene.background = new THREE.Color(on ? (dark() ? 0x0e1317 : 0x1b2127) : P.bg);
+    wrap.classList.toggle("tw-real", on);
+    if (on) { const az = Math.atan2(roomCur.d.view.pos[0] - roomCur.d.view.target[0], roomCur.d.view.pos[2] - roomCur.d.view.target[2]); controls.minAzimuthAngle = az - 0.5; controls.maxAzimuthAngle = az + 0.5; controls.minPolarAngle = 0.42; controls.maxDistance = 26; }
+    else { controls.minAzimuthAngle = -Infinity; controls.maxAzimuthAngle = Infinity; controls.minPolarAngle = 0; controls.maxDistance = Infinity; }
+    paintFloor();
   }
 
   // colours: live status or usage heat
@@ -317,12 +412,21 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     p = {mat, white, jmat, b3, J3: null, skel, bones, joints, fig, shadow, halo, tag, pos: null, target: null, q: null, alpha: 0, want: 1}; ppl.set(key, p); return p;
   }
   const setHover = k => { hoverPid = k; onHover?.(k == null ? null : ppl.get(k)?.q?.pid); };
+  // in the realistic room people stand where their feet meet the floor through the same camera that built the room
+  const roomFeet = q => {
+    if (!roomCur || !q.box) return null;
+    const {W: w, H: h, C, D} = roomCur.d, u = (q.box[0] + q.box[2] / 2) * w, v = (q.box[1] + q.box[3]) * h;
+    const dz = D[2][0] * u + D[2][1] * v + D[2][2]; if (dz > -1e-4) return null;
+    const t = -C[2] / dz; if (t > 40) return null;
+    return [C[0] + t * (D[0][0] * u + D[0][1] * v + D[0][2]), C[1] + t * (D[1][0] * u + D[1][1] * v + D[1][2])];
+  };
   function sync() {
     const seen = new Set();
     for (const q of people()) {
-      if (q.x == null || q.y == null || q.x < x0 - 1 || q.x > x1 + 1 || q.y < z0 - 1 || q.y > z1 + 1) continue;
+      const rf = roomFeet(q);
+      if (!rf && (q.x == null || q.y == null || q.x < x0 - 1 || q.x > x1 + 1 || q.y < z0 - 1 || q.y > z1 + 1)) continue;
       const key = (q.camera || "") + ":" + q.pid, p = person(key); seen.add(key);
-      p.q = q; p.want = 1; p.target = new THREE.Vector3(q.x, 0, q.y); if (!p.pos) p.pos = p.target.clone();
+      p.q = q; p.want = 1; p.target = rf ? new THREE.Vector3(rf[0], 0, rf[1]) : new THREE.Vector3(q.x, 0, q.y); if (!p.pos) p.pos = p.target.clone();
       const lift = q.inSet || q.activity && q.activity !== "standing";
       p.mat.color.setHex(lift ? COL.lift : q.planted && q.zone ? COL.station : COL.move);
       p.jmat.color.copy(p.mat.color).lerp(WHITE, 0.55);
@@ -356,27 +460,41 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     }
     return look.clone().addScaledVector(dir, hi);
   };
+  const rv = () => roomOn && roomCur ? roomCur.d.view : null, V3 = a => new THREE.Vector3().fromArray(a);
   const views = {
-    iso: () => { const look = new THREE.Vector3(CX, 0, CZ), tall = camera.aspect < 1.2; // portrait: look down more steeply so the room fills the frame
+    iso: () => { const r = rv(); if (r) { // just behind and above the camera, looking into the room it sees
+        const p = V3(r.pos), t = V3(r.target), back = p.clone().sub(t).setY(0).normalize();
+        return {pos: p.addScaledVector(back, camera.aspect < 1.2 ? 3.2 : 2.2).add(new THREE.Vector3(0, camera.aspect < 1.2 ? 2.4 : 1.6, 0)), look: t}; }
+      const look = new THREE.Vector3(CX, 0, CZ), tall = camera.aspect < 1.2; // portrait: look down more steeply so the room fills the frame
       return {pos: fitPos(tall ? (RW > RD ? new THREE.Vector3(0.78, 1.05, 0.3) : new THREE.Vector3(0.3, 1.05, 0.78)) : new THREE.Vector3(0.5, 0.72, 0.9), look, tall ? 0.94 : 0.9), look}; },
-    top: () => { const look = new THREE.Vector3(CX, 0, CZ); return {pos: fitPos(new THREE.Vector3(0, 1, 0.0001), look, 0.94), look}; },
-    cam: () => { const c = cams.find(c => c.pose)?.pose; return c ? {pos: new THREE.Vector3(c.x, c.h, c.y), look: new THREE.Vector3(CX, 0, CZ)} : views.iso(); },
+    top: () => { const r = rv(); if (r) { // a single camera's room only holds up from its own side: look steeply down from there, not straight down
+        const t = V3(r.target), back = V3(r.pos).sub(t).setY(0).normalize(), d = r.span * (camera.aspect < 1.2 ? 1.55 : 1.0);
+        return {pos: t.clone().addScaledVector(back, d * Math.sin(0.45)).add(new THREE.Vector3(0, d * Math.cos(0.45), 0)), look: t}; }
+      const look = new THREE.Vector3(CX, 0, CZ); return {pos: fitPos(new THREE.Vector3(0, 1, 0.0001), look, 0.94), look}; },
+    cam: () => { const r = rv(); if (r) return {pos: V3(r.pos), look: V3(r.pos).add(V3(r.look).sub(V3(r.pos)).normalize().multiplyScalar(4)), fov: r.fov};
+      const c = cams.find(c => c.pose)?.pose; return c ? {pos: new THREE.Vector3(c.x, c.h, c.y), look: new THREE.Vector3(CX, 0, CZ)} : views.iso(); },
   };
   let anim = null;
   let curView = "iso", userMoved = false;
   controls.addEventListener("start", () => { userMoved = true; anim = null; });
-  const setView = (k, now) => { curView = k; wrap.querySelectorAll("[data-v]").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === k)); const v = views[k](); if (now) { camera.position.copy(v.pos); controls.target.copy(v.look); return; } anim = {t: 0, p0: camera.position.clone(), p1: v.pos, l0: controls.target.clone(), l1: v.look}; };
+  // camera view of the realistic room: the footage's own field of view (vertical; phones crop the sides)
+  const fovFor = v => v.fov || 42;
+  const setView = (k, now) => { curView = k; wrap.querySelectorAll("[data-v]").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === k)); const v = views[k]();
+    if (now) { camera.position.copy(v.pos); controls.target.copy(v.look); camera.fov = fovFor(v); camera.updateProjectionMatrix(); return; }
+    anim = {t: 0, p0: camera.position.clone(), p1: v.pos, l0: controls.target.clone(), l1: v.look, f0: camera.fov, f1: fovFor(v)}; };
   wrap.querySelector(".tw-bar").onclick = e => {
     const tg = e.target.closest("[data-tog]"); if (tg) { const on = wrap.classList.toggle("show-" + tg.dataset.tog); tg.setAttribute("aria-expanded", on); return; }
     const v = e.target.closest("[data-v]"); if (v) { userMoved = false; return setView(v.dataset.v); }
     const pm = e.target.closest("[data-pm]"); if (pm) { peopleMode = pm.dataset.pm; savePref("people2", peopleMode); wrap.querySelectorAll("[data-pm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.pm === peopleMode)); return; }
+    const rm = e.target.closest("[data-rm]"); if (rm) { roomOn = rm.dataset.rm === "real"; savePref("room", rm.dataset.rm); wrap.querySelectorAll("[data-rm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.rm === rm.dataset.rm)); applyRoom(); userMoved = false; setView(curView); applyColours(); return; }
     const cm = e.target.closest("[data-cm]"); if (cm) { colourMode = cm.dataset.cm; savePref("colour", colourMode); wrap.querySelectorAll("[data-cm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.cm === colourMode)); applyColours(); }
   };
   setView("iso", true);
+  applyRoom(); if (room) showSeg(segAt(clock?.()));
 
   // click / hover machines in the scene
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
-  const pick = e => { const r = renderer.domElement.getBoundingClientRect(); ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); ray.setFromCamera(ndc, camera); return ray.intersectObjects(machineObjs.map(m => m.obj), true)[0]?.object.userData.machine; };
+  const pick = e => { const r = renderer.domElement.getBoundingClientRect(); ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); ray.setFromCamera(ndc, camera); return ray.intersectObjects(roomOn && roomCur ? pickers.children : machineObjs.map(m => m.obj), true)[0]?.object.userData.machine; };
   let downAt = null, hoverM = null, selM = null;
   renderer.domElement.addEventListener("pointerdown", e => downAt = [e.clientX, e.clientY]);
   const pickP = e => { const r = renderer.domElement.getBoundingClientRect(); ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); ray.setFromCamera(ndc, camera);
@@ -397,15 +515,17 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   }
   const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
 
-  let raf, last = 0, heatAt = -1e9, colAt = -1e9; const tmp = new THREE.Vector3();
+  let raf, last = 0, heatAt = -1e9, colAt = -1e9, segAt_ = -1e9; const tmp = new THREE.Vector3();
   const sp = v => { tmp.copy(v).project(camera); return tmp.z < 1 && Math.abs(tmp.x) < 1.05 && Math.abs(tmp.y) < 1.05 ? tmp.clone() : null; };
   function frame(ts) {
     raf = requestAnimationFrame(frame);
     if (ts - last > 30) { last = ts; sync(); }
     if (ts - heatAt > 3000) { heatAt = ts; lastHeat = heat(); }
     if (ts - colAt > 1000) { colAt = ts; applyColours(); }
-    if (anim) { anim.t = Math.min(1, anim.t + 0.04); const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.l0, anim.l1, e); if (anim.t >= 1) anim = null; }
+    if (anim) { anim.t = Math.min(1, anim.t + 0.04); const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.l0, anim.l1, e); camera.fov = anim.f0 + (anim.f1 - anim.f0) * e; camera.updateProjectionMatrix(); if (anim.t >= 1) anim = null; }
+    if (room && ts - segAt_ > 500) { segAt_ = ts; showSeg(segAt(clock?.())); }
     controls.update();
+    if (roomCam.visible !== (roomOn && !!roomCur && camera.position.distanceTo(roomCam.position) > 4.5)) roomCam.visible = !roomCam.visible;
     const rect = renderer.domElement.getBoundingClientRect(), W = rect.width, H = rect.height, showP = layer() !== "heat" && peopleMode !== "off";
     const taken = []; // screen rects already used by people tags; machine labels avoid them
     const placeTag = (tag, s) => { const x = (s.x + 1) / 2 * W, y = (1 - s.y) / 2 * H, w = tag.offsetWidth || 30, h = tag.offsetHeight || 18; taken.push({l: x - w / 2, r: x + w / 2, t: y - h, b: y}); tag.style.display = ""; tag.style.transform = `translate(${((s.x + 1) / 2 * W).toFixed(1)}px, ${((1 - s.y) / 2 * H).toFixed(1)}px) translate(-50%, -100%)`; };
@@ -455,5 +575,5 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   applyColours();
   raf = requestAnimationFrame(frame);
   return {highlight(pid) { for (const [k, p] of ppl) if (p.q?.pid === pid) { hoverPid = k; return; } hoverPid = null; },
-    setColourMode(m) { colourMode = m; savePref("colour", m); wrap.querySelectorAll("[data-cm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.cm === m)); applyColours(); }, destroy() { cancelAnimationFrame(raf); ro.disconnect(); controls.dispose(); renderer.dispose(); wrap.remove(); }};
+    setColourMode(m) { colourMode = m; savePref("colour", m); wrap.querySelectorAll("[data-cm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.cm === m)); applyColours(); }, destroy() { destroyed = true; cancelAnimationFrame(raf); roomCache.forEach(p => p.then(r => { r.mesh.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); }).catch(() => {})); ro.disconnect(); controls.dispose(); renderer.dispose(); wrap.remove(); }};
 }

@@ -607,13 +607,14 @@ function MapPage() {
     try {
       let view;
       if (m === "twin") {
-        const {mountTwin, cameraPose} = await import("./twin3d.js");
+        const {mountTwin, cameraPose, loadRoom} = await import("./twin3d.js");
         const cams = await Promise.all((p.cameras || []).map(async c => { const sc = src.sceneFor?.(c.id); let pose = null; try { pose = sc ? cameraPose(await sc.meta(), c.calib) : null; } catch {} return {...c, pose}; }));
+        const room = await loadRoom(p.id).catch(() => null), clockCam = (p.cameras?.[0] || p).id;
         if (scenes[key] !== token) return;
         view = mountTwin(box.querySelector(".p3"), {plan: p, machines: cfg.machines, cams, layer: () => layer, labelOf,
           people: () => (p.cameras || [{id: p.id}]).flatMap(c => src.peopleNow?.(c.id) || []), states: () => lastStates, heat: () => src.heat?.(p.id) || lastFloor[p.id]?.heat,
           usage: () => Object.fromEntries(Object.values(util).map(u => [u.machine, {busy_s: u.busy, sets: u.n}])),
-          onHover: markHover, onOpen: openPerson, onMachine: openMachine});
+          onHover: markHover, onOpen: openPerson, onMachine: openMachine, room, clock: src.timeOf ? () => src.timeOf(clockCam) : null});
       } else {
         const sc = src.sceneFor(p.id), [{mountScene}, meta] = await Promise.all([import("./scene3d.js"), sc.meta()]);
         if (scenes[key] !== token) return;

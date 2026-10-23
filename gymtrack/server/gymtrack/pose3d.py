@@ -176,13 +176,19 @@ class _Problem:
     """Residuals + sparsity for T frames of one person. Variables: X (T, 13, 3) flattened."""
 
     def __init__(self, cam: PinholeCamera, uv, w, t, L, hand=1.0, prior=None, prior_sigma=0.05,
-                 smooth=True, contact=True, sigma_px=None, acc_sigma=6.0, groups_free=False, height_prior=None):
+                 smooth=True, contact=True, sigma_px=None, acc_sigma=6.0, groups_free=False, height_prior=None,
+                 prior_rel=False, prior_root_sigma=0.25):
         self.cam, self.uv, self.w, self.t = cam, np.asarray(uv, float), np.asarray(w, float), np.asarray(t, float)
         self.T = len(self.uv)
         self.L = np.asarray(L, float)
         self.hand = hand
         self.prior = prior
         self.prior_sigma = prior_sigma
+        # prior_rel: the learned pose constrains the body's shape relative to its pelvis (prior_sigma) and only
+        # weakly its absolute position (prior_root_sigma): a monocular network's depth / floor placement is
+        # less reliable than its articulation
+        self.prior_rel = prior_rel
+        self.prior_root_sigma = prior_root_sigma
         self.contact = contact
         self.groups_free = groups_free
         self.height_prior = height_prior
@@ -235,7 +241,13 @@ class _Problem:
             parts.append((acc / (self.acc_sigma * ACC_SCALE)[None, :, None]).ravel())
         if self.prior is not None:
             P, pm = self.prior
-            parts.append(((X - P) * pm[..., None] / self.prior_sigma).ravel())
+            if self.prior_rel:
+                rx = (X[:, LHIP] + X[:, RHIP]) / 2
+                rP = (P[:, LHIP] + P[:, RHIP]) / 2
+                parts.append((((X - rx[:, None]) - (P - rP[:, None])) * pm[..., None] / self.prior_sigma).ravel())
+                parts.append(((rx - rP) * pm[:, [LHIP]] / self.prior_root_sigma).ravel())
+            else:
+                parts.append(((X - P) * pm[..., None] / self.prior_sigma).ravel())
         if G is not None:
             h = (G / RATIO_V).mean()
             parts.append((G - RATIO_V * h) / (0.07 * RATIO_V * h))
@@ -318,7 +330,21 @@ class _Problem:
             _, pm = self.prior
             rows = r0 + np.arange(self.nx)
             R.append(rows); C_.append(np.arange(self.nx)); V.append(np.repeat(pm.ravel(), 3) / self.prior_sigma)
-            r0 += self.nx
+            if self.prior_rel:
+                # minus the pelvis centre: -0.5 on each hip's coordinate, for every joint's row
+                rows3 = rows.reshape(T, NJ, 3)
+                sc = np.repeat(pm[..., None], 3, -1) / self.prior_sigma          # (T, 13, 3)
+                for hip in (LHIP, RHIP):
+                    cols = (base[:, hip][:, None, None] + np.arange(3)[None, None, :]).repeat(NJ, 1)
+                    R.append(rows3.ravel()); C_.append(cols.ravel()); V.append((-0.5 * sc).ravel())
+                r0 += self.nx
+                rows = r0 + np.arange(T * 3).reshape(T, 3)
+                for hip in (LHIP, RHIP):
+                    R.append(rows.ravel()); C_.append((base[:, hip][:, None] + np.arange(3)[None, :]).ravel())
+                    V.append(np.repeat(0.5 * pm[:, LHIP] / self.prior_root_sigma, 3))
+                r0 += T * 3
+            else:
+                r0 += self.nx
         J = coo_matrix((np.concatenate(V), (np.concatenate(R), np.concatenate(C_))), shape=(r0, self.nx))
         return J.tocsr()
 
@@ -358,7 +384,11 @@ class _Problem:
             for f in range(T):
                 for j in range(NJ):
                     for k in range(3):
-                        rows.append([var(f, j)[k]])
+                        rows.append(sorted({var(f, j)[k], var(f, LHIP)[k], var(f, RHIP)[k]}) if self.prior_rel else [var(f, j)[k]])
+            if self.prior_rel:
+                for f in range(T):
+                    for k in range(3):
+                        rows.append([var(f, LHIP)[k], var(f, RHIP)[k]])
         if self.groups_free:
             for _ in range(self.n_groups):
                 rows.append(gcols)
@@ -565,7 +595,8 @@ def _uncertainty(sol, pr: _Problem):
 
 def fit_track(cam: PinholeCamera, t, uv, w=None, hand: float | None = None, groups=None, prior=None,
               win: int = 24, overlap: int = 6, try_mirror: bool = True, max_nfev: int = 40,
-              height_prior=(DEFAULT_HEIGHT, 0.12)) -> dict:
+              height_prior=(DEFAULT_HEIGHT, 0.12), prior_rel: bool = False, prior_sigma: float = 0.05,
+              prior_root_sigma: float = 0.12) -> dict:
     """3D joints for one person's track.
 
     t: (T,) seconds; uv: (T, 13, 2) pixels in the camera's frame; w: (T, 13) joint weights (0 = unseen);
@@ -600,8 +631,11 @@ def fit_track(cam: PinholeCamera, t, uv, w=None, hand: float | None = None, grou
         if e - s < min(win, T) and s > 0:
             s = max(0, e - win)
         sl = slice(s, e)
+        # windows the learned model never saw are solved as without it (incl. the mirrored starts)
+        wprior = None if prior is None or not prior[1][sl].any() else (prior[0][sl], prior[1][sl])
         pr = _Problem(cam, uv[sl], w[sl], t[sl], L, hand,
-                      prior=None if prior is None else (prior[0][sl], prior[1][sl]))
+                      prior=wprior, prior_rel=prior_rel,
+                      prior_sigma=prior_sigma, prior_root_sigma=prior_root_sigma)
         X0 = X_init[sl].copy()
         starts = [X0]
         # continuity: also start the overlap from the previous window's answer
@@ -610,7 +644,7 @@ def fit_track(cam: PinholeCamera, t, uv, w=None, hand: float | None = None, grou
             Xc = X0.copy()
             Xc[:k] = X[s:prev_end] / np.maximum(wsum[s:prev_end], 1e-9)[:, None, None]
             starts.append(Xc)
-        if prior is None:
+        if wprior is None:
             # hips at the depth implied by the body's image size (seated people, feet raised / hidden)
             ds = np.array([root_depths(cam, uv[i], L) for i in range(s, e)])
             Xs = None
@@ -622,7 +656,7 @@ def fit_track(cam: PinholeCamera, t, uv, w=None, hand: float | None = None, grou
         sols = [_solve(pr, x, max(10, max_nfev // 3)) for x in starts]
         sol = min(sols, key=lambda z: z.cost)
         sol = _solve(pr, sol.x.reshape(-1, NJ, 3), max_nfev)
-        if try_mirror and prior is None:
+        if try_mirror and wprior is None:
             # limb-by-limb depth flips (forward/back ambiguity of each arm and leg)
             for pivot, joints in LIMBS[:4]:
                 Xf = flip_limb(cam, sol.x.reshape(-1, NJ, 3), pivot, joints)
