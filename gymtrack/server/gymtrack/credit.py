@@ -40,7 +40,8 @@ MAX_LAG_S = 0.5
 HIGHPASS_S = 6.0           # remove posture drift slower than this before correlating
 MIN_OVERLAP_S = 4.0        # need this much pose coverage to judge someone
 MIN_POSES = 8
-CREDIT_MIN = 0.32          # score needed to be credited with a set
+CREDIT_MIN = 0.45          # score needed to be credited with a set (true sets on the labelled clips: 0.55-0.95;
+                           # people walking past, gesturing or re-racking: up to ~0.43)
 AMP_FULL = 0.25            # joint travel (torso lengths) that counts as a full-size movement
 ELSEWHERE_PENALTY = 0.8    # score cut for people whose feet were mostly in another machine's zone
 SCORE_WIN_S = 15.0         # long sets are scored in windows of this length...

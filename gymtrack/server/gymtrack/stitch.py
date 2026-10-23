@@ -10,6 +10,8 @@ Cognition's "subject persistence"; our own code):
    tracklets must never coexist (one person can't be in two places), nobody re-links through a
    configured door, and the clothes must agree when we have appearance signatures (from the tracker,
    in memory for this recording only). Member tags force a link (same tag) or forbid it (different tags).
+   A link is dropped when another end or start was nearly as good a match (a coin flip between two people
+   is worse than a fragment), and position-only links need nobody else near that end / that start;
 3. apply the new IDs everywhere: timeline, poses, sets, people rows.
 
 Without appearance (older callers), linking falls back to "re-appeared close to where they were lost,

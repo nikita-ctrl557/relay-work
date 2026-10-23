@@ -8,7 +8,10 @@
   filter per person on the feet point and height, Hungarian assignment on height-modulated IoU, distance
   in body heights and clothing colour (weighted by how much we can trust it right now), a second pass for
   weak detections, OC-SORT's recovery from the last real observation, and a strict, walking-speed-gated
-  re-identification of people lost for a while.
+  re-identification of people lost for a while (someone hidden for long is assumed to have stayed near
+  where they were: colour alone never carries an ID across the room). A person hidden for a moment by
+  someone walking past can take their ID back from a neighbour that grabbed it, on clearly matching
+  clothes. Partial views (legs hidden by a rack) don't teach the motion model that the person shrank.
 * Appearance: a clothing-colour signature, updated only from clean views (no one else in the box), so it
   isn't contaminated when two people overlap (the old cause of IDs jumping between people). Signatures
   live in memory for this recording only; nothing about a person's appearance is stored.
@@ -590,9 +593,9 @@ class PeopleTracker:
 
     def _observe(self, tr: Track, d, t: float, look=None, clean: bool = False):
         """Apply a matched detection to a track: motion, box, history and (clean views only) appearance."""
-        h_before = tr.kf.x[2]
+        h_before, v_before = tr.kf.x[2], tr.kf.x[3:6].copy()
         tr.kf.update(d, t, step_s=max(self.every, 0.1))
-        self._limit_motion(tr.kf, d[3] / max(h_before, 1.0))
+        self._limit_motion(tr.kf, d[3] / max(h_before, 1.0), v_before)
         tr.vel = tr.kf.velocity
         tr.box, tr.last, tr.hits, tr.conf = tuple(d[:4]), t, tr.hits + 1, d[4]
         tr.trail = (tr.trail + [tuple(map(int, tr.feet))])[-20:]
@@ -612,13 +615,14 @@ class PeopleTracker:
                 self.next_id += 1
 
     @staticmethod
-    def _limit_motion(kf: BoxKalman, h_ratio: float):
+    def _limit_motion(kf: BoxKalman, h_ratio: float, v_before=None):
         """Keep the filter's velocities physical. A box that halves because a rack hides the legs is a partial
         view, not a person shrinking at 3 m/s: left alone, that height velocity makes the prediction collapse
         to a dot (or fly off the frame) within a second of coasting, and the person is lost."""
         x = kf.x
         h = max(float(x[2]), 1.0)
-        if not 0.75 <= h_ratio <= 1.33:
+        if not 0.75 <= h_ratio <= 1.33:  # the box edges moved, the body didn't: keep the motion we had
+            x[3:6] = v_before if v_before is not None else 0.0
             x[5] = 0.0
         x[5] = float(np.clip(x[5], -0.5 * h, 0.5 * h))   # body heights per second
         v = math.hypot(x[3], x[4])

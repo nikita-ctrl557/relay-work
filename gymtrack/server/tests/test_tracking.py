@@ -221,3 +221,89 @@ def test_detector_input_size_is_freed_for_16_9_frames():
     shape = det.sess.get_inputs()[0].shape
     assert det.dynamic and isinstance(shape[2], str) and isinstance(shape[3], str)
     assert det.detect(np.full((720, 1280, 3), 114, np.uint8)) == []
+
+
+# --- added with the tracker tuning on real footage ---------------------------------------------------------
+
+def test_floor_map_falls_back_to_body_scale_where_the_calibration_disagrees_with_the_person():
+    import cv2
+    img = [[200, 200], [440, 200], [600, 350], [40, 350]]
+    plan = [[0, 0], [6, 0], [6, 6], [0, 6]]
+    fm = FloorMap(cv2.getPerspectiveTransform(np.float32(img), np.float32(plan)), img, (6, 6))
+    near = (300, 160, 40, 150)  # feet at y=310: homography scale ~ body scale (1.7 m / 150 px)
+    assert fm.box_metres(near) is not None
+    tiny = (318, 280, 4, 30)    # same spot, but a 30 px "person": the homography says 1 px = 2 cm, the box 6 cm
+    assert fm.box_metres(tiny) is None
+    d, how = fm.distance(tiny, (330, 280, 4, 30))
+    assert how == "body"
+
+
+def test_partial_view_is_not_counted_as_movement():
+    from gymtrack.floor import moved
+    fm = FloorMap()
+    full = (100, 100, 50, 150)
+    legs_hidden = (102, 101, 48, 70)  # same person, only the top half visible: the box bottom jumps 80 px
+    d_feet, _ = fm.distance(full, legs_hidden)
+    d, how = moved(fm, full, legs_hidden)
+    assert d_feet > 0.8 and d < 0.1 and how == "anchor"
+    other = (300, 101, 48, 70)        # a different, smaller box elsewhere is real movement
+    assert moved(fm, full, other)[0] > 2.0
+
+
+def test_passer_in_front_of_a_lifter_does_not_take_or_lose_ids():
+    script = []
+    for k in range(50):
+        gx = 400 - 12 * k  # green walks left, passing in front of red (standing at x=150) around k=21
+        f = [((gx, 108, 50, 150, .9), "green")] if gx > -50 else []
+        if abs(gx - 150) > 45:  # red is hidden while green is in front
+            f.append(((150, 100, 50, 150, .9), "red"))
+        script.append(f)
+    tr, ids = run(script)
+    assert len(tr.all_tracks()) == 2 and id_at(ids, 5, 150, 100) == id_at(ids, 45, 150, 100)
+
+
+def test_kalman_prediction_survives_a_box_that_halves_behind_a_rack():
+    from gymtrack.motion import BoxKalman
+    kf = BoxKalman((100, 100, 40, 120), 0.0)
+    for k in range(1, 6):
+        kf.update((100, 100, 40, 120), k * 0.2)
+    h0, v0 = kf.x[2], kf.x[3:6].copy()
+    kf.update((100, 100, 40, 60), 1.2)            # legs hidden: box halves in 0.2 s
+    PeopleTracker._limit_motion(kf, 60 / h0, v0)
+    pred = kf.box_at(2.2)                        # one second of coasting
+    assert pred[3] > 40 and pred[1] > 50          # still a body-sized box, still on screen
+
+
+def test_long_lost_person_is_not_reidentified_across_the_room_on_colour_alone():
+    script = [[((100, 100, 50, 150, .9), "red")] for _ in range(15)]
+    script += [[] for _ in range(50)]                                   # red hidden for 10 s
+    script += [[((560, 100, 50, 150, .9), "red")] for _ in range(10)]   # identical clothes, ~5 m away
+    tr, _ = run(script)
+    assert len(tr.all_tracks()) == 2
+    script = [[((100, 100, 50, 150, .9), "red")] for _ in range(15)]
+    script += [[] for _ in range(100)]
+    script += [[((104, 100, 50, 150, .9), "red")] for _ in range(10)]   # back at the very same spot
+    tr, _ = run(script)
+    assert len(tr.all_tracks()) == 1
+
+
+def test_stitch_links_position_only_at_the_same_spot_after_a_longer_hide():
+    d = make({1: (0, 40, (0.3, 0.3, 0.05, 0.2), None), 2: (52, 100, (0.301, 0.3, 0.05, 0.2), None)})
+    stitch(d)
+    assert ids_in(d) == {1}  # 12 s behind a rack, back at the same spot, nobody else around
+
+
+def test_stitch_leaves_a_coin_flip_unlinked():
+    # two people vanish at the same spot and one re-appears there: which one it is, is a guess
+    d = make({1: (0, 40, (0.3, 0.3, 0.05, 0.2), None), 3: (0, 41, (0.32, 0.3, 0.05, 0.2), None),
+              2: (44, 100, (0.31, 0.3, 0.05, 0.2), None)})
+    stitch(d)
+    assert ids_in(d) == {1, 2, 3}
+
+
+def test_stitch_crowding_at_a_tracklet_start_does_not_block_linking_its_end():
+    tracks = {1: (0, 40, (0.3, 0.3, 0.05, 0.2), None), 2: (44, 100, (0.305, 0.3, 0.05, 0.2), None),
+              5: (0, 3, (0.31, 0.3, 0.05, 0.2), None)}  # someone stood next to 1 when it *started*
+    d = make(tracks)
+    stitch(d)
+    assert 2 not in ids_in(d) and 1 in ids_in(d)
