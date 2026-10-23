@@ -106,7 +106,7 @@ def _relu(x):
 
 # acceleration tolerance per joint relative to acc_sigma: the trunk moves smoothly, hands and feet don't
 ACC_SCALE = np.array([1.0, 0.8, 0.8, 1.5, 1.5, 2.2, 2.2, 0.6, 0.6, 1.5, 1.5, 2.2, 2.2])
-N_LIMIT = 17
+N_LIMIT = 19
 N_HARD = 12    # the first N_HARD limit terms are hard limits; the rest are weak priors
 
 
@@ -153,8 +153,22 @@ def _limits(X, hand):
     # equally well, prefer the less bent one (resolves standing-leg depth ambiguity)
     for hip, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
         th, sh = _unit(X[:, kn] - X[:, hip]), _unit(X[:, an] - X[:, kn])
-        out.append(np.arccos(np.clip((th * sh).sum(-1), -1, 1)) / 2.0)
+        out.append(np.arccos(np.clip((th * sh).sum(-1), -1, 1)) / 1.2)
         out.append(np.arccos(np.clip(-(th * trunk).sum(-1), -1, 1)) / 2.0)
+    # static balance: a standing body's mass (between hips and shoulders) is above its feet. Only while the
+    # legs are nearly straight (standing, not seated or lying, when the body is supported elsewhere);
+    # stops 'leaning plank' poses when the 2D size and the floor contact disagree.
+    com = 0.6 * mid_h + 0.4 * mid_s
+    sup = (X[:, LAN] + X[:, RAN]) / 2
+    d = np.sqrt(((com - sup)[:, :2] ** 2).sum(-1) + 1e-9)
+    # gate on straight legs (not on hip height, which the bad pose itself lowers): seated people bend the knees
+    ck = np.minimum((_unit(X[:, LKN] - X[:, LHIP]) * _unit(X[:, LAN] - X[:, LKN])).sum(-1),
+                    (_unit(X[:, RKN] - X[:, RHIP]) * _unit(X[:, RAN] - X[:, RKN])).sum(-1))
+    standing = 1 / (1 + np.exp(-np.clip((ck - 0.77) / 0.05, -30, 30)))
+    out.append(_relu(d - 0.15) / 0.12 * standing)
+    # stance: feet rarely more than ~0.7 m apart (walking stride / wide squat); robust, lunges can break it
+    fa = np.sqrt(((X[:, LAN] - X[:, RAN]) ** 2).sum(-1) + 1e-9)
+    out.append(_relu(fa - 0.7) / 0.15)
     return np.stack(out, 1)
 
 
@@ -176,6 +190,10 @@ class _Problem:
             hgt = np.ptp(self.uv[..., 1], axis=1)
             sigma_px = np.maximum(1.5, 0.03 * hgt)
         self.sig = np.broadcast_to(np.asarray(sigma_px, float), (self.T,)).copy()
+        # floor contact tolerance grows with distance: a ~1 deg calibration error moves a far floor point a lot
+        dist = cam.f * 1.5 / np.maximum(np.ptp(self.uv[..., 1], axis=1), 5.0)
+        self.c_sig = np.maximum(0.07, 0.025 * dist)
+        self.f_sig = np.maximum(0.3, 0.05 * dist)
         # smoothness triplets (consecutive frames, no long gaps)
         self.tri = []
         if smooth and self.T >= 3:
@@ -205,8 +223,8 @@ class _Problem:
         parts = [rp.ravel(), rb.ravel(), rf.ravel()]
         if self.contact:
             # one foot on the floor (strong), and a weak pull of each foot to the floor (feet rarely float)
-            parts.append(((_smoothmin(X[:, LAN, 2], X[:, RAN, 2]) - ANKLE_Z) / 0.07))
-            parts.append(((X[:, [LAN, RAN], 2] - ANKLE_Z) / 0.3).ravel())
+            parts.append(((_smoothmin(X[:, LAN, 2], X[:, RAN, 2]) - ANKLE_Z) / self.c_sig))
+            parts.append(((X[:, [LAN, RAN], 2] - ANKLE_Z) / self.f_sig[:, None]).ravel())
         parts.append(_limits(X, self.hand).ravel())
         if len(self.tri):
             i = self.tri
@@ -266,10 +284,10 @@ class _Problem:
             ea, eb = np.exp(-(za - m) / 0.03), np.exp(-(zb - m) / 0.03)
             pa, pb = ea / (ea + eb), eb / (ea + eb)
             rows = r0 + np.arange(T)
-            R += [rows, rows]; C_ += [base[:, LAN] + 2, base[:, RAN] + 2]; V += [pa / 0.07, pb / 0.07]
+            R += [rows, rows]; C_ += [base[:, LAN] + 2, base[:, RAN] + 2]; V += [pa / self.c_sig, pb / self.c_sig]
             r0 += T
             rows = r0 + np.arange(T) * 2
-            R += [rows, rows + 1]; C_ += [base[:, LAN] + 2, base[:, RAN] + 2]; V += [np.full(T, 1 / 0.3)] * 2
+            R += [rows, rows + 1]; C_ += [base[:, LAN] + 2, base[:, RAN] + 2]; V += [1 / self.f_sig] * 2
             r0 += 2 * T
         L0 = _limits(X, self.hand)
         h = 1e-5
