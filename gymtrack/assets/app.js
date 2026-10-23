@@ -87,6 +87,9 @@ const camsN = n => `${n} camera${n === 1 ? "" : "s"}`;
 addEventListener("scroll", () => $("#topbar").classList.toggle("scrolled", scrollY > 4), {passive: true});
 
 /* ---------------- FLOOR ---------------- */
+/* 3D bodies over camera tiles (camoverlay3d.js, three.js): loaded on first use */
+let ov3mod = null, ov3load = null, ov3fail = false;
+const loadOv3 = () => ov3load ||= import("./camoverlay3d.js").then(m => ov3mod = m).catch(err => { ov3fail = true; console.warn("3D overlay unavailable:", err); });
 function FloorPage() {
   let focus = null, feedKeys = new Set(), wall;
   const clock = el(`<span class="clock num"></span>`);
@@ -97,7 +100,7 @@ function FloorPage() {
       if (src.mode !== "server") a.append(el(`<select class="input sm" id="speed" aria-label="Playback speed" style="width:auto"><option value="1">1× speed</option><option value="3">3× speed</option></select>`));
       a.querySelector("#speed") && (a.querySelector("#speed").value = String(src.speed), a.querySelector("#speed").onchange = e => src.speed = +e.target.value);
     },
-    unmount() { cancelAnimationFrame(this.raf); },
+    unmount() { cancelAnimationFrame(this.raf); wall?.querySelectorAll(".tile").forEach(t => t._ov3?.destroy()); },
     drawHits() { // clickable boxes over each camera, following the tracked people
       this.raf = requestAnimationFrame(() => this.drawHits());
       if (!src.peopleNow || !wall) return;
@@ -107,8 +110,14 @@ function FloorPage() {
         const fr = t.querySelector(".frame") || t, cv = t.querySelector(".skel"), dpr = devicePixelRatio || 1, w = fr.clientWidth, hh0 = fr.clientHeight;
         if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(hh0 * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(hh0 * dpr); }
         const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, hh0);
-        if (showSkel) for (const q of list) if (q.pose) {
-          const lift = q.activity && q.activity !== "standing", hov = layer.querySelector(`.hit[data-pid="${q.pid}"]`)?.matches(":hover, .hl");
+        const isHov = q => !!layer.querySelector(`.hit[data-pid="${q.pid}"]`)?.matches(":hover, .hl"), isLift = q => !!(q.inSet || (q.activity && q.activity !== "standing"));
+        // solid 3D bodies through the solved CCTV camera where the 3D exists; the 2D skeleton for everyone else
+        let in3d = new Set();
+        const camId = t.dataset.cam, can3d = !ov3fail && !!src.camera3dAt && !!src.has3d?.(camId);
+        if (showSkel && can3d && !t._ov3) { if (ov3mod) { try { t._ov3 = ov3mod.mountCamOverlay(fr, fr.querySelector("video")); } catch (err) { ov3fail = true; console.warn("3D overlay off:", err); } } else loadOv3(); }
+        if (t._ov3) in3d = t._ov3.update(showSkel ? list.map(q => ({pid: q.pid, pose3d: q.pose3d, lift: isLift(q), hov: isHov(q)})) : [], can3d ? src.camera3dAt(camId, src.timeOf(camId)) : null, showSkel);
+        if (showSkel) for (const q of list) if (q.pose && !in3d.has(q.pid)) {
+          const lift = isLift(q), hov = isHov(q);
           drawSkeleton(ctx, q.pose, p => [p[0] * w, p[1] * hh0], {color: lift ? "#2bb3ea" : hov ? "#ffffff" : "#ffb020", width: Math.max(1.6, w / 420) * (hov ? 1.5 : 1), joint: Math.max(1.4, w / 520), alpha: hov ? 1 : 0.9});
         }
         for (const q of list) {
@@ -149,7 +158,8 @@ function FloorPage() {
       eq.onclick = e => { const r = e.target.closest("[data-member]"); if (r && cfg.members.some(m => m.id === r.dataset.member)) location.hash = "member-" + r.dataset.member; };
     },
     buildWall() {
-      wall.innerHTML = `<div class="wall-h"><span class="crumbs"><b>${esc(cfg.gym || "Site")}</b>${IC.chev}<span>${src.sessions ? esc(cfg.session) : "All cameras"}</span></span><span class="right"><button data-skel aria-pressed="${store.get("skel", true)}" title="Show skeletons">${IC.skel}Skeletons</button>${focus ? '<button data-unfocus>Show all</button>' : ""}</span></div>`;
+      wall.querySelectorAll(".tile").forEach(t => t._ov3?.destroy());
+      wall.innerHTML = `<div class="wall-h"><span class="crumbs"><b>${esc(cfg.gym || "Site")}</b>${IC.chev}<span>${src.sessions ? esc(cfg.session) : "All cameras"}</span></span><span class="right"><button data-skel aria-pressed="${store.get("skel", true)}" title="Show bodies over the video: 3D where measured, 2D skeleton otherwise">${IC.skel}Skeletons</button>${focus ? '<button data-unfocus>Show all</button>' : ""}</span></div>`;
       wall.classList.toggle("focus", !!focus);
       const cams = focus ? [cfg.cameras.find(c => c.id === focus), ...cfg.cameras.filter(c => c.id !== focus)] : cfg.cameras;
       const list = cams.filter(Boolean);

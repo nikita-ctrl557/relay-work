@@ -271,6 +271,8 @@ code { font: 12.5px var(--f-mono); background: var(--surface-2); padding: 1px 5p
 .tile .frame { position: relative; aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden; background: #0c1116; }
 .tile .frame canvas, .tile .frame img, .tile .frame video { display: block; width: 100%; height: 100%; object-fit: cover; }
 .tile .skel { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.tile .skel3d { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .9; }
+.tile .skel3d[hidden] { display: none; }
 .tile .cap, .tile .cap2 { position: absolute; display: flex; align-items: center; gap: 7px; padding: 4px 10px; border-radius: 6px; background: rgba(22, 28, 34, .74); color: #fff; font-size: 13.5px; pointer-events: none; max-width: calc(100% - 16px); z-index: 2; }
 .tile .cap { left: 8px; bottom: 8px; }
 .tile .cap b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -287,7 +289,7 @@ code { font: 12.5px var(--f-mono); background: var(--surface-2); padding: 1px 5p
 .tile .hit.lifting:hover, .tile .hit.lifting.hl { border-color: #2bb3ea; }
 .tile .hit:hover span, .tile .hit:focus-visible span, .tile .hit.hl span { opacity: 1; }
 .tile .hit:not([data-member]) { cursor: help; }
-.no-preview .tile video, .no-preview .tile canvas.skel, .no-preview .tile img { visibility: hidden; }
+.no-preview .tile video, .no-preview .tile canvas.skel, .no-preview .tile canvas.skel3d, .no-preview .tile img { visibility: hidden; }
 .no-preview .tile .frame { background: #1a2027; }
 
 .equip { display: flex; flex-direction: column; }

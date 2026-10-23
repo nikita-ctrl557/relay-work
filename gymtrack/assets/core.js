@@ -689,6 +689,19 @@ class ReplaySource {
     this.cfg.cameras.length = 0; this.cfg.cameras.push(...this.cfg.allCameras.filter(x => x.id === id));
     this.cfg.machines.length = 0; this.cfg.machines.push(...this.cfg.allMachines.filter(m => c.machines.some(x => x.id === m.id)));
     this.cfg.session = c.session;
+    if (!c._opened) { c._opened = true; const t = this.busyTime(c); if (t > 0) { if (c.pv || c.el.readyState >= 1) this.seek(c.id, t); else c.el.addEventListener("loadedmetadata", () => this.seek(c.id, t), {once: true}); } } // first open: start where people are, not at an empty 0:00
+  }
+  /* the busiest moment in the first third of a recording: most people on camera plus sets under way, over a ~20 s window */
+  busyTime(c) {
+    const tl = c.data.timeline, dur = c.data.duration || tl[tl.length - 1]?.t || 0; if (tl.length < 3 || !dur) return 0;
+    const lim = dur / 3, sets = c.data.sets || [], score = [];
+    for (const e of tl) { if (e.t > lim) break; score.push([e.t, (e.n ?? e.p.length) + 1.5 * sets.filter(s => s.t0 <= e.t && e.t <= s.t1).length]); }
+    let best = 0, bt = 0, sum = 0, j = 0;
+    for (let i = 0; i < score.length; i++) { // sliding 20 s window; start at its beginning so the busy stretch plays out
+      sum += score[i][1]; while (score[i][0] - score[j][0] > 20) sum -= score[j++][1];
+      const avg = sum / (i - j + 1); if (i - j >= 5 && avg > best + 1e-6) { best = avg; bt = score[j][0]; }
+    }
+    return bt;
   }
   set speed(v) { this._speed = v; this.cams?.forEach(c => (c.pv || c.el).playbackRate = v); }
   get speed() { return this._speed; }
