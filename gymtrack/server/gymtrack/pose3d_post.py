@@ -306,8 +306,9 @@ def refine_track(t, X, U, groups, hand=1.0, hz=HZ, lock_feet=True):
 # metrics (no ground truth)
 # ---------------------------------------------------------------------------------------------------------
 
-def jitter(t, X):
-    """Median 3D joint acceleration (m/s^2) over consecutive samples with steps < 0.6 s."""
+def jitter(t, X, stat="median"):
+    """3D joint acceleration (m/s^2; median or mean over joints x frames) over consecutive samples with steps
+    < 0.6 s. Compare methods at the same sample times."""
     t = np.asarray(t, float)
     if len(t) < 3:
         return np.nan
@@ -317,7 +318,8 @@ def jitter(t, X):
         return np.nan
     v = np.diff(X, axis=0) / dt[:, None, None]
     a = np.diff(v, axis=0) / ((dt[:-1] + dt[1:]) / 2)[:, None, None]
-    return float(np.median(np.linalg.norm(a[ok], axis=-1)))
+    n = np.linalg.norm(a[ok], axis=-1)
+    return float(np.mean(n) if stat == "mean" else np.median(n))
 
 
 def foot_slide(t, X, hz_ref=HZ, v_max=0.22):

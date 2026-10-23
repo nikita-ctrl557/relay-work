@@ -518,6 +518,10 @@ def calibrate_bones(cam: PinholeCamera, uv, w, hand=1.0, n_frames: int = 40, hei
     idx = np.unique(np.linspace(0, T - 1, min(T, n_frames)).round().astype(int))
     L0 = bone_lengths(height_prior[0])
     X0 = np.stack([init_frame(cam, uv[i], L0, hand) for i in idx])
+    ok = np.isfinite(X0).all((1, 2))           # a degenerate frame (e.g. joints off the image) can't start the solve
+    if not ok.all() and ok.sum() >= 2:
+        idx, X0 = idx[ok], X0[ok]
+    X0 = np.nan_to_num(X0)
     G0 = RATIO_V * height_prior[0]
     pr = _Problem(cam, uv[idx], np.asarray(w)[idx], np.arange(len(idx), dtype=float) * 10, L0, hand,
                   smooth=False, groups_free=True, height_prior=height_prior)

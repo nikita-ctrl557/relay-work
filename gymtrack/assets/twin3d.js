@@ -273,7 +273,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       const grd = g.createRadialGradient(cx, cz, 0, cx, cz, r); grd.addColorStop(0, "rgba(47,191,90,0.22)"); grd.addColorStop(1, "rgba(47,191,90,0.04)");
       g.beginPath(); g.moveTo(cx, cz); g.arc(cx, cz, r, ang - half, ang + half); g.closePath(); g.fillStyle = grd; g.fill();
     }
-    if (h && L !== "people" && colourMode === "live") { let mx = 0; for (const v of h.grid) mx = Math.max(mx, v); if (mx > 0) for (let i = 0; i < h.grid.length; i++) { const v = h.grid[i]; if (v <= 0) continue; const gx = i % h.W, gy = Math.floor(i / h.W); g.fillStyle = `rgba(240,98,45,${(0.06 + 0.5 * Math.sqrt(v / mx)).toFixed(2)})`; g.fillRect((gx * h.cell - x0) * s, (gy * h.cell - z0) * s, h.cell * s + 0.5, h.cell * s + 0.5); } }
+    if (h && L !== "people" && colourMode === "live") { if (roomOn) g.filter = `blur(${Math.round(h.cell * s * 0.6)}px)`; let mx = 0; for (const v of h.grid) mx = Math.max(mx, v); if (mx > 0) for (let i = 0; i < h.grid.length; i++) { const v = h.grid[i]; if (v <= 0) continue; const gx = i % h.W, gy = Math.floor(i / h.W); g.fillStyle = `rgba(240,98,45,${((roomOn ? 0.03 : 0.06) + (roomOn ? 0.32 : 0.5) * Math.sqrt(v / mx)).toFixed(2)})`; g.fillRect((gx * h.cell - x0) * s, (gy * h.cell - z0) * s, h.cell * s + 0.5, h.cell * s + 0.5); } g.filter = "none"; }
     for (const mo of machineObjs) {
       const poly = roomOn && mo.roomPoly || mo.poly;
       if (roomOn && !mo.strong) continue; // the real room shows the equipment; only machines in use get an outline
@@ -340,7 +340,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       if (roomCur) roomG.remove(roomCur.mesh);
       roomCur = r; roomSeg = sg.seg; roomG.add(r.mesh);
       const v = r.d.view; roomCam.position.fromArray(v.pos); roomCam.lookAt(new THREE.Vector3().fromArray(v.look)); roomCam.up.fromArray(v.up);
-      applyRoom(); if (!userMoved && !anim) setView(curView, !roomShown); roomShown = true;
+      applyRoom(); if (!userMoved) setView(curView, !roomShown); roomShown = true; // a new framing: follow it unless the user has taken over
     }).catch(e => { console.warn("room", e); roomCache.delete(sg.seg); });
   }
   let roomShown = false, destroyed = false;
@@ -525,6 +525,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     if (anim) { anim.t = Math.min(1, anim.t + 0.04); const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.l0, anim.l1, e); camera.fov = anim.f0 + (anim.f1 - anim.f0) * e; camera.updateProjectionMatrix(); if (anim.t >= 1) anim = null; }
     if (room && ts - segAt_ > 500) { segAt_ = ts; showSeg(segAt(clock?.())); }
     controls.update();
+    if (curView === "cam" && !userMoved && !anim && rv()?.roll) camera.rotateZ(-rv().roll); // the footage's own roll (orbiting levels it again)
     if (roomCam.visible !== (roomOn && !!roomCur && camera.position.distanceTo(roomCam.position) > 4.5)) roomCam.visible = !roomCam.visible;
     const rect = renderer.domElement.getBoundingClientRect(), W = rect.width, H = rect.height, showP = layer() !== "heat" && peopleMode !== "off";
     const taken = []; // screen rects already used by people tags; machine labels avoid them

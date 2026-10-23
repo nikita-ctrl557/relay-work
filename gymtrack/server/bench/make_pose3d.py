@@ -11,7 +11,8 @@ clean-up (pose3d_post), exported as a compact steady-rate sidecar (format v2).
     best at that time, so it survives re-tracking (pid renumbering).
 
 Priorities (and what is kept if the file would be too big): A = people with sets, B = people seen >= 45 s,
-C = everyone else (fitted on every 2nd pose sample, exported at hz / 2, dropped first when over --max-mb).
+B is fitted on every 2nd pose sample; C = everyone else (every 2nd sample, no mirrored-start search, exported
+at hz / 2, dropped first when over --max-mb).
 
 FORMAT v2 (core.js indexPose3d reads both v1 "poses3d" rows and v2 "tracks"):
   tracks: [{pid, t0 (s), hz, n, P, A, F, U}]
@@ -149,7 +150,7 @@ def sam_groups(Xw):
     return g
 
 
-def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True):
+def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, try_mirror=True):
     """pieces: [(t, uv, w)] of one person in one segment. Returns list of dict per piece."""
     prior_w = None
     if sam is not None and use_prior:
@@ -180,7 +181,7 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True):
                 if not prior[1].any():
                     prior = None
         try:
-            res = P3.fit_track(cam, t, uv, w, groups=groups, prior=prior, prior_rel=True)
+            res = P3.fit_track(cam, t, uv, w, groups=groups, prior=prior, prior_rel=True, try_mirror=try_mirror)
         except Exception as ex:  # noqa
             print("fit failed", repr(ex), flush=True)
             continue
@@ -275,9 +276,10 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
         futs = {}
         for ph, negn, si, pid, pieces, s_ in tasks:
             cam = segcams[si][1]
-            step = 2 if ph == "C" else 1
+            # A (lifters): every pose sample, B (regulars): every 2nd, C (passers-by): every 2nd, no mirror search
+            step = 1 if ph == "A" else 2
             h = hz if ph != "C" else hz / 2
-            futs[ex.submit(fit_person, cam, pieces, s_, W, Hh, h, step)] = (ph, si, pid)
+            futs[ex.submit(fit_person, cam, pieces, s_, W, Hh, h, step, True, True, ph != "C")] = (ph, si, pid)
         done = 0
         for f in as_completed(futs):
             ph, si, pid = futs[f]

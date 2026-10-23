@@ -109,7 +109,7 @@ def _camera(footage: str, clip: str):
     cfg = GymConfig.load(os.path.join(footage, f"{clip}-config.json"))
     c = cfg.cameras[0]
     src = os.path.join(footage, f"{clip}.mp4")
-    return cfg, Camera(c.id, c.name, src, c.fps, c.width, c.zones, calib=c.calib, exercise_names=c.exercise_names, ignore=c.ignore, mirrors=c.mirrors)
+    return cfg, Camera(c.id, c.name, src, c.fps, c.width, c.zones, calib=c.calib, exercise_names=c.exercise_names, ignore=c.ignore, mirrors=c.mirrors, mirror_motion=c.mirror_motion)
 
 
 def run_pipeline(footage: str, clip: str, out: str, save_trace: bool = False, **kw) -> dict:

@@ -273,7 +273,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         if frame.shape[1] != width:
             full = frame
             frame = cv2.resize(frame, (width, int(frame.shape[0] * width / frame.shape[1])), interpolation=cv2.INTER_AREA)
-        if guard is not None and guard.mirrors:  # motion in mirror glass only counts on real people (last frame's)
+        if guard is not None and guard.mirrors and cam.mirror_motion:  # mirror glass: motion only counts on real people
             analyser.exclude = guard.motion_exclusion(frame.shape, kept_tracks)
         reading = analyser.analyze(frame, start_ts + t)
         tracks = []

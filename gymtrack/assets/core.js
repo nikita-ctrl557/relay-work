@@ -855,19 +855,43 @@ class ReplaySource {
     // a manifest that names "pose3d_file" for any camera is authoritative (null = none); otherwise probe "<data>.pose3d.json"
     const listed = this.cams.some(c => "pose3d_file" in c);
     await Promise.all(this.cams.map(async c => {
-      let d = c.data.poses3d ? c.data : null;
+      let d = c.data.poses3d || c.data.tracks ? c.data : null;
       if (!d && (c.pose3d_file || !listed)) {
         const f = c.pose3d_file || (c.data_file || c.id + ".json").replace(/\.json$/, "") + ".pose3d.json";
         try { const r = await fetch(this.base + f); if (r.ok && /json/.test(r.headers.get("content-type") || "json")) d = await r.json(); } catch {}
       }
-      if (d?.poses3d?.length) this.indexPose3d(c, d);
+      if (d?.poses3d?.length || d?.tracks?.length) this.indexPose3d(c, d);
     }));
     return this.cams.some(c => c.p3);
   }
   indexPose3d(c, d) {
     const raw = {}, meta = d.pose3d_meta || {};
-    for (const e of d.poses3d) for (const row of e.k) { const [pid, P, , A, U] = row; if (!P || P.length < 39) continue; (raw[pid] ||= []).push([e.t, P, A || [], U || []]); }
+    for (const e of d.poses3d || []) for (const row of e.k) { const [pid, P, , A, U] = row; if (!P || P.length < 39) continue; (raw[pid] ||= []).push([e.t, P, A || [], U || []]); }
     const idx = {};
+    if (d.tracks) { // format v2 (bench/make_pose3d.py): steady-rate tracks, base64 int16 first frame | int8 closed-loop deltas
+      const bytes = s => { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+      const dec = (s, k, n) => { const [a, b] = s.split("|"), out = new Float32Array(n * k), u0 = bytes(a), dv = new DataView(u0.buffer);
+        for (let j = 0; j < k; j++) out[j] = dv.getInt16(j * 2, true);
+        if (b) { const ds = new Int8Array(bytes(b).buffer); for (let i = 1; i < n; i++) for (let j = 0; j < k; j++) out[i * k + j] = out[(i - 1) * k + j] + ds[(i - 1) * k + j]; }
+        return out; };
+      const by = {};
+      for (const tr of d.tracks) (by[tr.pid] ||= []).push(tr);
+      for (const [pid, trs] of Object.entries(by)) {
+        trs.sort((a, b) => a.t0 - b.t0);
+        const n = trs.reduce((s, tr) => s + tr.n, 0), t = new Float64Array(n), P = new Float32Array(n * 39), A = new Float32Array(n * 12), U = new Float32Array(n * 13), F = new Float32Array(n);
+        let o = 0;
+        for (const tr of trs) {
+          const p = dec(tr.P, 39, tr.n), a = dec(tr.A, 12, tr.n), fb = bytes(tr.F), fv = new DataView(fb.buffer);
+          for (let i = 0; i < tr.n; i++, o++) {
+            t[o] = tr.t0 + i / tr.hz; F[o] = fv.getInt16(i * 2, true) / 100;
+            for (let j = 0; j < 39; j++) P[o * 39 + j] = p[i * 39 + j] / 100;
+            for (let j = 0; j < 12; j++) A[o * 12 + j] = a[i * 12 + j];
+            for (let j = 0; j < 13; j++) U[o * 13 + j] = tr.U?.[j] ?? NaN;
+          }
+        }
+        idx[pid] = {t, P, A, U, F, n};
+      }
+    }
     for (const [pid, rows] of Object.entries(raw)) {
       rows.sort((a, b) => a[0] - b[0]);
       const n = rows.length, t = new Float64Array(n), P = new Float32Array(n * 39), A = new Float32Array(n * 12), U = new Float32Array(n * 13).fill(NaN);
@@ -887,8 +911,9 @@ class ReplaySource {
     let a = lo, b = Math.min(lo + 1, n - 1), k = 0;
     if (b > a && T[b] - T[a] <= 0.8) k = Math.max(0, Math.min(1, (ct - T[a]) / (T[b] - T[a])));
     else { if (b > a && Math.abs(T[b] - ct) < Math.abs(ct - T[a])) a = b; b = a; if (Math.abs(ct - T[a]) > 0.6) return null; }
-    const J = new Float32Array(39), A = {}, names = c.p3.angles;
+    const J = new Float32Array(r.F ? 41 : 39), A = {}, names = c.p3.angles;
     for (let j = 0; j < 39; j++) J[j] = r.P[a * 39 + j] + (r.P[b * 39 + j] - r.P[a * 39 + j]) * k;
+    if (r.F) { let d = r.F[b] - r.F[a]; d -= 2 * Math.PI * Math.round(d / (2 * Math.PI)); const y = r.F[a] + d * k; J[39] = Math.cos(y); J[40] = Math.sin(y); } // facing (plan frame)
     names.forEach((nm, j) => { const x = r.A[a * 12 + j], y = r.A[b * 12 + j]; A[nm] = Number.isNaN(y) ? x : x + (y - x) * k; });
     let us = 0, un = 0; for (let j = 0; j < 13; j++) { const u = r.U[a * 13 + j]; if (!Number.isNaN(u)) { us += u; un++; } }
     return {J, A, u: un ? us / un : null, t: ct};

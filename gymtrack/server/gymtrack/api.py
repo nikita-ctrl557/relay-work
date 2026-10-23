@@ -300,7 +300,7 @@ def create_app(cfg: GymConfig, store: Store, start_workers: bool = True, recordi
             if not w:
                 raise ValueError("not a video file OpenCV can read (try MP4/H.264)")
             if base and base.zones:
-                cam = Camera(base.id, base.name, job.file, base.fps, base.width, base.zones, calib=base.calib, exercise_names=base.exercise_names, ignore=base.ignore, mirrors=base.mirrors)
+                cam = Camera(base.id, base.name, job.file, base.fps, base.width, base.zones, calib=base.calib, exercise_names=base.exercise_names, ignore=base.ignore, mirrors=base.mirrors, mirror_motion=base.mirror_motion)
             else:
                 if not cfg.machine("floor"):
                     cfg.machines.append(Machine("floor", "Whole view"))

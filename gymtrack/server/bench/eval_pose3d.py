@@ -24,6 +24,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from gymtrack import pose3d as P3  # noqa: E402
+from gymtrack import pose3d_post as PP  # noqa: E402
 from gymtrack.camera import ANKLE_Z, PinholeCamera, calibrate_from_people, standing_samples  # noqa: E402
 
 UP = np.array([0.0, 0.0, 1.0])
@@ -169,6 +170,16 @@ def errors(Xp, Xg, hand=1.0):
             "elbow_deg": (ae["l_elbow_flex"] + ae["r_elbow_flex"]) / 2, "trunk_deg": ae["trunk_lean"]}
 
 
+def _at(tg, X, t):
+    flat = X.reshape(len(X), -1)
+    return np.stack([np.interp(t, tg, flat[:, k]) for k in range(flat.shape[1])], 1).reshape(len(t), 13, 3)
+
+
+def _motion(t, X):
+    fs, fh = PP.foot_slide(t, X)
+    return [PP.jitter(t, X, "mean"), fs, fh, PP.bone_cv(X)]
+
+
 def replay_times(dur, rng):
     t, out = 0.0, []
     while t < dur:
@@ -214,7 +225,7 @@ def run_synth(quick=False, seed=0):
             res_sc = P3.fit_track(cam_sc, t, uv, w)
             # simulated learned 3D model at 1 Hz (HMR-class error: ~6 cm per joint, a wrong global depth that
             # the floor-contact rescale must fix, and an occasional flipped limb), then our refinement
-            key = np.arange(0, len(t), 4)
+            key = np.arange(0, len(t), 2)         # ~2.5 Hz, as the SAM 3D Body crops on lifters
             Xk = Xg[key] + rng.normal(0, 0.035, (len(key), 13, 3))
             for kk in range(len(key)):
                 if rng.random() < 0.1:
@@ -223,9 +234,16 @@ def run_synth(quick=False, seed=0):
             Xkw, _ = P3.camera_frame_to_world(cam, Xc)
             prior = P3.resample_prior(t, t[key], Xkw)
             res_l = P3.fit_track(cam, t, uv, w, prior=prior)
+            # v2: pelvis-relative learned prior + offline clean-up (pose3d_post), played back at 10 Hz
+            res_v2 = P3.fit_track(cam, t, uv, w, prior=prior, prior_rel=True)
+            R2 = PP.refine_track(t, res_v2["X"], res_v2["unc"], res_v2["groups"], res_v2["hand"])
+            Xv2 = _at(R2["t"], R2["X"], t)
+            # motion quality, all at the same sample times
+            mot = {"full": _motion(t, res["X"]), "learned_v2": _motion(t, Xv2), "gt": _motion(t, Xg)}
             rows.append({"kind": kind, "height": h, "full": errors(res["X"], Xg), "init": errors(Xi, Xg),
                          "selfcal": errors(res_sc["X"], Xg),
-                         "learned_raw": errors(Xkw, Xg[key]), "learned+refine": errors(res_l["X"][key], Xg[key]), "q": P3.quality(cam, t, uv, w, res["X"]),
+                         "learned_raw": errors(Xkw, Xg[key]), "learned+refine": errors(res_l["X"][key], Xg[key]),
+                         "learned_v2": errors(Xv2[key], Xg[key]), "mot": mot, "q": P3.quality(cam, t, uv, w, res["X"]),
                          "unc_cm": float(np.median(res["unc"]) * 100),
                          "err_cm": float(np.median(np.linalg.norm(res["X"] - Xg, axis=-1)) * 100),
                          "h_est": res["height"]})
@@ -235,8 +253,13 @@ def run_synth(quick=False, seed=0):
     print("\n%-9s %-14s " % ("motion", "variant") + " ".join("%9s" % k for k in keys))
     for kind in kinds + ["ALL"]:
         rs = [r for r in rows if kind in (r["kind"], "ALL")]
-        for var in ("init", "full", "selfcal", "learned_raw", "learned+refine"):
+        for var in ("init", "full", "selfcal", "learned_raw", "learned+refine", "learned_v2"):
             print("%-9s %-14s " % (kind, var) + " ".join("%9.1f" % np.mean([r[var][k] for r in rs]) for k in keys))
+    print("\nmotion (at the sample times: mean joint accel m/s^2, stance-foot slide cm/s, stance-foot height above floor cm, bone length CV):")
+    for kind in kinds + ["ALL"]:
+        rs = [r for r in rows if kind in (r["kind"], "ALL")]
+        for var in ("full", "learned_v2", "gt"):
+            print("%-9s %-14s " % (kind, var) + " ".join("%9.3f" % np.nanmean([r["mot"][var][i] for r in rs]) for i in range(4)))
     print("\nheight error (cm): %.1f" % np.mean([abs(r["h_est"] - r["height"]) * 100 for r in rows]))
     print("median predicted uncertainty %.1f cm vs median actual error %.1f cm" % (
         np.median([r["unc_cm"] for r in rows]), np.median([r["err_cm"] for r in rows])))

@@ -53,9 +53,31 @@ def fit_disparity(disp, zf, floorish):
     return a, b, bi.mean()
 
 
-def build(segs_dir, frames_dir, seg):
-    cfg = json.load(open(f"{segs_dir}/{seg}-config.json")); cc = cfg["cameras"][0]
+def plate_homography(frames_dir, a, b):
+    """Image homography from framing a's plate to framing b's (same camera centre: rotation/zoom only)."""
+    orb = cv2.ORB_create(6000); bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    ka, da = orb.detectAndCompute(cv2.cvtColor(cv2.imread(f"{frames_dir}/{a}_plate.png"), cv2.COLOR_BGR2GRAY), None)
+    kb, db = orb.detectAndCompute(cv2.cvtColor(cv2.imread(f"{frames_dir}/{b}_plate.png"), cv2.COLOR_BGR2GRAY), None)
+    m = sorted(bf.match(da, db), key=lambda x: x.distance)[:2500]
+    Hm, inl = cv2.findHomography(np.float32([ka[x.queryIdx].pt for x in m]), np.float32([kb[x.trainIdx].pt for x in m]), cv2.RANSAC, 3.0)
+    return Hm, int(inl.sum())
+
+
+def build(segs_dir, frames_dir, seg, base=None):
+    """seg: a framing with its own plate; base: the configured segment whose calibration it borrows (the framing's
+    camera is that camera turned by the plate-to-plate homography; zones and mirrors are carried over the same way)."""
+    cfg = json.load(open(f"{segs_dir}/{base or seg}-config.json")); cc = cfg["cameras"][0]
     cam, K, M, D = camera(cc)
+    to_img = lambda poly: np.float32(poly) * (W / 640)
+    if base:
+        Hm, ninl = plate_homography(frames_dir, seg, base)           # seg pixels -> base pixels
+        Q = np.linalg.inv(K) @ Hm @ K; Q /= np.cbrt(np.linalg.det(Q))
+        U_, S_, Vt_ = np.linalg.svd(Q); print(seg, "from", base, "inliers", ninl, "rotation fit (singular values)", np.round(S_, 3))
+        M = (U_ @ Vt_).T @ M                                        # world -> this framing's camera
+        D = np.linalg.inv(M) @ np.linalg.inv(K)
+        Hinv = np.linalg.inv(Hm)
+        to_img = lambda poly: cv2.perspectiveTransform((np.float32(poly) * (W / 640))[None], Hinv)[0]
+        cam = type(cam)(cam.f, cam.cx, cam.cy, M @ np.diag([1, 1, cam.flip]), cam.C, cam.width, cam.height, cam.flip)
     C = cam.C.copy()
     disp = np.load(f"{frames_dir}/{seg}_disp.npy")          # 640x360 (half res)
     disp = cv2.resize(disp, (GW, GH), interpolation=cv2.INTER_AREA)
@@ -65,7 +87,7 @@ def build(segs_dir, frames_dir, seg):
     with np.errstate(divide="ignore", invalid="ignore"):
         zf = np.where(dirs[..., 2] < -1e-4, -C[2] / dirs[..., 2], np.inf)
     gp = C + dirs * zf[..., None]                          # floor hit points
-    zones_img = [np.float32(z["polygon"]) * (W / 640) for z in cc["zones"]]
+    zones_img = [to_img(z["polygon"]) for z in cc["zones"]]
     # floor candidates: lower part of the image, valid floor hit within 25 m, not inside an equipment zone
     zmask = np.zeros((GH, GW), np.uint8)
     for p in zones_img: cv2.fillPoly(zmask, [np.int32(p * GW / W)], 1)
@@ -84,7 +106,7 @@ def build(segs_dir, frames_dir, seg):
     if cc.get("mirrors"):
         pts = []
         for poly in cc["mirrors"]:
-            q = np.float32(poly) * (W / 640); bot = q[np.argsort(q[:, 1])[-2:]]
+            q = to_img(poly); bot = q[np.argsort(q[:, 1])[-2:]]
             for t in np.linspace(0, 1, 9):
                 uv = bot[0] * (1 - t) + bot[1] * t; d = np.array([uv[0], uv[1], 1.0]) @ D.T
                 if d[2] < 0: pts.append(C + d * (-C[2] / d[2]))
@@ -157,6 +179,9 @@ def build(segs_dir, frames_dir, seg):
              "y1": round(min(float(C[1]), float(np.percentile(fl[:, 1], 99)) + 0.6) if len(fl) else float(C[1]), 2), "h": CEIL}
     view = {"pos": t3(C), "look": t3(C + ax / np.linalg.norm(ax) * 10), "up": t3(up), "fov": round(float(np.degrees(2 * np.arctan(H / 2 / K[0, 0]))), 2),
             "target": t3(tgt), "span": round(span, 2)}
+    f3 = np.array(view["look"]) - np.array(view["pos"]); f3 /= np.linalg.norm(f3); u3 = np.array(view["up"]); u3 /= np.linalg.norm(u3)
+    u0 = np.array([0, 1.0, 0]) - f3[1] * f3; u0 /= np.linalg.norm(u0)
+    view["roll"] = round(float(np.arctan2(np.cross(u0, u3) @ -f3, u0 @ u3)), 4)   # radians about the camera's own z (three.js rotateZ)
     zq = np.clip(np.round(z / FAR * 65535), 1, 65535).astype("<u2")
     bits = np.packbits(keep.astype(np.uint8).ravel(), bitorder="little")
     info = {"floor_fit": {"a": float(a), "b": float(b), "inliers": round(float(frac), 3)}, "wall_y": round(wall_y, 3),
@@ -182,9 +207,9 @@ def merge_equipment(rooms):
     return out
 
 
-def do_seg(segs_dir, frames_dir, out_dir, seg):
+def do_seg(segs_dir, frames_dir, out_dir, seg, base=None):
     if True:  # noqa: one framing -> <out_dir>/<seg>.json + .jpg
-        room, P, keep, cls = build(segs_dir, frames_dir, seg)
+        room, P, keep, cls = build(segs_dir, frames_dir, seg, base)
         tex = cv2.imread(f"{frames_dir}/{seg}_plate.png")
         cv2.imwrite(f"{out_dir}/{seg}.jpg", tex, [cv2.IMWRITE_JPEG_QUALITY, 80, cv2.IMWRITE_JPEG_PROGRESSIVE, 1])
         room["texture"] = f"{seg}.jpg"
@@ -206,9 +231,16 @@ if __name__ == "__main__":
         session, segs = arg.split(":"); segs = segs.split(",")
         times = {s["name"]: s for s in json.load(open(f"{replay_dir}/{session}.json"))["segments"]}
         rooms, entries = [], []
-        for seg in segs:
-            room = do_seg(segs_dir, frames_dir, out_dir, seg); rooms.append(room)
-            entries.append({"seg": seg, "t0": times[seg]["start"], "t1": times[seg]["end"], "file": f"{seg}.json"})
+        for spec in segs:   # "<seg>" or "<framing>@<seg>@<t0>-<t1>" (a camera framing within a segment, seconds from its start)
+            if "@" in spec:
+                seg, base, rng = spec.split("@"); a, b = map(float, rng.split("-"))
+                tseg = next(n for n in times if seg.startswith(n)); st = times[tseg]["start"]   # framing "floor6a" lies in segment "floor6"
+                t0, t1 = st + a, min(st + b, times[tseg]["end"])
+                room = do_seg(segs_dir, frames_dir, out_dir, seg, None if seg == base else base)
+            else:
+                seg = spec; t0, t1 = times[seg]["start"], times[seg]["end"]
+                room = do_seg(segs_dir, frames_dir, out_dir, seg)
+            rooms.append(room); entries.append({"seg": seg, "t0": round(t0, 2), "t1": round(t1, 2), "file": f"{seg}.json"})
         longest = max(entries, key=lambda e: e["t1"] - e["t0"])["seg"]
         sh = [r["shell"] for r in rooms]
         bounds = {"x0": min(b["x0"] for b in sh), "x1": max(b["x1"] for b in sh), "y0": min(b["y0"] for b in sh) - 0.2, "y1": max(b["y1"] for b in sh)}

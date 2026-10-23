@@ -53,6 +53,9 @@ class Camera:
     # wall mirrors, image polygons (see mirrors.py: found from reflection pairs). Detections with their feet
     # inside are reflections and are ignored, like `ignore` areas.
     mirrors: list = field(default_factory=list)
+    # motion in mirror glass counts for zones only inside real people's boxes (mirrors.py); turn off where the
+    # polygons don't stay put (a camera re-aimed part-way through a recording)
+    mirror_motion: bool = True
 
     @property
     def ignore_areas(self) -> list:
@@ -111,6 +114,7 @@ class GymConfig:
                 zones=[Zone(z["machine"], [list(map(int, p)) for p in z["polygon"]], z.get("plan")) for z in c.get("zones", [])],
                 calib=c.get("calib"), people=bool(c.get("people", True)), exercise_names=bool(c.get("exercise_names", True)), ignore=[[list(map(float, p)) for p in poly] for poly in c.get("ignore", [])],
                 mirrors=[[list(map(float, p)) for p in poly] for poly in c.get("mirrors", [])],
+                mirror_motion=bool(c.get("mirror_motion", True)),
             )
             for c in d.get("cameras", [])
         ]
