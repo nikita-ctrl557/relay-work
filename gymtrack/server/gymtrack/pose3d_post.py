@@ -105,7 +105,7 @@ def smooth1(y, lam, w=None):
 # floor, skeleton, IK
 # ---------------------------------------------------------------------------------------------------------
 
-def floor_shift(X, near=0.15, far=0.35, lam=8.0):
+def floor_shift(X, near=0.25, far=0.45, lam=8.0):
     """Shift each frame vertically so the lower ankle sits at ANKLE_Z when it is within `near` of it (fading
     out by `far`): removes hovering and sinking without pulling people off benches / machines down."""
     m = np.minimum(X[:, LAN, 2], X[:, RAN, 2]) - ANKLE_Z
@@ -284,7 +284,7 @@ def refine_track(t, X, U, groups, hand=1.0, hz=HZ, lock_feet=True):
     t = np.asarray(t, float)
     g, Xs = resample_smooth(t, X, U, hz)
     Xs = floor_shift(Xs)
-    Xr = rebuild(Xs, groups, hand)
+    Xr = floor_shift(rebuild(Xs, groups, hand))      # again: fixed bone lengths move the ankles
     if lock_feet:
         Xr, st = foot_lock(Xr, groups, hand, hz)
     else:

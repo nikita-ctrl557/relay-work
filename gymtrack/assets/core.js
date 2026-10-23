@@ -881,10 +881,10 @@ class ReplaySource {
         const n = trs.reduce((s, tr) => s + tr.n, 0), t = new Float64Array(n), P = new Float32Array(n * 39), A = new Float32Array(n * 12), U = new Float32Array(n * 13), F = new Float32Array(n);
         let o = 0;
         for (const tr of trs) {
-          const p = dec(tr.P, 39, tr.n), a = dec(tr.A, 12, tr.n), fb = bytes(tr.F), fv = new DataView(fb.buffer);
+          const p = dec(tr.P, 39, tr.n), a = dec(tr.A, 12, tr.n), fb = bytes(tr.F), fv = new DataView(fb.buffer), pu = (tr.u || 1) / 100;
           for (let i = 0; i < tr.n; i++, o++) {
             t[o] = tr.t0 + i / tr.hz; F[o] = fv.getInt16(i * 2, true) / 100;
-            for (let j = 0; j < 39; j++) P[o * 39 + j] = p[i * 39 + j] / 100;
+            for (let j = 0; j < 39; j++) P[o * 39 + j] = p[i * 39 + j] * pu;
             for (let j = 0; j < 12; j++) A[o * 12 + j] = a[i * 12 + j];
             for (let j = 0; j < 13; j++) U[o * 13 + j] = tr.U?.[j] ?? NaN;
           }

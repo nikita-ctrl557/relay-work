@@ -78,7 +78,7 @@ THRESH = {
     "B_any_violation": ("<=", 2.0, "% frames", "any of B2/B3/B5/B6 in a frame"),
     # C temporal
     "C1_accel_median": ("<=", 1.0, "m/s^2", "median joint acceleration (0.3 s stencil, robust to the 1 cm export quantum)"),
-    "C1_hf_jitter_p95": ("<=", 1.5, "cm", "p95 high-frequency jitter |x_i - (x_i-1 + x_i+1)/2|"),
+    "C1_hf_jitter_p95": ("<=", 1.5, "cm", "p95 high-frequency jitter: distance of a joint from the midpoint of its neighbours in time"),
     "C1_still_jitter_p95": ("<=", 1.0, "cm", "p95 high-frequency jitter while the person stands still off-set"),
     "C1_spike_rate": ("<=", 0.5, "% frames", "frames with any joint acceleration > 40 m/s^2 (one-sample kinks >= 20 cm)"),
     "C2_foot_slide_data": ("<=", 5.0, "cm/s", "median stance ankle speed in the 3D data (Live overlay, profile)"),
@@ -129,7 +129,7 @@ def load_pose3d(path):
     by = {}
     for tr in d.get("tracks", []):
         n, hz = tr["n"], tr["hz"]
-        X = _dec(tr["P"], 39)[:n].reshape(n, 13, 3) / 100.0
+        X = _dec(tr["P"], 39)[:n].reshape(n, 13, 3) * float(tr.get("u", 1)) / 100.0   # 'u': P unit in cm (v2.1)
         F = np.frombuffer(base64.b64decode(tr["F"]), "<i2").astype(float)[:n] / 100.0 if tr.get("F") else None
         t = tr["t0"] + np.arange(n) / hz
         by.setdefault(tr["pid"], []).append((t, X, F, np.full(n, hz)))
@@ -448,6 +448,9 @@ def check_identity(S, ex):
     res["A5_flicker_events"] = flick
     res["C4_frozen"] = 100 * held_n / max(cov_y, 1)
     res["_person_min_on_screen"] = person_min
+    if not S.p3:   # nothing to judge (not a pass)
+        for k in ("A1_teleports_3d_all", "A1_teleports_3d_members", "A5_flicker_per_min", "C4_frozen"):
+            res[k] = None
     lows = sorted(((v[1] / max(v[0], 1), pid, v[0] / 10) for pid, v in worst_cov.items() if pid in S.members))
     res["A4_members_lowest"] = [{"pid": p, "coverage_%": round(100 * c, 1), "on_screen_s": round(s, 1)} for c, p, s in lows[:8]]
     return res
@@ -922,72 +925,106 @@ def sample_frames(S, F, out, rng, n_rand, n_busy):
             "sheets": paths, "frames": [{k: v for k, v in r.items()} for r in rows]}
 
 
-def appearance(S, F, out, ex, n_people=28, k=6):
-    """Torso colour along each long pid: big change between neighbouring samples -> suspected identity swap."""
+def appearance(S, F, out, ex, n_people=28, k=8):
+    """Clothing colour along each long pid (torso + legs HSV histograms on unoccluded samples). A pid whose
+    early and late samples look like two different people (best contiguous split: between-group distance minus
+    within-group distance > 0.15) is a suspected identity swap. The crop sheet is the evidence to look at."""
     cv2 = F.cv2
     pids = sorted(S.p2, key=lambda p: -len(S.p2[p][0]))[:n_people]
-    rows, flagged, dists = [], [], {}
+    # other people's boxes per pose time (occlusion filter)
+    boxes_at = {}
+    for pid0, (T2, UV, OK) in S.p2.items():
+        for i in range(len(T2)):
+            bx = box_of(UV[i], OK[i])
+            if bx is not None:
+                boxes_at.setdefault(round(float(T2[i]), 2), []).append((pid0, bx))
+    rows, flagged, scores = [], [], {}
     for pid in pids:
         T2, UV, OK = S.p2[pid]
         good = []
         for i in range(len(T2)):
-            if not OK[i][[LSH, RSH, LHIP, RHIP]].all():
+            if not OK[i][[LSH, RSH, LHIP, RHIP, LKN, RKN]].all():
                 continue
             bx = box_of(UV[i], OK[i])
             if bx is None or bx[3] - bx[1] < 50:
                 continue
-            good.append(i)
+            area = (bx[2] - bx[0]) * (bx[3] - bx[1])
+            occl = 0.0
+            for p2, b2 in boxes_at.get(round(float(T2[i]), 2), []):
+                if p2 != pid:
+                    ix = max(0, min(bx[2], b2[2]) - max(bx[0], b2[0])) * max(0, min(bx[3], b2[3]) - max(bx[1], b2[1]))
+                    occl = max(occl, ix / max(area, 1))
+            if occl < 0.15:
+                good.append(i)
         if len(good) < k:
             continue
         sel = [good[int(round(j))] for j in np.linspace(0, len(good) - 1, k)]
-        crops, hists = [], []
+        crops, hists, ts = [], [], []
         for i in sel:
             im = F.get(float(T2[i]))
             if im is None:
                 continue
+            hsv = cv2.cvtColor(im, cv2.COLOR_BGR2HSV)
             uv = UV[i]
-            q = uv[[LSH, RSH, LHIP, RHIP]]
-            x0, y0 = q.min(0)
-            x1, y1 = q.max(0)
-            pad = 0.15 * (x1 - x0)
-            x0, x1 = int(max(0, x0 + pad)), int(min(W, x1 - pad))
-            y0, y1 = int(max(0, y0 + 0.1 * (y1 - y0))), int(min(H, y1 - 0.1 * (y1 - y0)))
-            if x1 - x0 < 4 or y1 - y0 < 6:
+            hs = []
+            for top, bot in (((LSH, RSH), (LHIP, RHIP)), ((LHIP, RHIP), (LKN, RKN))):
+                q = uv[list(top) + list(bot)]
+                x0, x1 = q[:, 0].min(), q[:, 0].max()
+                y0, y1 = uv[list(top), 1].mean(), uv[list(bot), 1].mean()
+                if y1 < y0:
+                    y0, y1 = y1, y0
+                w_ = max(x1 - x0, 6)
+                cx = (x0 + x1) / 2
+                X0, X1 = int(max(0, cx - 0.35 * w_)), int(min(W, cx + 0.35 * w_))
+                Y0, Y1 = int(max(0, y0 + 0.12 * (y1 - y0))), int(min(H, y1 - 0.12 * (y1 - y0)))
+                if X1 - X0 < 3 or Y1 - Y0 < 4:
+                    hs = None
+                    break
+                h = cv2.calcHist([hsv[Y0:Y1, X0:X1]], [0, 1, 2], None, [8, 3, 4], [0, 180, 0, 256, 0, 256]).flatten()
+                hs.append(h / max(h.sum(), 1))
+            if hs is None:
                 continue
-            hsv = cv2.cvtColor(im[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-            h = cv2.calcHist([hsv], [0, 1, 2], None, [8, 4, 4], [0, 180, 0, 256, 0, 256])
-            hists.append(cv2.normalize(h, h).flatten())
+            hists.append(np.concatenate(hs) / 2)
+            ts.append(float(T2[i]))
             bx = box_of(uv, OK[i])
-            bw = bx[2] - bx[0]
-            bh = bx[3] - bx[1]
+            bw, bh = bx[2] - bx[0], bx[3] - bx[1]
             X0, Y0 = int(max(0, bx[0] - 0.15 * bw)), int(max(0, bx[1] - 0.12 * bh))
             X1, Y1 = int(min(W, bx[2] + 0.15 * bw)), int(min(H, bx[3] + 0.06 * bh))
             c = cv2.resize(im[Y0:Y1, X0:X1], (56, 112))
             cv2.putText(c, f"{T2[i]:.0f}", (1, 108), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
             crops.append(c)
-        if len(hists) < 3:
+        n = len(hists)
+        if n < 4:
             continue
-        d = [float(cv2.compareHist(hists[j], hists[j + 1], cv2.HISTCMP_BHATTACHARYYA)) for j in range(len(hists) - 1)]
-        dists[pid] = d
+        Hh = np.sqrt(np.array(hists))
+        D = np.sqrt(np.clip(1 - Hh @ Hh.T, 0, 1))          # Hellinger distance
+        best, bj = -1.0, 0
+        for j in range(2, n - 1):
+            A, B = np.arange(j), np.arange(j, n)
+            cross = D[np.ix_(A, B)].mean()
+            within = (D[np.ix_(A, A)].sum() / max(len(A) * (len(A) - 1), 1) + D[np.ix_(B, B)].sum() / max(len(B) * (len(B) - 1), 1)) / 2
+            if cross - within > best:
+                best, bj = float(cross - within), j
+        scores[pid] = round(best, 3)
         lab = np.zeros((112, 70, 3), np.uint8)
         cv2.putText(lab, f"#{pid}", (2, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-        cv2.putText(lab, f"{max(d):.2f}", (2, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255) if max(d) > 0.55 else (200, 200, 200), 1)
+        cv2.putText(lab, f"{best:.2f}", (2, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255) if best > 0.15 else (200, 200, 200), 1)
         while len(crops) < k:
             crops.append(np.zeros((112, 56, 3), np.uint8))
-        rows.append(np.hstack([lab] + crops))
-        if max(d) > 0.55:
-            j = int(np.argmax(d))
+        if best > 0.15:
+            cv2.line(crops[bj], (0, 0), (0, 111), (0, 0, 255), 3)
             flagged.append(pid)
-            ex.append({"kind": "A3 appearance switch?", "pid": pid, "t": float(T2[sel[j + 1]]), "sev": max(d),
-                       "desc": f"torso colour distance {max(d):.2f} between samples at {T2[sel[j]]:.0f}s and {T2[sel[j + 1]]:.0f}s"})
+            ex.append({"kind": "A3 appearance switch?", "pid": pid, "t": ts[bj], "sev": best,
+                       "desc": f"clothing colours before/after {ts[bj]:.0f}s look like different people (split score {best:.2f})"})
+        rows.append(np.hstack([lab] + crops))
     paths = []
     for k0 in range(0, len(rows), 14):
         sheet = np.vstack(rows[k0:k0 + 14])
         p = out / f"identity_{k0 // 14:02d}.jpg"
         cv2.imwrite(str(p), sheet, [cv2.IMWRITE_JPEG_QUALITY, 85])
         paths.append(str(p))
-    return {"A3_appearance_switch_pids": len(flagged), "A3_flagged": flagged, "A3_checked": len(dists),
-            "A3_dist": {str(p): [round(x, 2) for x in d] for p, d in dists.items()}, "identity_sheets": paths}
+    return {"A3_appearance_switch_pids": len(flagged), "A3_flagged": flagged, "A3_checked": len(scores),
+            "A3_scores": {str(p): v for p, v in scores.items()}, "identity_sheets": paths}
 
 
 def example_images(S, F, out, ex, n=12):
@@ -1040,15 +1077,21 @@ def example_images(S, F, out, ex, n=12):
 # ---------------------------------------------------------------------------------------------------------
 
 def rank_examples(ex):
-    """Worst first: identity and placement problems beat cosmetic ones; one example per (kind, pid)."""
-    w = {"A1": 100, "A2": 60, "A3": 50, "D4": 45, "D1": 40, "C3": 35, "B4": 30, "C2": 28, "D5": 27, "B ": 25, "C1": 20, "A5": 10}
-    seen, out = set(), []
-    for e in sorted(ex, key=lambda e: -(w.get(e["kind"][:2], 5) * 1000 + min(e["sev"], 999))):
+    """Worst first, interleaved across kinds (identity and placement before cosmetic), one per (kind, pid)."""
+    pri = ["A1", "A3", "D1", "C3", "B4", "B ", "D4", "A2", "C2", "C1", "D5", "A5"]
+    by = {}
+    seen = set()
+    for e in sorted(ex, key=lambda e: -e["sev"]):
         k = (e["kind"], e["pid"])
         if k in seen:
             continue
         seen.add(k)
-        out.append(e)
+        by.setdefault(e["kind"], []).append(e)
+    kinds = sorted(by, key=lambda k: (pri.index(k[:2]) if k[:2] in pri else 99, k))
+    out, i = [], 0
+    while any(i < len(by[k]) for k in kinds):
+        out += [by[k][i] for k in kinds if i < len(by[k])]
+        i += 1
     return out
 
 

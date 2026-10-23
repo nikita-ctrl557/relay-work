@@ -15,9 +15,9 @@ B is fitted on every 2nd pose sample; C = everyone else (every 2nd sample, no mi
 at hz / 2, dropped first when over --max-mb).
 
 FORMAT v2 (core.js indexPose3d reads both v1 "poses3d" rows and v2 "tracks"):
-  tracks: [{pid, t0 (s), hz, n, P, A, F, U}]
-    P: base64 of int16[39] (frame 0, cm: x, y floor plan, z height; pose3d_meta.joints order) followed by
-       int8[39] per later frame = closed-loop deltas in cm (so quantisation never drifts)
+  tracks: [{pid, t0 (s), hz, n, u, P, A, F, U}]
+    P: base64 of int16[39] (frame 0, in units of u cm (default 1): x, y floor plan, z height; pose3d_meta.joints
+       order) followed by int8[39] per later frame = closed-loop deltas (so quantisation never drifts)
     A: base64, same scheme for the 12 joint angles (pose3d_meta.angles, degrees; last one cm)
     F: base64 of int16 per frame = body facing (yaw) in 0.01 rad, plan frame: forward = (cos, sin)
     U: 13 ints = median 1-sigma joint uncertainty of the track, cm
@@ -224,11 +224,14 @@ def delta_decode(s, k):
     return np.vstack([q0, q0 + np.cumsum(ds, 0)])
 
 
+P_UNIT_CM = 0.5      # joint positions in 5 mm steps (int8 deltas still allow 6 m/s)
+
+
 def encode_track(pid, t, X, A, fwd, U, hz):
     yaw = np.unwrap(np.arctan2(fwd[:, 1], fwd[:, 0]))
     yaw = (yaw + np.pi) % (2 * np.pi) - np.pi
-    return {"pid": int(pid), "t0": round(float(t[0]), 2), "hz": hz, "n": int(len(t)),
-            "P": delta_encode(X.reshape(len(X), -1) * 100), "A": delta_encode(np.nan_to_num(A)),
+    return {"pid": int(pid), "t0": round(float(t[0]), 2), "hz": hz, "n": int(len(t)), "u": P_UNIT_CM,
+            "P": delta_encode(X.reshape(len(X), -1) * 100 / P_UNIT_CM), "A": delta_encode(np.nan_to_num(A)),
             "F": _b64(np.round(yaw * 100).astype("<i2")),
             "U": [int(round(v)) for v in np.nanmedian(U, 0) * 100]}
 
