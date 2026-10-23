@@ -122,8 +122,12 @@ def twin_geometry(real_box, refl_box) -> bool:
     rh, qh = real_box[3], refl_box[3]
     if rh <= 0 or not SIZE_RATIO[0] <= qh / rh <= SIZE_RATIO[1]:
         return False
-    if feet(refl_box)[1] >= feet(real_box)[1] - 2:
-        return False
+    if feet(refl_box)[1] >= feet(real_box)[1] - 2 or refl_box[1] >= real_box[1] - 2:
+        return False  # behind: feet and head both higher in the image (heads are below a wall camera)
+    ix = max(0.0, min(real_box[0] + real_box[2], refl_box[0] + refl_box[2]) - max(real_box[0], refl_box[0]))
+    iy = max(0.0, min(real_box[1] + real_box[3], refl_box[1] + refl_box[3]) - max(real_box[1], refl_box[1]))
+    if ix * iy > 0.5 * refl_box[2] * refl_box[3]:
+        return False  # mostly inside the owner's box: a second detection of the same body, not a copy
     return abs(feet(refl_box)[0] - feet(real_box)[0]) <= 1.2 * rh + 10
 
 
@@ -274,6 +278,7 @@ def estimate_mirrors(pairs: list[Pair], W: float = 640, H: float = 360, min_pair
             a, b = float(np.max(cy)), 0.0
         a += 0.06 * hmed                     # a little below the lowest reflected feet
         owners = [refl[i][1] for i in g if refl[i][1] is not None]
+        lim = None
         if owners:  # never below a real owner's feet (with a margin): those feet are on the real floor
             ofx = np.array([o[0] + o[2] / 2 for o in owners])
             ofy = np.array([o[1] + o[3] for o in owners])
@@ -286,56 +291,76 @@ def estimate_mirrors(pairs: list[Pair], W: float = 640, H: float = 360, min_pair
         if min(y0, y1) <= top + 5:
             continue
         poly = [[round(x0, 1), round(top, 1)], [round(x1, 1), round(top, 1)], [round(x1, 1), round(min(H, y1), 1)], [round(x0, 1), round(min(H, y0), 1)]]
-        out.append({"polygon": poly, "pairs": n_pairs, "people": len({refl[i][2][1] for i in g if refl[i][2]}), "base": [round(a, 2), round(b, 4)]})
+        out.append({"polygon": poly, "pairs": n_pairs, "people": len({refl[i][2][1] for i in g if refl[i][2]}), "base": [round(a, 2), round(b, 4)],
+                    "limit": None if lim is None else round(lim, 2)})
     return out
 
 
-def refine_on_frame(m: dict, frame: np.ndarray, search_px: int = 10, side_px: int = 24) -> dict:
-    """Snap a mirror polygon to the scene: its bottom edge to the strongest near-horizontal edge just around
-    the estimate (the glass's lower frame / skirting board), its sides to strong vertical edges (the glass's
-    frame or a pillar). Only small moves; the estimate stays if nothing stands out.
+def refine_on_frame(m: dict, frame: np.ndarray, down_px: int = 30, up_px: int = 6, max_grow_px: float = 260.0,
+                    owner_limit: float | None = None) -> dict:
+    """Snap a mirror polygon to the scene (static cues on a still of the empty scene).
 
-    frame: a still of the scene at the analysis size (a median of a few frames removes people)."""
+    - bottom edge: the glass ends at the first strong near-horizontal edge at or below the lowest reflected
+      feet (the glass's lower frame / top of the skirting board); searched a little up and further down.
+    - sides: a wall of mirrors is wider than where the reflections happened to be seen. The glass's bottom
+      edge is a long straight edge, so the polygon is grown sideways for as long as that edge continues
+      (gaps up to 25 px, at most max_grow_px each way), then ends.
+    Only moves the estimate where the edge clearly stands out.
+
+    frame: still of the scene at the analysis size (a median of frames spread over the video removes people).
+    owner_limit: the bottom edge never goes below this (min over owners of feet_y - slope * feet_x)."""
     import cv2
     g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
     g = cv2.GaussianBlur(g.astype(np.float32), (3, 3), 0)
     gy = np.abs(cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3))
-    gx = np.abs(cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3))
     H, W = g.shape
-    (x0, top), (x1, _), (_, y1), (_, y0) = m["polygon"]
+    (x0, top), (x1, _), _, _ = m["polygon"]
     a, b = m["base"]
     xs = np.arange(int(max(0, x0)), int(min(W - 1, x1)))
     if len(xs) < 20:
         return m
 
-    def row_strength(da):
-        ys = np.round(a + da + b * xs).astype(int)
-        ok = (ys >= 0) & (ys < H)
-        return float(np.mean(gy[ys[ok], xs[ok]])) if ok.any() else 0.0
-    base_s = row_strength(0)
-    cand = [(row_strength(d), d) for d in range(-search_px, search_px + 1)]
-    s, d = max(cand)
-    # the glass's lower edge is the last strong edge above the floor: prefer the strongest, but only if it
-    # clearly stands out (otherwise people's feet and floor marks decide)
-    if s > 1.3 * max(base_s, 1e-3) and s > 1.5 * float(np.median([c[0] for c in cand])):
+    def row(da, xx=xs):
+        ys = np.round(a + da + b * xx).astype(int)
+        ok = (ys >= 1) & (ys < H - 1)
+        if not ok.any():
+            return np.zeros(len(xx))
+        v = np.zeros(len(xx))
+        v[ok] = np.max(np.stack([gy[ys[ok] + k, xx[ok]] for k in (-1, 0, 1)]), 0)
+        return v
+    offs = list(range(-up_px, down_px + 1))
+    prof = np.array([float(np.mean(row(d))) for d in offs])
+    med = float(np.median(prof))
+    strong = [i for i in range(1, len(offs) - 1) if prof[i] >= prof[i - 1] and prof[i] >= prof[i + 1]
+              and prof[i] >= max(2.0 * med, 0.6 * float(prof.max()))]
+    if strong:
+        d = offs[strong[0]]
+        if owner_limit is not None:
+            d = min(d, owner_limit - a)
         a = a + d
-    top_i, bot_i = int(max(0, top)), int(min(H - 1, min(a + b * x0, a + b * x1)))
+    # grow sideways along the bottom edge
+    allx = np.arange(0, W)
+    v = row(0, allx)
+    k = np.convolve(v, np.ones(15) / 15, "same")
+    ref = float(np.median(k[int(max(0, x0)):int(min(W, x1))])) if x1 - x0 > 5 else 0.0
+    on = k >= 0.4 * ref if ref > 0 else np.zeros(W, bool)
 
-    def col_strength(x):
-        if not 0 <= x < W or bot_i - top_i < 10:
-            return 0.0
-        return float(np.mean(gx[top_i:bot_i, x]))
-
-    def snap(x, sign):  # sides: move outward or inward a little to a clear vertical edge
-        xs_ = range(int(x) - side_px, int(x) + side_px + 1)
-        vals = [(col_strength(v), v) for v in xs_]
-        s, v = max(vals)
-        med = float(np.median([c[0] for c in vals]))
-        return float(v) if s > 1.8 * max(med, 1e-3) else float(x)
-    nx0, nx1 = snap(x0, -1), snap(x1, 1)
-    if nx1 - nx0 < 20:
-        nx0, nx1 = x0, x1
-    poly = [[round(nx0, 1), round(top, 1)], [round(nx1, 1), round(top, 1)], [round(nx1, 1), round(min(H, a + b * nx1), 1)], [round(nx0, 1), round(min(H, a + b * nx0), 1)]]
+    def grow(x, step):
+        x, gap, moved = int(round(x)), 0, 0
+        best = x
+        while 0 <= x + step < W and moved < max_grow_px:
+            x += step
+            moved += 1
+            gap = 0 if on[x] else gap + 1
+            if gap > 25:
+                break
+            if on[x]:
+                best = x
+        return float(best)
+    nx0 = min(x0, grow(x0, -1))
+    nx1 = max(x1, grow(x1, 1))
+    poly = [[round(nx0, 1), round(top, 1)], [round(nx1, 1), round(top, 1)],
+            [round(nx1, 1), round(min(H, a + b * nx1), 1)], [round(nx0, 1), round(min(H, a + b * nx0), 1)]]
     return {**m, "polygon": poly, "base": [round(a, 2), b], "refined": True}
 
 
@@ -359,8 +384,84 @@ def mirrors_from_result(data: dict, W: float = 640, H: float = 360, frame: np.nd
     pairs = find_pairs(data.get("timeline", []), data.get("poses", []), W, H)
     ms = estimate_mirrors(pairs, W, H, **kw)
     if frame is not None:
-        ms = [refine_on_frame(m, frame) for m in ms]
+        ms = [refine_on_frame(m, frame, owner_limit=m.get("limit")) for m in ms]
     return ms, pairs
+
+
+def register(src: np.ndarray, dst: np.ndarray) -> np.ndarray | None:
+    """Homography mapping pixels of still `src` onto still `dst` (the same camera re-aimed or zoomed a little:
+    one view of the gym from several recordings), from ORB features + RANSAC. None if they don't match."""
+    import cv2
+    g1 = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY) if src.ndim == 3 else src
+    g2 = cv2.cvtColor(dst, cv2.COLOR_BGR2GRAY) if dst.ndim == 3 else dst
+    orb = cv2.ORB_create(4000)
+    k1, d1 = orb.detectAndCompute(g1, None)
+    k2, d2 = orb.detectAndCompute(g2, None)
+    if d1 is None or d2 is None or len(k1) < 20 or len(k2) < 20:
+        return None
+    m = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(d1, d2, k=2)
+    good = [a for a, b in (x for x in m if len(x) == 2) if a.distance < 0.75 * b.distance]
+    if len(good) < 25:
+        return None
+    p1 = np.float32([k1[a.queryIdx].pt for a in good])
+    p2 = np.float32([k2[a.trainIdx].pt for a in good])
+    Hm, inl = cv2.findHomography(p1, p2, cv2.RANSAC, 3.0)
+    if Hm is None or inl.sum() < 20:
+        return None
+    return Hm
+
+
+def warp_points(Hm: np.ndarray, pts) -> list:
+    p = np.asarray(pts, np.float64).reshape(-1, 2)
+    q = (Hm @ np.c_[p, np.ones(len(p))].T)
+    return (q[:2] / q[2]).T.tolist()
+
+
+def warp_pair(Hm: np.ndarray, p: Pair) -> Pair:
+    def wb(b):
+        (x0, y0), (x1, y1) = warp_points(Hm, [[b[0], b[1]], [b[0] + b[2], b[1] + b[3]]])
+        return (x0, y0, x1 - x0, y1 - y0)
+    return Pair(p.real, p.refl, p.t0, p.t1, p.corr, p.energy, p.variant, wb(p.real_box), wb(p.refl_box))
+
+
+def estimate_camera(results: dict, stills: dict, W: float = 640, H: float = 360, min_pairs: int = 3) -> dict:
+    """Mirrors for several recordings from one camera (re-aimed a little between them): reflection pairs of
+    all recordings are pooled in the frame of the one with most pairs (stills registered with `register`),
+    the regions estimated there, mapped back into each recording and snapped to its own still.
+
+    results: {name: replay-format data}, stills: {name: still frame}. Returns {name: {"mirrors": [...],
+    "pairs": n (own), "pooled": n}}."""
+    pairs = {n: find_pairs(d.get("timeline", []), d.get("poses", []), W, H) for n, d in results.items()}
+    ref = max(pairs, key=lambda n: (len({(p.real, p.refl) for p in pairs[n]}), len(pairs[n])))
+    to_ref = {n: (np.eye(3) if n == ref else register(stills[n], stills[ref])) for n in results}
+    pooled = []
+    for n, ps in pairs.items():
+        if to_ref[n] is None:
+            continue
+        # pair keys made unique per recording (track ids restart in each)
+        for p in ps:
+            w = warp_pair(to_ref[n], p)
+            pooled.append(Pair((n, p.real), (n, p.refl), p.t0, p.t1, p.corr, p.energy, p.variant, w.real_box, w.refl_box))
+    base = estimate_mirrors(pooled, W, H, min_pairs=min_pairs)
+    out = {}
+    for n in results:
+        Hm = to_ref[n]
+        ms = []
+        if Hm is not None:
+            back = np.linalg.inv(Hm)
+            for m in base:
+                poly = warp_points(back, m["polygon"])
+                (bx0, by0), (bx1, by1) = poly[3], poly[2]
+                b = (by1 - by0) / max(1e-6, bx1 - bx0)
+                lim = None
+                if m.get("limit") is not None:  # the owners' floor limit, carried over as a shift of the bottom edge
+                    lim = by0 - b * bx0 + (m["limit"] - m["base"][0])
+                mm = {**m, "polygon": [[round(x, 1), round(y, 1)] for x, y in poly], "base": [round(by0 - b * bx0, 2), round(b, 4)],
+                      "limit": None if lim is None else round(lim, 2)}
+                ms.append(refine_on_frame(mm, stills[n], owner_limit=mm["limit"]) if stills.get(n) is not None else mm)
+        out[n] = {"mirrors": ms, "pairs": len({(p.real, p.refl) for p in pairs[n]}), "pooled": len({(p.real, p.refl) for p in pooled}),
+                  "registered": Hm is not None, "ref": ref}
+    return out
 
 
 # ---------------------------------------------------------------- online, during analysis

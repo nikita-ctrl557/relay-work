@@ -48,7 +48,7 @@ const hm = ts => new Date(ts * 1000).toLocaleTimeString(undefined, {hour: "2-dig
 const ago = s => s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
 const STATUS = {lifting: ["lifting", "Lifting"], resting: ["resting", "Resting"], "on floor": ["onfloor", "On floor"], away: ["away", "Not in"], idle: ["free", "Free"]};
 const pill = s => { const [c, l] = STATUS[s] || STATUS.idle; return `<span class="pill ${c}"><i></i>${l}</span>`; };
-const machineName = id => cfg.machines.find(m => m.id === id)?.name || id;
+const machineName = id => (cfg.machines.find(m => m.id === id) || cfg.allMachines?.find(m => m.id === id))?.name || id;
 const memberOf = id => cfg.members.find(m => m.id === id);
 const now = () => live?.t || Date.now() / 1000;
 const store = {get(k, d) { try { return JSON.parse(localStorage.getItem("gymtrack:" + k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem("gymtrack:" + k, JSON.stringify(v)); } catch {} }};

@@ -41,6 +41,8 @@ class Slot:
     y: float
     w: float              # patch size, pixels
     h: float
+    sentinel_dx: float = 0.0   # offset to a patch of the rack's own body beside the slot (0 = none): if THAT
+                               # changes too, something is in front of the rack (occlusion), not an empty slot
 
     @property
     def box(self):
@@ -58,7 +60,7 @@ class RackModel:
     def from_config(cls, cfg: dict) -> "RackModel":
         """cfg = {"camera", "frame_size": [W, H], "roi": [x0,y0,x1,y1], "racks": [{"id", "columns": [
              {"id", "first": [x, y], "last": [x, y], "n": 10, "size": [w0, h0] | [[w0,h0],[w1,h1]],
-              "weights": [..n kg..]}]}]}
+              "weights": [..n kg..], "sentinel_dx": 25}]}]}
         Slot centres are spaced evenly from `first` to `last`; size interpolates (heads grow with weight)."""
         slots = []
         for rack in cfg["racks"]:
@@ -74,7 +76,8 @@ class RackModel:
                     a = i / (n - 1) if n > 1 else 0.0
                     slots.append(Slot(f"{rack['id']}/{col['id']}/{i}", rack["id"], weights[i],
                                       x0 + a * (x1 - x0), y0 + a * (y1 - y0),
-                                      s0[0] + a * (s1[0] - s0[0]), s0[1] + a * (s1[1] - s0[1])))
+                                      s0[0] + a * (s1[0] - s0[0]), s0[1] + a * (s1[1] - s0[1]),
+                                      float(col.get("sentinel_dx", 0.0))))
         return cls(cfg["camera"], tuple(cfg["frame_size"]), slots, tuple(cfg["roi"]))
 
     def slot(self, sid: str) -> Slot:
@@ -122,9 +125,10 @@ class SlotState:
 
 @dataclass
 class Flip:
-    t: float
+    t: float              # first unoccluded frame showing the new state
     slot: str
     full: bool            # True = refilled (return), False = emptied (pickup)
+    t_hidden: float | None = None   # start of the occlusion right before it (the hand was there then)
 
 
 def _pose_at(poses: list[dict], t: float, window: float):
@@ -143,7 +147,7 @@ def nearest_hand(poses: list[dict], t: float, x: float, y: float, frame_size, wi
                  max_dist: float | None = None):
     """(pid, distance_px, t_seen) of the wrist closest to image point (x, y) within +-window seconds of t.
     Poses are offline.pose_vector entries {"t", "k": [[pid, [26 ints]]]}. Wrists missing -> elbows as fallback.
-    Distances are weighted by time offset (1 px per 0.1 s) so the hand present AT the flip wins."""
+    Distances get +2 px per second of time offset, a mild tie-break."""
     W, H = frame_size
     best = (None, math.inf, None, None)
     for fr in _pose_at(poses, t, window):
@@ -154,7 +158,7 @@ def nearest_hand(poses: list[dict], t: float, x: float, y: float, frame_size, wi
                     break
             for px, py in pts:
                 d = math.hypot(px - x, py - y)
-                score = d + 10 * abs(fr["t"] - t)
+                score = d + 2 * abs(fr["t"] - t)
                 if score < best[1]:
                     best = (pid, score, fr["t"], d)
     if best[0] is None or (max_dist is not None and best[3] > max_dist):
@@ -176,14 +180,19 @@ def person_tracks(timeline: list[dict]) -> dict[int, list[tuple[float, float | N
 
 def attribute(flips: list[Flip], rack: RackModel, poses: list[dict], timeline: list[dict], *,
               t_end: float, hand_window: float = 3.0, max_hand_px: float | None = 160.0,
-              grace_s: float = 60.0) -> dict:
-    """Turn slot flips into pickups / returns / unreturned events. See module doc for the rules."""
+              grace_s: float = 60.0, slot_xy=None) -> dict:
+    """Turn slot flips into pickups / returns / unreturned events. See module doc for the rules.
+    slot_xy(slot, t) -> (x, y) full-frame pixels of the slot at time t (camera drift); default: slot.x, slot.y.
+    The hand is searched from the start of the occlusion that hid the slot just before the flip to 1 s after."""
     tracks = person_tracks(timeline)
     pickups, returns, unreturned = [], [], []
     out_now: dict[str, dict] = {}            # slot -> open pickup
     for f in sorted(flips, key=lambda f: f.t):
         s = rack.slot(f.slot)
-        pid, dist, _ = nearest_hand(poses, f.t, s.x, s.y, rack.frame_size, hand_window, max_hand_px)
+        lo = min(f.t - hand_window, f.t_hidden - 1.0) if f.t_hidden is not None else f.t - hand_window
+        hi = f.t + 1.0
+        x, y = slot_xy(s, f.t) if slot_xy else (s.x, s.y)
+        pid, dist, _ = nearest_hand(poses, (lo + hi) / 2, x, y, rack.frame_size, (hi - lo) / 2, max_hand_px)
         ev = {"t": round(f.t, 2), "slot": s.id, "rack": s.rack, "weight": s.weight, "pid": pid, "hand_px": dist}
         if not f.full:
             pickups.append(ev)
@@ -250,3 +259,43 @@ def summary(events_by_cam: dict[str, dict], t_end_by_cam: dict[str, float]) -> d
             "offenders": offenders(events_by_cam, t_end_by_cam),
             "good_citizens": [{"camera": c, "pid": p, "reracked_for_others": n} for (c, p), n in
                               sorted(rerackers.items(), key=lambda kv: -kv[1])]}
+
+
+# --- scores -> flips --------------------------------------------------------------------------------------------
+
+def column_of(slot_id: str) -> str:
+    return slot_id.rsplit("/", 1)[0]
+
+
+def flips_from_scores(t: np.ndarray, score: np.ndarray, slot_ids, *, on: float = 0.25, off: float = 0.15,
+                      hold_s: float = 6.0, column_frac: float = 0.5) -> list[Flip]:
+    """score[T, S]: per-slot change vs the (full) reference, nan = occluded. A frame where >= column_frac of a
+    column's visible slots look changed is treated as occluded for that column (a person in front changes many
+    slots at once, a lifted dumbbell one or two). Then per-slot hysteresis (SlotState)."""
+    score = score.copy()
+    cols: dict[str, list[int]] = {}
+    for j, sid in enumerate(slot_ids):
+        cols.setdefault(column_of(str(sid)), []).append(j)
+    for js in cols.values():
+        sub = score[:, js]
+        vis = ~np.isnan(sub)
+        hot = (np.nan_to_num(sub, nan=0.0) > on).sum(1)
+        busy = (hot >= np.maximum(3, column_frac * vis.sum(1)))
+        score[np.ix_(busy, js)] = np.nan
+    flips = []
+    for j, sid in enumerate(slot_ids):
+        st = SlotState(on=on, off=off, hold_s=hold_s)
+        hidden_since = None
+        for k in range(len(t)):
+            v = score[k, j]
+            if np.isnan(v):
+                if hidden_since is None:
+                    hidden_since = t[k]
+                st.update(t[k], None)
+                continue
+            got = st.update(t[k], float(v))
+            if got is not None:
+                flips.append(Flip(float(st.flip_t), str(sid), got, hidden_since))
+            if st._cand is None:
+                hidden_since = None
+    return sorted(flips, key=lambda f: f.t)

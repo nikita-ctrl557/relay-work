@@ -926,3 +926,9 @@ td.who small { color: var(--muted); font-size: 12px; }
   .ts-track { height: 40px; }
   .ts-key { display: none; }
 }
+
+/* recorded-session picker (demo replay) */
+.sess { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); min-width: 0; }
+.sess svg { width: 18px; height: 18px; flex: none; }
+.sess select { max-width: 320px; font-weight: 600; }
+@media (max-width: 860px) { .sess { flex: 1 1 100%; } .sess select { max-width: none; width: 100%; } }

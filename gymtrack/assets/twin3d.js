@@ -323,7 +323,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       if (q.x == null || q.y == null || q.x < x0 - 1 || q.x > x1 + 1 || q.y < z0 - 1 || q.y > z1 + 1) continue;
       const key = (q.camera || "") + ":" + q.pid, p = person(key); seen.add(key);
       p.q = q; p.want = 1; p.target = new THREE.Vector3(q.x, 0, q.y); if (!p.pos) p.pos = p.target.clone();
-      const lift = q.activity && q.activity !== "standing";
+      const lift = q.inSet || q.activity && q.activity !== "standing";
       p.mat.color.setHex(lift ? COL.lift : q.planted && q.zone ? COL.station : COL.move);
       p.jmat.color.copy(p.mat.color).lerp(WHITE, 0.55);
       p.full = labelOf(q); p.short = (q.label.match(/#\d+/) || [q.label])[0] + (lift ? " · " + (typeof actName === "function" && q.activity ? actName(q.activity) : "lifting") : ""); p.tag.classList.toggle("link", !!q.member);

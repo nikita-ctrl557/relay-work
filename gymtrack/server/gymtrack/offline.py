@@ -145,11 +145,14 @@ class _DeferredSets:
 
 
 def _finish(cfg: GymConfig, cam: Camera, engine: Engine, sink, start_ts: float, end: float, tracker,
-            timeline: list, poses: list, postprocess: bool) -> dict:
+            timeline: list, poses: list, postprocess: bool, guard=None) -> dict:
     """End of a recording: close open sets, post-process, close sessions, write sets, build the report."""
     for mt in engine.machines.values():  # recording ended mid-set
         if mt.state == "lifting":
             mt._finish_set(end)
+    mirror_info = None
+    if guard is not None:  # reflections found part-way through: out of what was recorded before, sets to their owner
+        mirror_info = guard.clean(timeline, poses, engine)
     replay_sets = None
     if postprocess:
         from .postprocess import apply_to_records, finish_sets
@@ -169,7 +172,12 @@ def _finish(cfg: GymConfig, cam: Camera, engine: Engine, sink, start_ts: float, 
     engine.tick(end + cfg.thresholds.checkout_s + 1)  # close everyone's session (totals without vetoed sets)
     if sink is not None:
         sink.flush(kept)
-    rep = report(cfg, engine, start_ts, end, tracker)
+    rep = report(cfg, engine, start_ts, end, tracker, hide=set(guard.owner) if guard is not None else None)
+    if guard is not None:
+        from .mirrors import estimate_mirrors
+        H = int(round(cam.width * 9 / 16))
+        rep["mirrors"] = {**mirror_info, "pairs": len(guard.evidence),
+                          "found": estimate_mirrors(guard.evidence, cam.width, H), "configured": len(cam.mirrors)}
     rep["replay_sets"] = replay_sets if replay_sets is not None else [r.as_replay(start_ts) for r in kept]
     rep["postprocess"] = info
     rep["vetoed"] = [{**v, "start": round(v["start"] - start_ts, 2), "end": round(v["end"] - start_ts, 2)}
@@ -199,7 +207,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
             sample_fps: float = 10.0, on_progress=None, should_stop=None,
             people: bool | None = None, video_out: str | None = None, timeline: list | None = None,
             poses: list | None = None, detect_every_s: float = 0.34, pose_boost_s: float | None = 0.15,
-            trace: list | None = None, postprocess: bool = True) -> dict:
+            trace: list | None = None, postprocess: bool = True, mirror_guard: bool = True) -> dict:
     """Run one recording through the pipeline. Returns a report dict (see `report`).
 
     people: track individual people (needs the detector model; default: on if it's installed).
@@ -211,6 +219,9 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
       thumbnails, people with boxes/poses), so `replay_trace` can re-run sets, crediting and reps without video.
     postprocess: run the offline clean-up after the last frame (tracklet stitching, motion-coherence credit
       conflicts, fake-set veto, exercise naming among the station's candidates); see postprocess.py.
+    mirror_guard: keep reflections out (mirrors.py): the camera's mirror polygons drop detections (like ignore
+      areas, always), and with this on, people moving in lockstep with someone nearer are dropped as their
+      reflection, even outside the polygons. The report's "mirrors" has what was found.
     """
     from .tracking import DEFAULT_MODEL, PeopleTracker, PersonDetector, draw_people, heatmap_image
     timeline = [] if timeline is None else timeline   # post-processing needs both, whether the caller wants them or not
@@ -235,8 +246,12 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         from .pose import make_pose_estimator
         plan = (cfg.plan["width"], cfg.plan["depth"]) if cfg.plan else None
         tracker = PeopleTracker(cam.zones, PersonDetector(), detect_every_s=detect_every_s, pose=make_pose_estimator(),
-                                homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names, ignore=cam.ignore,
+                                homography=cam.homography(), plan_size=plan, exercise_names=cam.exercise_names, ignore=cam.ignore_areas,
                                 calib_image=(cam.calib or {}).get("image"))
+    guard = None
+    if tracker is not None and mirror_guard:
+        from .mirrors import MirrorGuard
+        guard = MirrorGuard(mirrors=[list(p) for p in cam.mirrors])
     names = {m.id: m.name for m in cfg.members}
     tag_names = {m.tag: m.name for m in cfg.members}
     writer, background = None, None
@@ -261,6 +276,11 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         tracks = []
         if tracker:
             tracks = tracker.update(frame, start_ts + t, reading.tags, cfg.member_by_tag, full=full)
+            n_refl = 0
+            if guard is not None:
+                guard.observe(tracks, start_ts + t)
+                kept = guard.filter(tracks)
+                n_refl, tracks = len(tracks) - len(kept), kept
             if pose_boost_s:
                 boost_poses(tracker, engine, cam.id, frame, full, start_ts + t, pose_boost_s)
             reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity, person_obs(tr, frame, start_ts + t)) for tr in tracks]
@@ -285,7 +305,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
                              "p": [[tr.id, tr.member, tr.zone, int(tr.planted), *[round(v, 3) for v in (tr.box[0] / W, tr.box[1] / H, tr.box[2] / W, tr.box[3] / H)],
                                     tr.activity, *[round(v, 2) for v in (tracker.to_plan(*tr.feet) or (None, None)) if v is not None]]
                                    for tr in tracks],
-                             "n": tracker.headcount() if tracker else len(tracks)})
+                             "n": max(0, tracker.headcount() - n_refl) if tracker else len(tracks)})
         if video_out:
             if writer is None:
                 writer = cv2.VideoWriter(video_out, cv2.VideoWriter_fourcc(*"mp4v"), sample_fps, (frame.shape[1], frame.shape[0]))
@@ -300,7 +320,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         writer.release()
     end = start_ts + t
     wall = time.time() - wall0
-    rep = _finish(cfg, cam, engine, sink, start_ts, end, tracker, timeline, poses, postprocess)
+    rep = _finish(cfg, cam, engine, sink, start_ts, end, tracker, timeline, poses, postprocess, guard)
     if tracker is not None and background is not None:
         ok, jpg = cv2.imencode(".jpg", heatmap_image(background, tracker.heat), [cv2.IMWRITE_JPEG_QUALITY, 80])
         rep["heatmap_jpg_b64"] = base64.b64encode(jpg.tobytes()).decode() if ok else None
@@ -332,7 +352,7 @@ def _annotated(frame, cam, reading, engine, tracks, names, tag_names, ts):
     return img
 
 
-def report(cfg: GymConfig, engine: Engine, start: float, end: float, tracker=None) -> dict:
+def report(cfg: GymConfig, engine: Engine, start: float, end: float, tracker=None, hide: set | None = None) -> dict:
     sets = sorted(engine.recent_sets_all, key=lambda s: s.start)
     names = {m.id: m.name for m in cfg.members}
 
@@ -380,20 +400,21 @@ def report(cfg: GymConfig, engine: Engine, start: float, end: float, tracker=Non
                     for r in sorted(members.values(), key=lambda r: -r["lifting_s"])],
         "sets": [{"member": s.member, "who": who(s)[0], "who_name": who(s)[1], "machine": s.machine, "exercise": s.exercise,
                   "start": round(s.start, 1), "end": round(s.end, 1), "reps": s.reps, "id": s.id} for s in sets],
-        "people": _people(tracker, names, sets, cfg) if tracker else None,
+        "people": _people(tracker, names, sets, cfg, hide) if tracker else None,
     }
 
 
-def _people(tracker, names, sets, cfg) -> dict:
-    """Everyone the tracker followed: time on camera and time in each zone."""
-    tracks = [tr for tr in tracker.all_tracks() if tr.last - tr.first >= 20]  # ignore passers-by
+def _people(tracker, names, sets, cfg, hide: set | None = None) -> dict:
+    """Everyone the tracker followed: time on camera and time in each zone (minus reflections, `hide`)."""
+    everyone = [tr for tr in tracker.all_tracks() if tr.id not in (hide or ())]
+    tracks = [tr for tr in everyone if tr.last - tr.first >= 20]  # ignore passers-by
     rows = []
     for tr in sorted(tracks, key=lambda tr: -(tr.last - tr.first)):
         rows.append({"id": tr.id, "name": tr.label(names), "member": tr.member, "first": tr.first, "last": tr.last,
                      "seen_s": round(tr.last - tr.first), "zones": {z: round(v) for z, v in sorted(tr.dwell.items(), key=lambda kv: -kv[1])},
                      "activities": {a: round(v) for a, v in sorted(tr.activities.items(), key=lambda kv: -kv[1]) if v >= 3},
                      "sets": sum(1 for s in sets if s.person == tr.id)})
-    out = {"tracked": len(tracker.all_tracks()), "shown": len(rows), "rows": rows[:60]}
+    out = {"tracked": len(everyone), "shown": len(rows), "rows": rows[:60]}
     if tracker.plan_size:
         out["plan_heat"] = np.round(tracker.plan_heat, 1).tolist()
     return out

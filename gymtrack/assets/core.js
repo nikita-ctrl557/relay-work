@@ -671,8 +671,23 @@ class ReplaySource {
       c.el = v;
     }
     this.pose3dReady = this.loadPose3d();
-    const kick = () => this.cams.forEach(c => (c.pv || c.el).play().catch(() => {}));
+    /* each camera here is a separate recording (a different visit, not a simultaneous feed): one session plays at a time */
+    this.cfg.allMachines = this.cfg.machines.slice(); this.cfg.allCameras = this.cfg.cameras.slice();
+    this.cams.forEach((c, i) => { c.session = c.session_name || `Session ${String.fromCharCode(65 + i)} · ${c.short || c.name}`; });
+    let pick = null; try { pick = localStorage.getItem("gymtrack:session"); } catch {}
+    this.selectSession(this.cams.some(c => c.id === pick) ? pick : this.cams[0]?.id);
+    const kick = () => this.act && !this.act.userPaused && (this.act.pv || this.act.el).play().catch(() => {});
     addEventListener("pointerdown", kick, {once: true});
+  }
+  sessions() { return this.cams.map(c => ({id: c.id, name: c.session, camera: c.name, duration: c.data.duration, sets: c.data.sets.length, active: c === this.act})); }
+  get session() { return this.act?.id || null; }
+  selectSession(id) {
+    const c = this.cams.find(x => x.id === id); if (!c) return;
+    this.act = c; try { localStorage.setItem("gymtrack:session", id); } catch {}
+    for (const o of this.cams) { const v = o.pv || o.el; if (o === c) { if (!o.userPaused) v.play?.().catch?.(() => {}); } else v.pause?.(); }
+    this.cfg.cameras.length = 0; this.cfg.cameras.push(...this.cfg.allCameras.filter(x => x.id === id));
+    this.cfg.machines.length = 0; this.cfg.machines.push(...this.cfg.allMachines.filter(m => c.machines.some(x => x.id === m.id)));
+    this.cfg.session = c.session;
   }
   set speed(v) { this._speed = v; this.cams?.forEach(c => (c.pv || c.el).playbackRate = v); }
   get speed() { return this._speed; }
@@ -681,7 +696,7 @@ class ReplaySource {
   /* replay clock per camera, for the timeline scrubber */
   timeOf(camId) { const c = this.cams.find(x => x.id === camId); return c ? this.ct(c) : 0; }
   isPaused(camId) { const c = this.cams.find(x => x.id === camId); return !!c && (c.pv ? !c.pv.wantPlay : c.el.paused); }
-  setPaused(camId, on) { const c = this.cams.find(x => x.id === camId); if (!c) return; const v = c.pv || c.el; if (on) v.pause(); else v.play().catch(() => {}); }
+  setPaused(camId, on) { const c = this.cams.find(x => x.id === camId); if (!c) return; const v = c.pv || c.el; c.userPaused = !!on; if (on) v.pause(); else v.play().catch(() => {}); }
   clockInfo(camId) {
     const c = this.cams.find(x => x.id === camId); if (!c) return null;
     return c._clock ||= {duration: c.data.duration || c.data.timeline[c.data.timeline.length - 1]?.t || 0, sets: c.data.sets.map(s => ({t0: s.t0, t1: s.t1, m: s.m, pid: s.pid, reps: s.reps, ex: s.ex || null})),
@@ -713,9 +728,9 @@ class ReplaySource {
   async live() {
     const machines = [], members = [], recent = [];
     for (const c of this.cams) {
-      const ct = this.ct(c), e = this.at(c, ct), names = {};
+      const on = c === this.act, ct = this.ct(c), e = this.at(c, ct), names = {};
       for (const m of this.cfg.members.filter(m => m.cam === c.id)) names[m.pid] = m.name;
-      for (const [id, lifting, reps, el] of e.m) {
+      for (const [id, lifting, reps, el] of on ? e.m : []) {
         const mach = c.machines.find(m => m.id === id) || {id, name: id, kind: ""};
         const cur = c.data.sets.find(s => s.m === id && s.t0 <= ct && ct <= s.t1 + 1);
         const who = e.p.find(p => p[2] === id && p[3]) || e.p.find(p => p[2] === id);
@@ -724,12 +739,12 @@ class ReplaySource {
           member_name: lifting ? (mem?.name || (pid != null ? `#${pid}` : null)) : mem?.name || null, guest: lifting && !mem, reps, set_elapsed: el, cameras: [c.id],
           activity: (who && who[8] && who[8] !== "standing") ? who[8] : null});
       }
-      for (const s of c.data.sets.filter(s => s.t1 <= ct)) {
+      for (const s of on ? c.data.sets.filter(s => s.t1 <= ct) : []) {
         const mem = this.cfg.members.find(m => m.cam === c.id && m.pid === s.pid);
         recent.push({member: mem?.id || null, who: mem ? null : (s.pid != null ? `${c.short} #${s.pid}` : null), exercise: s.ex || null, machine: s.m, start: this.abs(c, s.t0), end: this.abs(c, s.t1), reps: s.reps, duration: s.t1 - s.t0, cameras: [c.id]});
       }
       for (const m of this.cfg.members.filter(m => m.cam === c.id)) {
-        const now = this.personStats(c, m.pid, ct), st = this.personStats(c, m.pid, ct, true), row = {id: m.id, name: m.name, tag: m.pid, status: "away"};
+        const now = on ? this.personStats(c, m.pid, ct) : null, st = this.personStats(c, m.pid, ct, true), row = {id: m.id, name: m.name, tag: m.pid, status: "away", session: c.session};
         if (st) {
           const lifting = machines.some(x => x.state === "lifting" && x.member === m.id), vis = now?.visible;
           row.status = lifting ? "lifting" : vis && vis[2] && vis[3] ? "resting" : vis ? "on floor" : "away";
@@ -746,7 +761,8 @@ class ReplaySource {
     }
     recent.sort((a, b) => b.end - a.end);
     return {t: Date.now() / 1000, machines, members, recent_sets: recent.slice(0, 25),
-      camera_status: this.cams.map(c => ({id: c.id, name: c.name, source: c.source, status: c.el.readyState >= 2 ? "live" : "reconnecting", fps: c.el.readyState >= 2 ? 10 * (this.speed || 1) : 0, zones: c.zones}))};
+      session: this.act?.session, paused: this.isPaused(this.act?.id),
+      camera_status: [this.act].filter(Boolean).map(c => ({id: c.id, name: c.name, source: c.source, status: c.el.readyState >= 2 ? "live" : "reconnecting", fps: c.el.readyState >= 2 ? 10 * (this.speed || 1) : 0, zones: c.zones}))};
   }
   async progress(id) {
     const m = this.cfg.members.find(x => x.id === id), c = this.cams.find(x => x.id === m?.cam);
@@ -767,7 +783,7 @@ class ReplaySource {
   }
   async utilisation() {
     const out = {};
-    for (const c of this.cams) { for (const s of c.data.sets) { const r = out[s.m] ||= {machine: s.m, n: 0, busy: 0, members: new Set()}; r.n++; r.busy += s.t1 - s.t0; if (s.pid != null) r.members.add(s.pid); } }
+    for (const c of [this.act]) { for (const s of c.data.sets) { const r = out[s.m] ||= {machine: s.m, n: 0, busy: 0, members: new Set()}; r.n++; r.busy += s.t1 - s.t0; if (s.pid != null) r.members.add(s.pid); } }
     return Object.values(out).map(r => ({...r, members: r.members.size}));
   }
   async hourly() { const h = new Date().getHours(), out = {}; for (const u of await this.utilisation()) { out[u.machine] = Array(24).fill(0); out[u.machine][h] = u.n; } return out; }
@@ -775,7 +791,7 @@ class ReplaySource {
   /* ---- floor plan / bird's-eye ---- */
   H(c) { return c._H ||= c.calib ? homography(c.calib.image, c.calib.plan) : null; }
   plans() {
-    return this.cams.filter(c => c.calib && c.plan).map(c => ({id: c.id, name: c.plan.name || c.name, width: c.plan.width, depth: c.plan.depth, approx: !!c.calib.approx,
+    return [this.act].filter(c => c?.calib && c.plan).map(c => ({id: c.id, name: c.plan.name || c.name, width: c.plan.width, depth: c.plan.depth, approx: !!c.calib.approx,
       zones: c.zones.map(z => ({machine: z.machine, poly: projectZone(z.polygon, c.calib, this.H(c))})),
       items: c.plan.items || [], height: c.plan.height, cameras: [{id: c.id, calib: c.calib}],
       view: c.calib.view || null}));
@@ -798,10 +814,12 @@ class ReplaySource {
     const c = this.cams.find(x => x.id === camId); if (!c) return [];
     const ct = this.ct(c), tl = c.data.timeline, i = tl.indexOf(this.at(c, ct)), a = tl[i], b = tl[i + 1];
     const now = this.peopleAt(c, a);
-    if (!b || b.t - a.t > 2) return now.map(q => ({...q, pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}));
+    const inSet0 = new Set(c.data.sets.filter(s => s.t0 <= ct && ct <= s.t1).map(s => s.pid));
+    if (!b || b.t - a.t > 2) return now.map(q => ({...q, inSet: inSet0.has(q.pid), pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}));
     const k = Math.max(0, Math.min(1, (ct - a.t) / (b.t - a.t))), next = Object.fromEntries(this.peopleAt(c, b).map(q => [q.pid, q]));
     const mix = (a, b) => a == null || b == null ? a : a + (b - a) * k;
-    return now.map(q => { const n = next[q.pid]; return {...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k), x: mix(q.x, n.x), y: mix(q.y, n.y)} : q), pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}; });
+    const inSet = new Set(c.data.sets.filter(s => s.t0 <= ct && ct <= s.t1).map(s => s.pid));
+    return now.map(q => { const n = next[q.pid]; return {inSet: inSet.has(q.pid), ...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k), x: mix(q.x, n.x), y: mix(q.y, n.y)} : q), pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}; });
   }
   poseIdx(c) { // pid -> {t: [], k: [decoded pose]} from the 5-per-second pose log
     if (c._pi) return c._pi;
@@ -910,7 +928,7 @@ class ReplaySource {
   }
   zoneStats() {
     const out = {};
-    for (const c of this.cams) {
+    for (const c of [this.act]) {
       const ct = this.ct(c); let n = 0;
       for (const e of c.data.timeline) {
         if (e.t > ct) break; n++;
@@ -926,12 +944,12 @@ class ReplaySource {
     if (size) c.plan = {...(c.plan || {}), name: c.plan?.name || c.name, width: size.width, depth: size.depth};
   }
   async floor() {
-    return this.cams.filter(c => c.calib && c.plan).map(c => {
+    return [this.act].filter(c => c?.calib && c.plan).map(c => {
       const ct = this.ct(c), e = this.at(c, ct), trails = this.trails(c, ct);
       return {plan: c.id, headcount: e.n ?? e.p.length, people: this.peopleAt(c, e).map(q => ({...q, trail: trails[q.pid] || []})), heat: this.heat(c.id)};
     });
   }
-  async recordings() { return this.cams.map(c => ({id: c.id, status: "done", progress: 1, start_ts: Date.now() / 1000 - 3600, video_s: c.data.duration, speed: c.speed_x || 0, totals: {sets: c.data.sets.length, reps: c.data.sets.reduce((a, s) => a + s.reps, 0)}, report_url: c.report ? this.base + c.report : null, name: `${c.name} · real footage`})); }
+  async recordings() { return this.cams.map(c => ({id: c.id, status: "done", progress: 1, start_ts: null, video_s: c.data.duration, speed: c.speed_x || 0, totals: {sets: c.data.sets.length, reps: c.data.sets.reduce((a, s) => a + s.reps, 0)}, report_url: c.report ? this.base + c.report : null, name: `${c.session} · recorded footage`, camera: c.id})); }
   view(cam) { return this.cams.find(c => c.id === cam.id).el; }
   async frame(cam) { return this.cams.find(c => c.id === cam.id).el; }
   async setZones() { throw new Error("This demo replays recorded footage. Run the GymTrack server to connect cameras and edit their zones."); }

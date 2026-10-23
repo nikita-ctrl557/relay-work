@@ -1,0 +1,136 @@
+{
+ "camera": "cables",
+ "segment": "cables0",
+ "frame_size": [
+  1280,
+  720
+ ],
+ "offset": [
+  740,
+  325
+ ],
+ "roi": [
+  0,
+  0,
+  500,
+  310
+ ],
+ "note": "Slot centres in the segment's reference image (rack ROI crop registered to the segment's first frame; full-frame = slot + offset + per-frame drift). Weights are PLACEHOLDERS (only the right-hand tower has visible 1-10 labels, and it is cut off in this view) - set them from the gym's real rack layout.",
+ "racks": [
+  {
+   "id": "A",
+   "columns": [
+    {
+     "id": "L",
+     "first": [
+      139,
+      57
+     ],
+     "last": [
+      136,
+      240
+     ],
+     "n": 10,
+     "size": [
+      [
+       12,
+       11
+      ],
+      [
+       18,
+       17
+      ]
+     ],
+     "weights": [
+      12,
+      14,
+      16,
+      18,
+      20,
+      22,
+      24,
+      26,
+      28,
+      30
+     ],
+     "sentinel_dx": 22
+    },
+    {
+     "id": "R",
+     "first": [
+      213,
+      58
+     ],
+     "last": [
+      212,
+      238
+     ],
+     "n": 10,
+     "size": [
+      [
+       12,
+       11
+      ],
+      [
+       18,
+       17
+      ]
+     ],
+     "weights": [
+      12,
+      14,
+      16,
+      18,
+      20,
+      22,
+      24,
+      26,
+      28,
+      30
+     ],
+     "sentinel_dx": -22
+    }
+   ]
+  },
+  {
+   "id": "B",
+   "columns": [
+    {
+     "id": "R",
+     "first": [
+      394,
+      62
+     ],
+     "last": [
+      392,
+      228
+     ],
+     "n": 10,
+     "size": [
+      [
+       11,
+       10
+      ],
+      [
+       16,
+       15
+      ]
+     ],
+     "weights": [
+      2,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "sentinel_dx": -22
+    }
+   ]
+  }
+ ]
+}

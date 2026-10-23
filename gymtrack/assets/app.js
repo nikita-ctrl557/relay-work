@@ -4,13 +4,13 @@
 /* ---------------- app state + router ---------------- */
 let src, cfg, live = null, util = {}, utilAt = 0, page = null;
 const PAGES = [
-  {id: "floor", label: "Live floor", group: "Operations", icon: "floor", sub: () => `${cfg.cameras.length} cameras`},
+  {id: "floor", label: "Live floor", group: "Operations", icon: "floor", sub: () => src?.sessions ? "Recorded footage" : camsN(cfg.cameras.length)},
   {id: "map", label: "Floor plan", group: "Operations", icon: "map", sub: () => ""},
   {id: "machines", label: "Equipment", group: "Operations", icon: "machines", sub: () => `${cfg.machines.length} stations`},
   {id: "members", label: "Members", group: "Members", icon: "members", sub: () => `${cfg.members.length} total · ${live ? live.members.filter(m => m.status !== "away").length : 0} in gym`},
   {id: "insights", label: "Insights", group: "Analytics", icon: "insights", sub: () => ""},
   {id: "recordings", label: "Recordings", group: "Analytics", icon: "recordings", sub: () => ""},
-  {id: "cameras", label: "Cameras", group: "Administration", icon: "cameras", sub: () => `${cfg.cameras.length} cameras`},
+  {id: "cameras", label: "Cameras", group: "Administration", icon: "cameras", sub: () => camsN(cfg.cameras.length)},
   {id: "settings", label: "Settings", group: "Administration", icon: "settings", sub: () => ""},
 ];
 /* role-based access: which pages each role sees (enforced in the nav and the router) */
@@ -71,11 +71,19 @@ function go() {
   $("#pageTitle").textContent = page.title;
   $("#pageSub").textContent = page.sub?.() || "";
   $("#pageActions").innerHTML = ""; page.actions?.($("#pageActions"));
+  if (src.sessions && r.id !== "member" && r.id !== "settings") $("#pageActions").prepend(sessionPicker());
   document.title = `${page.title} · GymTrack`;
   page.mount(view); renderNav(); page.update?.();
   scrollTo(0, 0);
 }
 addEventListener("hashchange", go);
+/* recorded demo: each recording is a separate visit to the gym; pick which one plays (everything follows it) */
+function sessionPicker() {
+  const ss = src.sessions(), e = el(`<label class="sess" data-tip="Recorded footage: each session is a separate visit, played back on its own"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg><select class="input sm" aria-label="Recorded session">${ss.map(x => `<option value="${esc(x.id)}" ${x.active ? "selected" : ""}>${esc(x.name)} · ${clockFmt(x.duration)}</option>`).join("")}</select></label>`);
+  e.querySelector("select").onchange = async ev => { src.selectSession(ev.target.value); live = await src.live().catch(() => live); go(); renderSys(); renderChrome(); toast(`Playing ${src.sessions().find(x => x.active).name}`); };
+  return e;
+}
+const camsN = n => `${n} camera${n === 1 ? "" : "s"}`;
 addEventListener("scroll", () => $("#topbar").classList.toggle("scrolled", scrollY > 4), {passive: true});
 
 /* ---------------- FLOOR ---------------- */
@@ -83,7 +91,7 @@ function FloorPage() {
   let focus = null, feedKeys = new Set(), wall;
   const clock = el(`<span class="clock num"></span>`);
   return {
-    title: "Live floor", sub: () => `${cfg.cameras.length} cameras · ${cfg.machines.length} stations`,
+    title: "Live floor", sub: () => src.sessions ? `${cfg.session} · recorded footage played back · ${cfg.machines.length} stations` : `${camsN(cfg.cameras.length)} · ${cfg.machines.length} stations`,
     actions(a) {
       a.append(clock);
       if (src.mode !== "server") a.append(el(`<select class="input sm" id="speed" aria-label="Playback speed" style="width:auto"><option value="1">1× speed</option><option value="3">3× speed</option></select>`));
@@ -126,7 +134,7 @@ function FloorPage() {
     mount(v) {
       cancelAnimationFrame(this.raf); this.drawHits();
       if (src.mode !== "server" && !store.get("banner-off-" + src.mode)) {
-        const msg = src.mode === "replay" ? `<b>Demo site.</b> Recorded footage from a commercial gym, played back in sync. Untagged people show as #ID.` : `<b>Simulation.</b> Synthetic cameras. Remove ?sim from the URL for recorded footage.`;
+        const msg = src.mode === "replay" ? `<b>Demo site.</b> Recorded footage from a commercial gym: ${src.sessions().length} separate visits, played back one at a time (pick one above). Untagged people show as #ID.` : `<b>Simulation.</b> Synthetic cameras. Remove ?sim from the URL for recorded footage.`;
         v.append(el(`<div class="banner">${IC.info}<span>${msg}</span><a class="btn secondary sm" href="#cameras">Connect cameras</a><button class="x" aria-label="Dismiss">${IC.x.replace("<svg", '<svg style="width:16px;height:16px"')}</button></div>`));
         v.querySelector(".banner .x").onclick = e => { store.set("banner-off-" + src.mode, true); e.target.closest(".banner").remove(); };
       }
@@ -141,7 +149,7 @@ function FloorPage() {
       eq.onclick = e => { const r = e.target.closest("[data-member]"); if (r && cfg.members.some(m => m.id === r.dataset.member)) location.hash = "member-" + r.dataset.member; };
     },
     buildWall() {
-      wall.innerHTML = `<div class="wall-h"><span class="crumbs"><b>${esc(cfg.gym || "Site")}</b>${IC.chev}<span>All cameras</span></span><span class="right"><button data-skel aria-pressed="${store.get("skel", true)}" title="Show skeletons">${IC.skel}Skeletons</button>${focus ? '<button data-unfocus>Show all</button>' : ""}</span></div>`;
+      wall.innerHTML = `<div class="wall-h"><span class="crumbs"><b>${esc(cfg.gym || "Site")}</b>${IC.chev}<span>${src.sessions ? esc(cfg.session) : "All cameras"}</span></span><span class="right"><button data-skel aria-pressed="${store.get("skel", true)}" title="Show skeletons">${IC.skel}Skeletons</button>${focus ? '<button data-unfocus>Show all</button>' : ""}</span></div>`;
       wall.classList.toggle("focus", !!focus);
       const cams = focus ? [cfg.cameras.find(c => c.id === focus), ...cfg.cameras.filter(c => c.id !== focus)] : cfg.cameras;
       const list = cams.filter(Boolean);
@@ -686,7 +694,7 @@ function InsightsPage() {
       if (!live) return;
       utilL = Object.fromEntries((await src.utilisation()).map(u => [u.machine, u]));
       const plans = src.plans(), floors = await src.floor();
-      const observed = src.mode === "replay" ? Math.max(...src.cams.map(c => src.ct(c))) : Math.max(60, (Date.now() - new Date().setHours(6, 0, 0, 0)) / 1000);
+      const observed = src.mode === "replay" ? src.ct(src.act || src.cams[0]) : Math.max(60, (Date.now() - new Date().setHours(6, 0, 0, 0)) / 1000);
       const zstats = src.zoneStats ? src.zoneStats() : null;
       if (Date.now() - archAt > 30000 && typeof bmArchetype !== "undefined") {
         archAt = Date.now(); const counts = {};
@@ -746,14 +754,15 @@ function RecordingsPage() {
     async refresh() { jobs = await src.recordings().catch(() => []); this.render(); },
     render() {
       $("#jobs").innerHTML = jobs.map(j => {
-        const when = new Date(j.start_ts * 1000).toLocaleString(undefined, {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"});
+        const when = j.start_ts == null ? "Separate visit" : new Date(j.start_ts * 1000).toLocaleString(undefined, {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"});
         const name = j.name || (cfg.cameras.find(c => c.id === j.camera)?.name ? `${cfg.cameras.find(c => c.id === j.camera).name} recording` : "Recording");
-        const right = j.status === "done" && j.report_url ? `<button class="btn secondary sm" data-report="${esc(j.report_url)}" data-title="${esc(name)}">View report</button>`
+        const right = src.sessions && j.camera ? (src.session === j.camera ? `<span class="pill good"><i></i>Playing</span>` : `<button class="btn secondary sm" data-play="${esc(j.camera)}">${IC.play}Play this session</button>`) : j.status === "done" && j.report_url ? `<button class="btn secondary sm" data-report="${esc(j.report_url)}" data-title="${esc(name)}">View report</button>`
           : j.status === "failed" ? `<span class="pill bad">Failed</span>` : `<span class="pill warn"><i></i>${(j.progress * 100).toFixed(0)}%</span>`;
         return `<div class="job"><span class="ic">${IC.film}</span><div style="min-width:0"><div class="t">${esc(name)}${j.sample ? ' <span class="badge-s">Sample</span>' : ""}</div>
-          <div class="d"><span>${esc(when)}</span><span>${fmtDur(j.video_s)} of video</span>${j.status === "done" ? `<span>${j.totals?.sets ?? 0} sets · ${j.totals?.reps ?? 0} reps</span><span>${Math.round(j.speed)}× real time</span>` : j.status === "failed" ? `<span style="color:var(--bad)">${esc(j.error || "")}</span>` : `<span>${Math.round(j.speed || 0)}× real time</span>`}</div>
+          <div class="d"><span>${esc(when)}</span><span>${fmtDur(j.video_s)} of video</span>${j.status === "done" ? `<span>${j.totals?.sets ?? 0} sets · ${j.totals?.reps ?? 0} reps</span>${j.speed ? `<span>${Math.round(j.speed)}× real time</span>` : ""}` : j.status === "failed" ? `<span style="color:var(--bad)">${esc(j.error || "")}</span>` : `<span>${Math.round(j.speed || 0)}× real time</span>`}</div>
           ${j.status === "running" || j.status === "queued" ? `<div class="bar"><span style="width:${(j.progress * 100).toFixed(1)}%"></span></div>` : ""}</div>${right}</div>`;
       }).join("") || `<div class="empty">No recordings</div>`;
+      $("#jobs").onclick = async e => { const rp = e.target.closest("[data-report]"); if (rp) return openReport(rp.dataset.report, rp.dataset.title); const b = e.target.closest("[data-play]"); if (!b) return; src.selectSession(b.dataset.play); live = await src.live().catch(() => live); go(); renderSys(); renderChrome(); };
     },
     update() { if (jobs.some(j => j.status === "running" || j.status === "queued")) this.refresh(); },
   };
@@ -1032,7 +1041,7 @@ function renderChrome() {
   const a = alerts(), n = a.filter(x => x.level !== "info").length, b = $("#bellN");
   b.hidden = !n; b.textContent = n;
   const liveCams = (live?.camera_status || []).filter(c => c.status === "live").length, total = cfg.cameras.length;
-  $("#gstatus").innerHTML = `<i class="${liveCams === total ? "ok" : "warn"}"></i>${liveCams}/${total} cameras online`;
+  $("#gstatus").innerHTML = src.sessions ? `<i class="${live?.paused ? "warn" : "ok"}"></i>${esc(cfg.session)} · ${live?.paused ? "paused" : "playing"}` : `<i class="${liveCams === total ? "ok" : "warn"}"></i>${liveCams}/${total} cameras online`;
   const r = ROLES[role()], name = store.get("set:org", null) ? "Gym owner" : "Gym owner";
   $("#userRole").textContent = r.label; $("#userName").textContent = role() === "owner" ? name : `${r.label} (demo)`; $("#userAv").textContent = initials(r.label === "Owner" ? "Gym Owner" : r.label);
 }
@@ -1046,7 +1055,7 @@ $("#userBtn").onclick = () => popover($("#userBtn"), `<div class="pop-h">Signed 
   if (e.target.closest("[data-signout]")) { $("#pop").hidden = true; toast("Demo has no accounts"); }
   if (e.target.closest("a")) $("#pop").hidden = true;
 });
-$("#siteBtn").onclick = () => popover($("#siteBtn"), `<div class="pop-h">Sites</div><button class="pop-i" aria-pressed="true"><i class="radio"></i><span><b>${esc(cfg.gym)}</b><small>${cfg.cameras.length} cameras · ${cfg.machines.length} stations</small></span></button><div class="pop-sep"></div><a class="pop-i" href="#settings"><span><b>Manage sites</b></span></a>`, e => { if (e.target.closest("a")) { store.set("settab", "general"); $("#pop").hidden = true; } });
+$("#siteBtn").onclick = () => popover($("#siteBtn"), `<div class="pop-h">Sites</div><button class="pop-i" aria-pressed="true"><i class="radio"></i><span><b>${esc(cfg.gym)}</b><small>${src.sessions ? `${src.sessions().length} recorded sessions` : camsN(cfg.cameras.length)} · ${cfg.machines.length} stations</small></span></button><div class="pop-sep"></div><a class="pop-i" href="#settings"><span><b>Manage sites</b></span></a>`, e => { if (e.target.closest("a")) { store.set("settab", "general"); $("#pop").hidden = true; } });
 /* global search: members, equipment, pages */
 (() => {
   const inp = $("#gsearch"), res = $("#gres"); let items = [], sel = 0;
@@ -1074,6 +1083,10 @@ $("#siteBtn").onclick = () => popover($("#siteBtn"), `<div class="pop-h">Sites</
 function renderSys() {
   const liveCams = (live?.camera_status || []).filter(c => c.status === "live").length, total = cfg.cameras.length;
   const ok = liveCams === total, mode = src.mode === "replay" ? "Real footage · recorded playback" : src.mode === "demo" ? "Simulation" : "Connected to GymTrack server";
+  if (src.sessions) { // recorded footage: one session plays at a time; nothing here is a live feed
+    $("#sysBox").innerHTML = `<b><span class="pill ${live?.paused ? "warn" : "good"}" style="height:auto;padding:0;background:none"><i></i></span>${esc(cfg.session)}</b>${mode}`;
+    $("#sysDot").innerHTML = `<span class="pill ${live?.paused ? "warn" : "good"}" style="height:auto;padding:0;background:none"><i></i></span>Playback`; return;
+  }
   $("#sysBox").innerHTML = `<b><span class="pill ${ok ? "good" : "warn"}" style="height:auto;padding:0;background:none"><i></i></span>${liveCams}/${total} cameras live</b>${mode}`;
   $("#sysDot").innerHTML = `<span class="pill ${ok ? "good" : "warn"}" style="height:auto;padding:0;background:none"><i></i></span>${liveCams}/${total} live`;
 }

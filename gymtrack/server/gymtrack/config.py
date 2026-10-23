@@ -29,6 +29,10 @@ class Machine:
 class Zone:
     machine: str
     polygon: list[list[int]]  # [[x, y], ...] in the camera's pixel space
+    # optional: where the machine stands on the floor plan, [[x, y], ...] in metres (the 3D twin's footprint).
+    # Without it the footprint is the image polygon projected through the calibration, which only works for
+    # equipment drawn as its floor area.
+    plan: list | None = None
 
 
 @dataclass
@@ -46,6 +50,14 @@ class Camera:
     exercise_names: bool = True
     # image areas where detections are ignored: mirrors (reflections), TV screens, posters with people on them
     ignore: list = field(default_factory=list)
+    # wall mirrors, image polygons (see mirrors.py: found from reflection pairs). Detections with their feet
+    # inside are reflections and are ignored, like `ignore` areas.
+    mirrors: list = field(default_factory=list)
+
+    @property
+    def ignore_areas(self) -> list:
+        """Everything whose detections are dropped: ignore areas plus mirrors."""
+        return list(self.ignore) + list(self.mirrors)
 
     def homography(self):
         """3x3 image->floor-plan matrix, or None if the camera isn't calibrated."""
@@ -96,8 +108,9 @@ class GymConfig:
             Camera(
                 id=c["id"], name=c.get("name", c["id"]), source=str(c["source"]),
                 fps=float(c.get("fps", 10)), width=int(c.get("width", 640)),
-                zones=[Zone(z["machine"], [list(map(int, p)) for p in z["polygon"]]) for z in c.get("zones", [])],
+                zones=[Zone(z["machine"], [list(map(int, p)) for p in z["polygon"]], z.get("plan")) for z in c.get("zones", [])],
                 calib=c.get("calib"), people=bool(c.get("people", True)), exercise_names=bool(c.get("exercise_names", True)), ignore=[[list(map(float, p)) for p in poly] for poly in c.get("ignore", [])],
+                mirrors=[[list(map(float, p)) for p in poly] for poly in c.get("mirrors", [])],
             )
             for c in d.get("cameras", [])
         ]
