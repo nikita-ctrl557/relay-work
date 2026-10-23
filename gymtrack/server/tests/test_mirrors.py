@@ -144,3 +144,24 @@ def test_config_mirrors_and_zone_floor_footprints_round_trip():
     assert cam.zones[0].plan == [[1, 1], [2, 1], [2, 2]]
     back = GymConfig.from_dict(cfg.to_dict()).cameras[0]
     assert back.mirrors == cam.mirrors and back.zones[0].plan == cam.zones[0].plan
+
+
+def test_zone_motion_ignores_the_glass_but_not_the_lifter_in_front_of_it():
+    from gymtrack.config import Camera, Zone
+    from gymtrack.vision import FrameAnalyzer
+    g = M.MirrorGuard(mirrors=[[[0, 0], [200, 0], [200, 100], [0, 100]]])
+    lifter = _Track(id=1, box=(20, 30, 30, 90), kps=[])
+    ex = g.motion_exclusion((360, 640), [lifter])
+    assert ex[50, 150] and not ex[50, 30] and not ex[200, 150]   # glass / lifter's box / below the glass
+    cam = Camera("c", "c", "x", zones=[Zone("rack", [[0, 0], [200, 0], [200, 150], [0, 150]])])
+    fa = FrameAnalyzer(cam)
+    a = np.zeros((360, 640, 3), np.uint8)
+    fa.analyze(a, 0.0)
+    b = a.copy()
+    b[20:60, 120:180] = 255          # a reflection moving in the glass
+    fa.exclude = ex
+    assert fa.analyze(b, 0.1).zones[0].motion == 0
+    c = b.copy()
+    c[40:80, 25:45] = 255            # the lifter moving in front of the glass
+    m = fa.analyze(c, 0.2).zones[0].motion
+    assert m > 0.02

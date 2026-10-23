@@ -20,6 +20,14 @@ dwell time and sometimes a set. Three layers deal with it:
 3. Online (`MirrorGuard`, used by offline.analyse): mirror polygons drop detections up front; reflection
    pairs found while the video plays drop the twin even where the polygon is missing or uncertain, and sets
    credited to a twin are given to its owner.
+4. Zone motion (`MirrorGuard.motion_exclusion` + vision.FrameAnalyzer.exclude): a rack against a mirror wall
+   has the glass right behind its lifter, where everyone in the room moves too. Motion in the glass counts
+   only inside real people's boxes, as a share of the part of the zone that can still count; otherwise the
+   room's reflections keep rack zones "lifting" long after a set (and the set is then rejected as nobody's).
+
+Limits: the polygons are fixed per recording, so a camera that is re-aimed part-way (demo segment floor5)
+needs them per framing. Someone whose feet are hidden right at the foot of the glass looks like a reflection
+to the feet test. Two people really moving in lockstep, one behind the other, would look like a pair.
 
 Usage (find mirrors from a finished analysis, write them into the config):
     python -m gymtrack.mirrors result.json config.json [--video clip.mp4] [--write]
@@ -548,6 +556,29 @@ class MirrorGuard:
                                           tuple(real.box), tuple(refl.box)))
                 if self._hits[key] >= 2 or c >= STRONG_CORR:
                     self.owner[refl.id] = self.owner.get(real.id, real.id)
+
+    def motion_exclusion(self, shape, tracks: list, pad: float = 0.15) -> np.ndarray | None:
+        """Where zone motion shouldn't count: mirror glass, except inside (padded) boxes of real people.
+
+        A rack against a mirror wall has the glass right behind its lifter: everyone moving anywhere in the room
+        moves in it too, which keeps the rack's zone "lifting" long after the set (and the lifter's own copy
+        doubles their motion). The lifter in front of the glass is inside their own box, which stays counted."""
+        if not self.mirrors:
+            return None
+        import cv2
+        if getattr(self, "_mmask", None) is None or self._mmask.shape != tuple(shape[:2]):
+            m = np.zeros(shape[:2], np.uint8)
+            for p in self.mirrors:
+                cv2.fillPoly(m, [np.round(np.asarray(p, np.float32)).astype(np.int32)], 1)
+            self._mmask = m.astype(bool)
+        ex = self._mmask.copy()
+        H, W = ex.shape
+        for tr in tracks:
+            x, y, w, h = tr.box
+            x0, y0 = int(max(0, x - pad * w)), int(max(0, y - pad * h))
+            x1, y1 = int(min(W, x + w * (1 + pad))), int(min(H, y + h * (1 + pad)))
+            ex[y0:y1, x0:x1] = False
+        return ex
 
     def is_reflection(self, tr) -> bool:
         return tr.id in self.owner or (bool(self.mirrors) and in_mirror(tr.box, self.mirrors))

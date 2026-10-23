@@ -51,6 +51,9 @@ class FrameAnalyzer:
         self._masks: dict[str, tuple[np.ndarray, int, tuple[int, int, int, int]]] = {}
         self._shape: tuple[int, int] | None = None
         self.last_motion_mask: np.ndarray | None = None
+        # optional bool image: motion there doesn't count for zones (e.g. mirror glass outside real people's
+        # boxes: reflections of the whole room move in it). Set per frame by the caller (offline.analyse).
+        self.exclude: np.ndarray | None = None
 
     def set_zones(self, zones) -> None:
         self.cam.zones = zones
@@ -80,6 +83,9 @@ class FrameAnalyzer:
         else:
             moving = cv2.absdiff(blur, self.prev) > self.diff_threshold
         self.prev = blur
+        ex = self.exclude if self.exclude is not None and self.exclude.shape == moving.shape else None
+        if ex is not None:
+            moving = moving & ~ex
         self.last_motion_mask = moving
 
         # tags
@@ -95,6 +101,8 @@ class FrameAnalyzer:
             mask, area, (x, y, w, h) = self._zone_masks(blur.shape)[z.machine]
             sub = moving[y:y + h, x:x + w] & mask
             n = int(np.count_nonzero(sub))
+            if ex is not None:  # share of the part of the zone that can still count (not excluded glass)
+                area = max(int(np.count_nonzero(mask & ~ex[y:y + h, x:x + w])), int(0.15 * area), 1)
             thumb = cv2.resize(blur[y:y + h, x:x + w], (THUMB, THUMB), interpolation=cv2.INTER_AREA) if w and h else None
             poly = np.array(z.polygon, dtype=np.float32)
             inside = [tid for tid, (tx, ty) in tags.items()

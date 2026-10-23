@@ -257,6 +257,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
     writer, background = None, None
     width = cam.width
     i, next_t, t, wall0, last_cb = 0, 0.0, 0.0, time.time(), 0.0
+    kept_tracks: list = []
     while True:
         if not cap.grab():
             break
@@ -272,6 +273,8 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         if frame.shape[1] != width:
             full = frame
             frame = cv2.resize(frame, (width, int(frame.shape[0] * width / frame.shape[1])), interpolation=cv2.INTER_AREA)
+        if guard is not None and guard.mirrors:  # motion in mirror glass only counts on real people (last frame's)
+            analyser.exclude = guard.motion_exclusion(frame.shape, kept_tracks)
         reading = analyser.analyze(frame, start_ts + t)
         tracks = []
         if tracker:
@@ -281,6 +284,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
                 guard.observe(tracks, start_ts + t)
                 kept = guard.filter(tracks)
                 n_refl, tracks = len(tracks) - len(kept), kept
+                kept_tracks = tracks
             if pose_boost_s:
                 boost_poses(tracker, engine, cam.id, frame, full, start_ts + t, pose_boost_s)
             reading.people = [(tr.id, tr.member, tr.zone, tr.planted, tr.activity, person_obs(tr, frame, start_ts + t)) for tr in tracks]
