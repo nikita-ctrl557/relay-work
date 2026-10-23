@@ -342,7 +342,7 @@ def score_person(zs: dict[str, np.ndarray], obs: list, grid: np.ndarray, in_zone
     c.score *= c.still * (0.85 + 0.15 * in_zone)
     # someone standing (or sitting) at *another* machine reaches into this zone's picture with their arms or
     # the handle: they lift there, not here (two zones drawn next to each other, a cable row under a bench)
-    c.score *= 1.0 - ELSEWHERE_PENALTY * max(0.0, elsewhere - in_zone)
+    c.score *= 1.0 - ELSEWHERE_PENALTY * min(1.0, max(0.0, elsewhere))  # (net of frames in this zone, see engine)
     if best[4] is not None:
         c.signal = (grid, best[4])
     return c

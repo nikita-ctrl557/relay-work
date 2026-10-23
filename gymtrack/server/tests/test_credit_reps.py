@@ -251,3 +251,20 @@ def test_pose_boost_only_for_people_settled_at_a_hot_zone():
     assert boost_poses(tracker, e, "cam-north", frame, None, 0.2, 0.15) == 1
     assert sitter.kps[-1][0] == 0.2 and walker.kps[-1][0] == 0.0 and elsewhere.kps[-1][0] == 0.0
     assert boost_poses(tracker, e, "cam-north", frame, None, 0.25, 0.15) == 0   # fresh enough already
+
+
+def test_one_or_two_movements_are_not_a_set():
+    rng = np.random.default_rng(7)
+    # two slow bends (picking dumbbells up, putting them back) while the zone moves with them
+    twice = _person(7, 100, lambda t: -60 * (1 - np.cos(2 * np.pi * (t - 5) / 5.0)) / 2 if 5.0 <= t < 15.0 else 0.0, rng)
+    e = _run(lambda t, f: [twice(t, f)], t_end=30.0, lift=(5.0, 15.0))
+    assert not [s for s in e.recent_sets if s.machine == "bench"]
+    assert e.machines["bench"].vetoed
+
+
+def test_reps_use_every_piece_of_a_lifter_split_into_several_tracks():
+    rng = np.random.default_rng(8)
+    first, second = _person(7, 100, _lifter_wrist, rng), _person(17, 100, _lifter_wrist, rng)
+    e = _run(lambda t, f: [first(t, f)] if t < 17.5 else [second(t, f)])   # the tracker switched ids mid-set
+    s = [s for s in e.recent_sets if s.machine == "bench"][0]
+    assert s.person in (7, 17) and abs(s.reps - 10) <= 1, (s.person, s.reps, s.evidence)

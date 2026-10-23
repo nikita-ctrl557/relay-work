@@ -29,12 +29,16 @@ NEAR_ZONE = 0.25       # a person whose box overlaps the zone (this share of the
 PREROLL_S = 3.0        # observations kept from before a set starts
 ZONE_REPEAT_MIN = 0.15 # zone-thumbnail periodicity a set needs when no person was seen moving with the machine
 REPS_MIN_CONF = 0.3    # a credited set whose rep counters are all this unsure isn't a set (unless the mover is clear)
+MIN_REPS = 3           # a credited "set" of fewer counted reps is a pick-up / re-rack / stretch, not a set
 CLEAR_MOVER = 0.75     # credit score above which the mover alone is enough evidence
 SETTLED_S = 1.5        # someone near the zone whose feet stayed put this long counts as at the machine...
 SETTLED_MOVE = 0.3     # ...moving less than this share of their body size (seated rowers and lifters whose
                        # feet are just outside the zone polygon included; the tracker's `planted` needs upright)
 TRIM_MARGIN_S = 1.5    # a credited set is trimmed to the lifter's active stretch, plus this margin...
-TRIM_MIN_S = 5.0       # ...on a side where that removes at least this much
+TRIM_MIN_S = 5.0       # ...on a side where that removes at least this much...
+FRAGMENT_MIN = 0.2     # another track that moved with the machine this well, never alongside the lifter, is
+                       # treated as a piece of the lifter's track for rep counting
+TRIM_COVER = 0.7       # ...and only if the lifter was seen for this share of the set
 
 
 @dataclass
@@ -105,6 +109,7 @@ class MachineTracker:
         self.obs: dict[int, deque] = {}          # pid -> recent (t, box, kp13 or None, crop) of people near the zone
         self.in_zone: Counter = Counter()        # pid -> frames with feet inside the zone during the set
         self.elsewhere: Counter = Counter()      # pid -> frames with feet inside *another* machine's zone
+        self.seen: Counter = Counter()           # pid -> frames seen near the zone during the set
         self.motion_hist: deque = deque(maxlen=MAX_SET_FRAMES)  # (t, fused zone motion)
         self.vetoed: list[dict] = []             # sets dropped because nobody moved with the machine
 
@@ -181,6 +186,7 @@ class MachineTracker:
                 q = self.obs[pid] = deque(maxlen=MAX_SET_FRAMES)
             q.append((t, obs["box"], obs.get("kp"), obs.get("crop")))
             if self.state == "lifting":
+                self.seen[pid] += 1
                 if zone == self.id:
                     self.in_zone[pid] += 1
                 elif zone is not None and not self.e.zones_overlap(cam, zone, self.id):
@@ -250,6 +256,7 @@ class MachineTracker:
                     self.set_cams = {c for c, z in self.cams.items() if t - z.t <= FUSE_WINDOW_S}
                     self.in_zone = Counter()
                     self.elsewhere = Counter()
+                    self.seen = Counter()
                     self._live_reps, self._live_at = 0, -1e9
                     self.below_since = None
             else:
@@ -285,8 +292,11 @@ class MachineTracker:
             # hand-tuned "barely moved" rules are only the fallback when nobody could be judged)
             if cr.best is not None:
                 person, score = cr.best, round(cr.cands[cr.best].score, 3)
-                span = _credit.active_span(cr.cands[cr.best])
-                if span is not None:  # the zone kept moving before/after: keep the lifter's own stretch
+                c = cr.cands[cr.best]
+                span = _credit.active_span(c)
+                # only trim to a lifter seen for most of the set: a short track is often one piece of the lifter
+                # (id switches), and the zone moving outside it is the same person under another id
+                if span is not None and c.span_s >= TRIM_COVER * (end - start):  # the zone kept moving before/after: keep the lifter's own stretch
                     a, b = max(start, span[0] - TRIM_MARGIN_S), min(end, span[1] + TRIM_MARGIN_S)
                     a = a if a - start >= TRIM_MIN_S else start  # only cut clearly idle stretches
                     b = b if end - b >= TRIM_MIN_S else end
@@ -326,6 +336,12 @@ class MachineTracker:
             # through, a bag dropped, someone stretching. (With a member tag present we keep it.)
             self.vetoed.append({"machine": self.id, "start": start, "end": end, "cands": cr.scores() if cr else {}, "why": "no repetition"})
             return self._done(end)
+        if score is not None and reps < MIN_REPS and not self._set_member():
+            # one or two movements: picking a dumbbell up, re-racking, a bend and a stretch. Real sets of
+            # one or two reps exist (heavy singles) but are rare next to these; a member tag still keeps them.
+            self.vetoed.append({"machine": self.id, "start": start, "end": end, "cands": cr.scores(), "why": "fewer than 3 reps",
+                                "reps": [reps, conf]})
+            return self._done(end)
         if score is not None and conf < REPS_MIN_CONF and score < CLEAR_MOVER and not self._set_member():
             # someone moved with the zone, but nothing in the set repeats like reps (zone, joint, pose and crop
             # counters all unsure): resting on the seat, drinking, re-racking, chatting with hand gestures
@@ -345,6 +361,7 @@ class MachineTracker:
         self._trim(end)
         self.in_zone = Counter()
         self.elsewhere = Counter()
+        self.seen = Counter()
         for pid in list(self.obs):
             q = self.obs[pid]
             while q and q[0][0] < end - PREROLL_S:
@@ -361,7 +378,9 @@ class MachineTracker:
         mt = [(t, m) for t, m in self.motion_hist if start - 1 <= t <= end + 1]
         n = max(1, self.set_tracked_frames)
         in_zone = {p: min(1.0, c / n) for p, c in self.in_zone.items()}
-        elsewhere = {p: min(1.0, c / n) for p, c in self.elsewhere.items()}
+        # share of the frames *this person* was seen in which their feet were at another machine (not in this
+        # zone): someone seen only for part of a long set is judged on their own frames
+        elsewhere = {p: min(1.0, max(0, c - self.in_zone.get(p, 0)) / max(1, self.seen.get(p, 0))) for p, c in self.elsewhere.items()}
         try:
             return _credit.evaluate(start, end, [t for t, _ in mt], [m for _, m in mt], thumbs,
                                     {p: list(q) for p, q in self.obs.items()}, in_zone, elsewhere)
@@ -374,7 +393,7 @@ class MachineTracker:
         zr, zc = self._count_conf(start, end)
         counts.append(("zone", zr, zc))
         if person is not None:
-            obs = [o for o in self.obs.get(person, ()) if start <= o[0] <= end]
+            obs = self._lifter_obs(person, cr, start, end)
             c = cr.cands.get(person) if cr is not None else None
             if c is not None and c.signal is not None:
                 g, v = c.signal
@@ -387,6 +406,28 @@ class MachineTracker:
         if reps <= 0:
             reps, conf = zr, 0.0
         return reps, round(conf, 2), {"counts": {s: [r, round(q, 2)] for s, r, q in counts}, "how": how}
+
+    def _lifter_obs(self, person: int, cr, start: float, end: float) -> list:
+        """The credited person's observations in the set, plus those of other tracks that also moved with the
+        machine and never overlap them in time: the tracker often splits one lifter into pieces (occlusion
+        by the machine, a neighbour), and every piece's poses count for the reps."""
+        own = [o for o in self.obs.get(person, ()) if start <= o[0] <= end]
+        if cr is None or not own:
+            return own
+        spans = [(own[0][0], own[-1][0])]
+        out = list(own)
+        for pid, c in sorted(cr.cands.items(), key=lambda kv: -kv[1].score):
+            if pid == person or not c.judged or c.score < FRAGMENT_MIN:
+                continue
+            q = [o for o in self.obs.get(pid, ()) if start <= o[0] <= end]
+            if len(q) < 6:
+                continue
+            a, b = q[0][0], q[-1][0]
+            if any(min(b, y) - max(a, x) > 1.0 for x, y in spans):
+                continue  # seen at the same time as the lifter: somebody else
+            spans.append((a, b))
+            out += q
+        return sorted(out, key=lambda o: o[0])
 
     def _trim(self, before: float):
         for q in self.thumbs.values():
