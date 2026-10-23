@@ -16,6 +16,7 @@ import numpy as np
 
 from .config import Camera, GymConfig, Zone
 from .engine import Engine
+from .tracking import torso_seen
 from .vision import FrameAnalyzer
 
 
@@ -71,9 +72,10 @@ def person_obs(tr, frame: np.ndarray, t: float) -> dict:
     H, W = frame.shape[:2]
     partial = y + h >= 0.985 * H or x <= 0.015 * W or x + w >= 0.985 * W or h < 0.07 * H
     if kps and abs(kps[-1][0] - t) < 1e-6 and not partial:
-        # poses of bodies cut off by the frame edge or very small are for replay / 3D only: too partial or too
-        # coarse to judge who is lifting (sets and credit see the same people as before)
-        kp = np.asarray(kps[-1][1], np.float32)[JOINTS13]
+        # poses of bodies cut off by the frame edge, very small, or with a half-hidden torso are for replay / 3D
+        # only: too partial to judge who is lifting (sets and credit see the same poses as before)
+        if getattr(tr, "torso_seen", True):
+            kp = np.asarray(kps[-1][1], np.float32)[JOINTS13]
     x0, y0, x1, y1 = max(0, int(x)), max(0, int(y)), min(W, int(x + w)), min(H, int(y + h))
     crop = None
     if x1 - x0 >= 4 and y1 - y0 >= 4:
@@ -116,6 +118,7 @@ def boost_poses(tracker, engine, cam_id: str, frame: np.ndarray, full: np.ndarra
         kp = tracker.pose.estimate(src, tuple(v * k for v in pb))
         if kp is None:
             continue
+        tr.torso_seen = torso_seen(kp)
         if k != 1.0:
             kp = kp.copy(); kp[:, :2] /= k
         kp = tracker._smooth_pose(tr, kp, t)

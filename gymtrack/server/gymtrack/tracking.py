@@ -244,6 +244,13 @@ def appearance(img: np.ndarray, box) -> np.ndarray | None:
     return v / (np.linalg.norm(v) + 1e-6)
 
 
+def torso_seen(kp) -> bool:
+    """All four torso joints (shoulders, hips) found with some confidence (mean >= 0.3), as the pose model used to
+    require for any pose at all. Poses that pass only the looser test (two torso joints: someone cut off at the hips,
+    half hidden) are kept for replay and 3D, but don't feed set detection and crediting."""
+    return float(np.mean(np.asarray(kp)[[11, 12, 23, 24], 2])) >= 0.3
+
+
 def _iou(a, b) -> float:
     return iou(a, b)
 
@@ -499,6 +506,7 @@ class PeopleTracker:
             if kp is not None and k != 1.0:
                 kp = kp.copy(); kp[:, :2] /= k
             if kp is not None:
+                tr.torso_seen = torso_seen(kp)
                 kp = self._smooth_pose(tr, kp, t)
                 if cut:  # joints the model placed outside the picture are guesses: unseen
                     out = (kp[:, 0] < 0) | (kp[:, 0] > FW - 1) | (kp[:, 1] < 0) | (kp[:, 1] > FH - 1)
