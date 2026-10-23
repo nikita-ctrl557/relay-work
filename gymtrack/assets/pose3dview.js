@@ -42,7 +42,7 @@ export function mountBody3D(host, {tr, state, seek}) {
   const plate = new THREE.Mesh(new THREE.CircleGeometry(6, 64), new THREE.MeshBasicMaterial({color: D ? 0x18212a : 0xffffff})); plate.rotation.x = -Math.PI / 2; plate.position.y = -0.002; floorG.add(plate);
 
   const std = (c, o = {}) => new THREE.MeshStandardMaterial({color: c, roughness: 0.55, metalness: 0.05, ...o});
-  const mats = {body: std(D ? 0x9aa6b2 : 0x6f7d8a), left: std(0x0a8ccc), right: std(0xe2574c), joint: std(0xf4f6f8, {roughness: 0.4}), head: std(D ? 0xb3bdc7 : 0x7f8c99)};
+  const mats = {body: std(D ? 0x9aa6b2 : 0x6f7d8a), left: std(0x0a8ccc), right: std(0xe2574c), joint: std(D ? 0xd5dce2 : 0xe9edf1, {roughness: 0.45}), head: std(D ? 0xb3bdc7 : 0x7f8c99)};
   const body = makeBody(mats); scene.add(body.group);
   let J = null, pelvis = new THREE.Vector3(GX, 0.95, GZ), haveFrame = false;
 
@@ -54,15 +54,15 @@ export function mountBody3D(host, {tr, state, seek}) {
   const pressed = () => host.querySelectorAll("[data-v]").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === view));
   function goal(k) { // camera position for a quick view, around the current body
     const f = J ? facing(J, new THREE.Vector3()) : new THREE.Vector3(0, 0, 1), side = new THREE.Vector3().crossVectors(THREE.Object3D.DEFAULT_UP, f), t = pelvis.clone();
-    if (k === "front") return t.clone().addScaledVector(f, 3.4).add(new THREE.Vector3(0, 0.35, 0));
-    if (k === "side") return t.clone().addScaledVector(side, 3.4).add(new THREE.Vector3(0, 0.35, 0));
-    return t.clone().add(new THREE.Vector3(0, 4.2, 0)).addScaledVector(f, 0.02);
+    if (k === "front") return t.clone().addScaledVector(f, 4.1).add(new THREE.Vector3(0, 0.45, 0));
+    if (k === "side") return t.clone().addScaledVector(side, 4.1).add(new THREE.Vector3(0, 0.45, 0));
+    return t.clone().add(new THREE.Vector3(0, 4.6, 0)).addScaledVector(f, -0.05);
   }
   function setView(k, now = false) {
     view = k; pressed();
-    const isCam = k === "cam"; controls.enabled = true; vidBtn.hidden = !isCam || !vtex; k2.hidden = !isCam;
+    const isCam = k === "cam"; controls.enabled = true; vidBtn.hidden = !isCam || !vtex; k2.hidden = !isCam; stage.classList.toggle("is-cam", isCam);
     if (!isCam) { camera.clearViewOffset(); camera.fov = 38; camera.aspect = (cv.clientWidth || 4) / (cv.clientHeight || 5); camera.near = 0.05; camera.updateProjectionMatrix(); scene.background = BG; floorG.visible = true;
-      const p1 = goal(k); if (now) { camera.position.copy(p1); controls.target.copy(pelvis); } else anim = {t: 0, p0: camera.position.clone(), p1, rel: true}; }
+      const p1 = goal(k); if (now) { camera.position.copy(p1); controls.target.copy(pelvis); } else anim = {t0: performance.now(), off0: camera.position.clone().sub(controls.target), tg0: controls.target.clone()}; }
     else anim = null;
   }
   host.querySelector(".b3v-views").onclick = e => { const b = e.target.closest("[data-v]"); if (b) setView(b.dataset.v); };
@@ -126,7 +126,11 @@ export function mountBody3D(host, {tr, state, seek}) {
     } else { body.group.visible = false; msg.hidden = false; msg.textContent = tr.has3d() ? "Not measured in 3D at this moment" : "No 3D body for this person"; }
     if (Math.abs(t - lastRead) > 0.15 || lastT == null) { lastRead = t; readouts(p, t); }
     lastT = t;
-    if (anim) { anim.t = Math.min(1, anim.t + 0.06); const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, goal(view), e); controls.target.lerp(pelvis, e); if (anim.t >= 1) anim = null; }
+    if (anim) { // swing around the body (direction and distance separately), time-based so slow devices finish too
+      const k = Math.min(1, (performance.now() - anim.t0) / 650), e = k * k * (3 - 2 * k), off1 = goal(view).sub(pelvis);
+      const d0 = anim.off0.length(), d1 = off1.length(), dir = anim.off0.clone().normalize().lerp(off1.clone().normalize(), e);
+      if (dir.lengthSq() < 1e-6) dir.copy(off1).normalize(); dir.normalize();
+      controls.target.lerpVectors(anim.tg0, pelvis, e); camera.position.copy(controls.target).addScaledVector(dir, d0 + (d1 - d0) * e); if (k >= 1) anim = null; }
     og.setTransform(1, 0, 0, 1, 0, 0); og.clearRect(0, 0, ov.width, ov.height);
     if (view === "cam") {
       const cam = tr.camera3d?.(t);

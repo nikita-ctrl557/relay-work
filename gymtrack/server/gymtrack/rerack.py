@@ -194,22 +194,19 @@ def attribute(flips: list[Flip], rack: RackModel, poses: list[dict], timeline: l
             if p is not None:
                 ev["pickup_t"], ev["pickup_pid"] = p["t"], p["pid"]
                 p["returned_t"], p["returned_by"] = ev["t"], pid
-    # pickups never returned while the lifter was around -> unreturned
+    # pickups not put back by the time the lifter left the camera -> unreturned (at their departure)
     for p in pickups:
         tr = tracks.get(p["pid"], []) if p["pid"] is not None else []
         seen_after = [r for r in tr if r[0] >= p["t"]]
         left_t = seen_after[-1][0] if seen_after else p["t"]
-        deadline = left_t + 1.0 if left_t < t_end - grace_s else p["t"] + grace_s
         ret_t = p.get("returned_t")
-        if ret_t is not None and ret_t <= max(deadline, p["t"] + grace_s):
-            continue                     # put back by the end of their visit (or within the grace period)
-        if p["t"] + grace_s > t_end and ret_t is None:
-            continue                     # clip ended too soon after the pickup to judge
-        # where: lifter's last floor position while still holding it (last planted-ish position)
+        if ret_t is not None and ret_t <= left_t + grace_s:
+            continue                     # re-racked during their visit (or right after)
+        if left_t >= t_end - grace_s and ret_t is None:
+            continue                     # still around when the footage ends: can't judge yet
         pos = [(r[1], r[2]) for r in seen_after if r[1] is not None]
-        x, y = pos[-1] if pos else (None, None)
-        t_un = max(deadline, p["t"] + grace_s) if left_t >= t_end - grace_s else left_t
-        unreturned.append({"t": round(min(t_un, t_end), 2), "pickup_t": p["t"], "weight": p["weight"], "slot": p["slot"],
+        x, y = pos[-1] if pos else (None, None)   # lifter's last floor position (where they trained)
+        unreturned.append({"t": round(left_t, 2), "pickup_t": p["t"], "weight": p["weight"], "slot": p["slot"],
                            "pid": p["pid"], "x": x, "y": y,
                            "resolved_by": p.get("returned_by"), "resolved_t": ret_t})
     return {"pickups": pickups, "returns": returns, "unreturned": unreturned}

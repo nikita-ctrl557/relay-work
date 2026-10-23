@@ -864,6 +864,7 @@ td.who small { color: var(--muted); font-size: 12px; }
 .b3v-key span { display: inline-flex; align-items: center; gap: 5px; } .b3v-key i { width: 10px; height: 10px; border-radius: 50%; }
 .b3v-key i.l { background: #0a8ccc; } .b3v-key i.r { background: #e2574c; } .b3v-key i.d { background: transparent; border: 2px solid #ffb020; width: 8px; height: 8px; }
 .b3v-hint { position: absolute; right: 10px; top: 46px; font-size: 11.5px; color: var(--muted); pointer-events: none; }
+.b3v-stage.is-cam .b3v-hint { display: none; }
 .b3v-msg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 6px 12px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); font-size: 13px; color: var(--ink-2); white-space: nowrap; }
 .b3v-read { display: flex; flex-direction: column; gap: 10px; }
 .b3v-ang { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }

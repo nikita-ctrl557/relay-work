@@ -553,7 +553,8 @@ function timeScrubber(host, camId) {
   pp.onclick = () => { src.setPaused(camId, !src.isPaused(camId)); icon(); };
   sp.textContent = (src.speed || 1) + "×";
   sp.onclick = () => { src.speed = (src.speed || 1) === 1 ? 2 : src.speed === 2 ? 4 : 1; sp.textContent = src.speed + "×"; };
-  const loop = () => { raf = requestAnimationFrame(loop); if (drag == null) show(src.timeOf(camId)); };
+  let wasPaused = null;
+  const loop = () => { raf = requestAnimationFrame(loop); if (drag == null) show(src.timeOf(camId)); const pz = src.isPaused(camId); if (pz !== wasPaused) { wasPaused = pz; icon(); } };
   icon(); loop();
   return {destroy() { cancelAnimationFrame(raf); }};
 }

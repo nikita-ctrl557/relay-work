@@ -12,14 +12,15 @@ function geos() {
   if (G.cyl) return G;
   G.cyl = new THREE.CylinderGeometry(1, 1, 1, 14, 1, true);
   G.sph = new THREE.SphereGeometry(1, 18, 12);
-  G.torso = new THREE.CylinderGeometry(1, 0.78, 1, 20, 1, false); // top = shoulders (wider), bottom = waist
+  // torso: a lathe profile (waist -> chest -> rounded shoulders), unit height, unit radius at the chest
+  G.torso = new THREE.LatheGeometry([[0, -0.5], [0.7, -0.5], [0.8, -0.38], [0.84, -0.1], [0.95, 0.18], [1, 0.33], [0.93, 0.43], [0.7, 0.49], [0.3, 0.52], [0, 0.52]].map(([r, y]) => new THREE.Vector2(r, y)), 24);
   G.foot = new THREE.BoxGeometry(1, 1, 1); G.foot.translate(0, 0, 0.5);
   return G;
 }
 
 // [from, to, radius m, side] ; side: 0 centre, 1 left, 2 right
 const LIMBS = [[1, 3, 0.052, 1], [3, 5, 0.043, 1], [2, 4, 0.052, 2], [4, 6, 0.043, 2], [7, 9, 0.078, 1], [9, 11, 0.056, 1], [8, 10, 0.078, 2], [10, 12, 0.056, 2]];
-const CAPS = [[1, 0.064, 1], [2, 0.064, 2], [3, 0.05, 1], [4, 0.05, 2], [5, 0.046, 1], [6, 0.046, 2], [7, 0.08, 1], [8, 0.08, 2], [9, 0.064, 1], [10, 0.064, 2], [11, 0.054, 1], [12, 0.054, 2]];
+const CAPS = [[1, 0.062, 1], [2, 0.062, 2], [3, 0.056, 1], [4, 0.056, 2], [5, 0.05, 1], [6, 0.05, 2], [7, 0.086, 1], [8, 0.086, 2], [9, 0.07, 1], [10, 0.07, 2], [11, 0.06, 1], [12, 0.06, 2]];
 
 /* P: Float32Array(39) plan metres -> 13 THREE.Vector3 in the render frame; off = [dx, dy] plan shift */
 export function jointsFrom(P, off = null, out = null) {
@@ -62,7 +63,7 @@ export function makeBody(mats) {
     const shW = J[1].distanceTo(J[2]), hpW = J[7].distanceTo(J[8]);
     // torso: from the waist (a little above the hip line) to just below the shoulder line, oriented by the spine and facing
     const top = new THREE.Vector3().lerpVectors(hm, sm, 0.97), bot = new THREE.Vector3().lerpVectors(hm, sm, 0.12), spine = new THREE.Vector3().subVectors(top, bot), L = spine.length();
-    if (L > 1e-3) { const tq = basis(spine, f); torso.visible = true; torso.matrix.compose(p.addVectors(top, bot).multiplyScalar(0.5), tq, s.set(Math.max(0.13, shW / 2 + 0.01), L, 0.115)); } else torso.visible = false;
+    if (L > 1e-3) { const tq = basis(spine, f); torso.visible = true; torso.matrix.compose(p.addVectors(top, bot).multiplyScalar(0.5), tq, s.set(Math.max(0.13, shW / 2 + 0.03), L, 0.12)); } else torso.visible = false;
     const pq = basis(L > 1e-3 ? spine : UP, f); ball(pelvis, hm, Math.max(0.12, hpW / 2 + 0.05), 0.11, 0.105, pq);
     // head: the nose is on the face; the skull centre sits behind and above it
     hc.copy(J[0]).addScaledVector(f, -0.075); hc.y += 0.035;
