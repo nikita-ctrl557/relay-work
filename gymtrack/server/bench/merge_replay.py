@@ -4,11 +4,13 @@
                                       replay/{floor,cables}.json             (slim, what the frontend reads)
 Segment start offsets are taken from the published data so times line up with the existing video parts.
 """
-import json, os, collections
+import json, os, sys, collections
 S = '/tmp/claude-0/-home-user-relay-work/851771c1-781b-56fa-9dda-a42b6ec0afa3/scratchpad/'
 R = os.environ.get('RUN_DIR', S + 'rerun/'); OUT = S + 'replay/'
 os.makedirs(R + 'merged', exist_ok=True)
 CAMS = {"floor": [f"floor{i}" for i in range(7)], "cables": ["cables0", "cables1"]}
+if len(sys.argv) > 1:  # merge only these cameras, e.g. "python merge_replay.py cables"
+    CAMS = {k: v for k, v in CAMS.items() if k in sys.argv[1:]}
 SET_KEYS = ("t0", "t1", "m", "reps", "who", "pid", "ex", "ex_conf", "credit", "reps_low_conf")
 
 for cam, segs in CAMS.items():
