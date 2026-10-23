@@ -626,7 +626,7 @@ def _lm(fun, jac, x0, max_iter=40, f_scale=1.5, tol=1e-4, robust=None):
         d = A.diagonal() + 1e-9
         improved = False
         for _try in range(6):
-            dx = spsolve(A + diags(lam * d), -g)
+            dx = spsolve(A + diags(lam * d), -g, permc_spec="NATURAL")
             xn = x + dx
             rn = fun(xn)
             cn = costf(rn, f_scale)

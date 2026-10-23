@@ -397,7 +397,7 @@ def extra_terms(X, hand, bend_ok, cam=None):
         fd = fwd - (fwd * u).sum(-1, keepdims=True) * u
         fdn = np.linalg.norm(fd, axis=-1)
         fd = fd / np.maximum(fdn, 1e-6)[:, None]
-        o = (off * fd).sum(-1) * np.clip(fdn / 0.3, 0, 1)       # leg along the facing: no preference
+        o = (off * fd).sum(-1) * np.clip(fdn / 0.1, 0, 1)       # leg along the facing: no preference
         out.append(_relu(-o + 0.005) / 0.01)
     # legs apart: thighs >= 10 cm, shanks >= 7 cm
     out.append(_relu(0.12 - _pair_min(X[:, LHIP], X[:, LKN], X[:, RHIP], X[:, RKN])) / 0.01)
@@ -422,7 +422,7 @@ def extra_terms(X, hand, bend_ok, cam=None):
     kf = np.minimum((_unit(X[:, LKN] - X[:, LHIP]) * _unit(X[:, LAN] - X[:, LKN])).sum(-1),
                     (_unit(X[:, RKN] - X[:, RHIP]) * _unit(X[:, RAN] - X[:, RKN])).sum(-1))
     straight = 1 / (1 + np.exp(-(kf - 0.88) / 0.02))
-    out.append(_relu(np.cos(np.radians(45)) - cz) / 0.03 * straight * (1 - bend_ok))
+    out.append(_relu(np.cos(np.radians(38)) - cz) / 0.03 * straight * (1 - bend_ok))
     # standing (straight legs, hips up): the lower ankle on the floor
     za = _smoothmin(X[:, LAN, 2], X[:, RAN, 2], 0.02) - ANKLE_Z
     up = 1 / (1 + np.exp(-(mh[:, 2] - 0.65) / 0.03))
@@ -594,8 +594,13 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         pr = RefineProblem(cam, UV[sl], W[sl], g[sl], L, hand, (prior[0][sl], prior[1][sl]), bend_ok[sl], pins[sl])
         x0 = X0[sl].copy()
         if prev is not None and s < prev:
+            # continuity: the overlap starts from, and is held near, the previous window's answer
             k = prev - s
             x0[:k] = out[s:prev] / np.maximum(wsum[s:prev], 1e-9)[:, None, None]
+            Pw, Mw = pr.prior
+            Pw, Mw = Pw.copy(), Mw.copy()
+            Pw[:k], Mw[:k] = x0[:k], 3.0
+            pr.prior = (Pw, Mw)
         sol = P3._lm(pr.residuals, pr.jac, x0.ravel(), max_iter=iters, robust=pr.robust_mask(x0.ravel()))
         Xw = sol.x.reshape(-1, 13, 3)
         n = e - s

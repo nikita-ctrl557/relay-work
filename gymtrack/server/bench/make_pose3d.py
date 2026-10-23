@@ -199,6 +199,7 @@ def deswap(uv, w):
 
 
 HEIGHT_RANGE = (1.55, 1.95)
+FIT_MIRROR = os.environ.get("FIT_MIRROR", "0") == "1"   # orientation is resolved later (pose3d_post.fix_flips)
 
 
 def person_groups(cam, pieces, prior_w):
@@ -249,7 +250,7 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, t
                 if not prior[1].any():
                     prior = None
         try:
-            res = P3.fit_track(cam, t, uv, w, groups=groups, prior=prior, prior_rel=True, try_mirror=try_mirror)
+            res = P3.fit_track(cam, t, uv, w, groups=groups, prior=prior, prior_rel=True, try_mirror=try_mirror and FIT_MIRROR)
         except Exception as ex:  # noqa
             print("fit failed", repr(ex), flush=True)
             continue
@@ -432,8 +433,12 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             R = it["R"]
             ang = P3.joint_angles(R["X"], it["hand"])
             A = np.stack([ang[k] for k in P3.ANGLES], 1)
-            # one steady track per piece (pieces are split at > 2 s without a 2D sample; shorter gaps are bridged)
-            tracks.append((ph, encode_track(pid, R["t"], R["X"], A, R["fwd"], R["U"], hz)))
+            # one steady track per piece (pieces are split at > 2 s without a 2D sample; shorter gaps are bridged),
+            # cut where the body jumps (> 0.6 m in one step: a tracker identity switch or a depth jump)
+            jump = np.flatnonzero(np.linalg.norm(np.diff(R["X"], axis=0), axis=-1).max(1) > 0.6) + 1
+            for a_, b_ in zip(np.r_[0, jump], np.r_[jump, len(R["t"])]):
+                if b_ - a_ >= 5:
+                    tracks.append((ph, encode_track(pid, R["t"][a_:b_], R["X"][a_:b_], A[a_:b_], R["fwd"][a_:b_], R["U"][a_:b_], hz)))
             angles_by_pid.setdefault(pid, []).append((R["t"], A))
             q = P3.quality(cam, it["t"], it["uv"], it["w"], interp_track(R["t"], R["X"], it["t"]), it["hand"])
             q["jitter_mps2"] = PP.jitter(R["t"], R["X"])
@@ -445,6 +450,40 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             mp["segments"].append({"segment": seg["name"], "t0": float(R["t"][0]), "t1": float(R["t"][-1]),
                                    "frames": int(len(R["t"])), "learned_keyframes": it["n_prior"],
                                    "quality": {k: (round(float(v), 3) if np.isfinite(v) else None) for k, v in q.items()}})
+    # no teleports between a person's consecutive tracks: a later track that starts too far away too soon
+    # (tracker identity switch, or a depth jump) starts later (> 2 s gap) or is dropped
+    by_pid = {}
+    for k, (ph, tr) in enumerate(tracks):
+        by_pid.setdefault(tr["pid"], []).append(k)
+    drop = set()
+    for pid, ks in by_pid.items():
+        ks.sort(key=lambda k: tracks[k][1]["t0"])
+        last = None
+        for k in ks:
+            tr = tracks[k][1]
+            X = delta_decode(tr["P"], 39).reshape(tr["n"], 13, 3) * tr["u"] / 100
+            if last is not None:
+                t_end, p_end = last
+                feet = (X[:, P3.LAN, :2] + X[:, P3.RAN, :2]) / 2
+                ts = tr["t0"] + np.arange(tr["n"]) / tr["hz"]
+                ok = [(ts[i] - t_end > 2.0) or np.linalg.norm(feet[i] - p_end) <= max(1.4, 2.4 * (ts[i] - t_end))
+                      for i in range(tr["n"])]
+                i0 = 0
+                while i0 < tr["n"] and not ok[i0]:
+                    i0 += 1
+                if i0 >= tr["n"] - 10:
+                    drop.add(k)
+                    continue
+                if i0 > 0:
+                    A = delta_decode(tr["A"], 12)
+                    F = np.frombuffer(base64.b64decode(tr["F"]), "<i2")
+                    fw = np.stack([np.cos(F / 100), np.sin(F / 100)], 1)
+                    U = np.repeat(np.array(tr["U"], float)[None] / 100, tr["n"], 0)
+                    tracks[k] = (tracks[k][0], encode_track(pid, ts[i0:], X[i0:], A[i0:], fw[i0:], U[i0:], tr["hz"]))
+                    tr = tracks[k][1]
+                    X = X[i0:]
+            last = (tr["t0"] + (tr["n"] - 1) / tr["hz"], (X[-1, P3.LAN, :2] + X[-1, P3.RAN, :2]) / 2)
+    tracks = [x for k, x in enumerate(tracks) if k not in drop]
     # size cap: drop phase C, shortest first
     def size(tr):
         return sum(len(json.dumps(x[1], separators=(",", ":"))) + 1 for x in tr)
