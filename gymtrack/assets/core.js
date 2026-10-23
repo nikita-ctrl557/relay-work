@@ -596,7 +596,7 @@ class ServerSource {
     if (!this.cfg.plan || !cams.length) return [];
     return [{id: "gym", name: this.cfg.gym, width: this.cfg.plan.width, depth: this.cfg.plan.depth, approx: cams.some(c => c.calib.approx),
       items: this.cfg.plan.items || [], height: this.cfg.plan.height, cameras: cams.map(c => ({id: c.id, calib: c.calib})),
-      zones: cams.flatMap(c => { const H = homography(c.calib.image, c.calib.plan); return c.zones.map(z => ({machine: z.machine, poly: projectZone(z.polygon, c.calib, H)})); })}];
+      zones: cams.flatMap(c => { const H = homography(c.calib.image, c.calib.plan); return c.zones.map(z => ({machine: z.machine, poly: z.plan || projectZone(z.polygon, c.calib, H)})); })}];
   }
   async setCalibration(camId, calib, size) { await this.j("api/cameras/" + encodeURIComponent(camId) + "/calibration", {method: "PUT", body: JSON.stringify({...calib, ...(size || {})})}); await this.config(); }
   peopleNow(camId) { // cached; refreshed in the background at ~4/s so the overlay stays smooth
@@ -806,7 +806,7 @@ class ReplaySource {
   H(c) { return c._H ||= c.calib ? homography(c.calib.image, c.calib.plan) : null; }
   plans() {
     return [this.act].filter(c => c?.calib && c.plan).map(c => ({id: c.id, name: c.plan.name || c.name, width: c.plan.width, depth: c.plan.depth, approx: !!c.calib.approx,
-      zones: c.zones.map(z => ({machine: z.machine, poly: projectZone(z.polygon, c.calib, this.H(c))})),
+      zones: c.zones.map(z => ({machine: z.machine, poly: z.plan || projectZone(z.polygon, c.calib, this.H(c))})),
       items: c.plan.items || [], height: c.plan.height, cameras: [{id: c.id, calib: c.calib}],
       view: c.calib.view || null}));
   }

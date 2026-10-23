@@ -464,7 +464,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const views = {
     iso: () => { const r = rv(); if (r) { // just behind and above the camera, looking into the room it sees
         const p = V3(r.pos), t = V3(r.target), back = p.clone().sub(t).setY(0).normalize();
-        return {pos: p.addScaledVector(back, camera.aspect < 1.2 ? 3.2 : 2.2).add(new THREE.Vector3(0, camera.aspect < 1.2 ? 2.4 : 1.6, 0)), look: t}; }
+        return {pos: p.addScaledVector(back, camera.aspect < 1.2 ? 5.5 : 2.2).add(new THREE.Vector3(0, camera.aspect < 1.2 ? 5 : 1.6, 0)), look: t}; }
       const look = new THREE.Vector3(CX, 0, CZ), tall = camera.aspect < 1.2; // portrait: look down more steeply so the room fills the frame
       return {pos: fitPos(tall ? (RW > RD ? new THREE.Vector3(0.78, 1.05, 0.3) : new THREE.Vector3(0.3, 1.05, 0.78)) : new THREE.Vector3(0.5, 0.72, 0.9), look, tall ? 0.94 : 0.9), look}; },
     top: () => { const r = rv(); if (r) { // a single camera's room only holds up from its own side: look steeply down from there, not straight down
@@ -522,10 +522,10 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     if (ts - last > 30) { last = ts; sync(); }
     if (ts - heatAt > 3000) { heatAt = ts; lastHeat = heat(); }
     if (ts - colAt > 1000) { colAt = ts; applyColours(); }
-    if (anim) { anim.t = Math.min(1, anim.t + 0.04); const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.l0, anim.l1, e); camera.fov = anim.f0 + (anim.f1 - anim.f0) * e; camera.updateProjectionMatrix(); if (anim.t >= 1) anim = null; }
+    if (anim) { anim.t = Math.min(1, (ts - (anim.s ??= ts)) / 700); /* time-based: slow devices land in the same place */ const e = anim.t * anim.t * (3 - 2 * anim.t); camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.l0, anim.l1, e); camera.fov = anim.f0 + (anim.f1 - anim.f0) * e; camera.updateProjectionMatrix(); if (anim.t >= 1) anim = null; }
     if (room && ts - segAt_ > 500) { segAt_ = ts; showSeg(segAt(clock?.())); }
     controls.update();
-    if (curView === "cam" && !userMoved && !anim && rv()?.roll) camera.rotateZ(-rv().roll); // the footage's own roll (orbiting levels it again)
+    if (curView === "cam" && !userMoved && !anim && rv()?.roll) camera.rotateZ(rv().roll); // the footage's own roll (orbiting levels it again)
     if (roomCam.visible !== (roomOn && !!roomCur && camera.position.distanceTo(roomCam.position) > 4.5)) roomCam.visible = !roomCam.visible;
     const rect = renderer.domElement.getBoundingClientRect(), W = rect.width, H = rect.height, showP = layer() !== "heat" && peopleMode !== "off";
     const taken = []; // screen rects already used by people tags; machine labels avoid them

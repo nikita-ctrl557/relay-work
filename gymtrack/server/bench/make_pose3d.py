@@ -238,7 +238,7 @@ def encode_track(pid, t, X, A, fwd, U, hz):
 # ---------------------------------------------------------------------------------------------------------
 
 def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0, people=None, window=None,
-         log=print, min_frames=8, member_s=45):
+         log=print, min_frames=8, member_s=45, phases="ABC"):
     W, Hh = 640, 360
     t_start = time.time()
     sam, n_rec, n_match = load_sam(sam_dir, cam_id, replay, W, Hh)
@@ -262,6 +262,8 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
             by.setdefault(pid, []).append((t, uv, w))
         for pid, pieces in by.items():
             ph = "A" if pid in setp else "B" if pid in memb else "C"
+            if ph not in phases:
+                continue
             s_ = sam.get(pid)
             if s_ is not None:
                 m = (s_[0] >= t0) & (s_[0] < t1)
@@ -376,13 +378,14 @@ def main(argv=None):
     ap.add_argument("--people")
     ap.add_argument("--window")
     ap.add_argument("--cams-cache")
+    ap.add_argument("--phases", default="ABC", help="only these priority groups (to run them separately / merge)")
     a = ap.parse_args(argv)
     replay = json.load(open(a.replay))
     cam_id = a.cam_id or Path(a.replay).stem
     segcams = segment_cams(replay, a.configs, a.cams_cache)
     people = {int(p) for p in a.people.split(",")} if a.people else None
     window = tuple(float(v) for v in a.window.split(",")) if a.window else None
-    out = make(replay, segcams, a.sam, cam_id, a.hz, a.jobs, a.max_mb, people, window)
+    out = make(replay, segcams, a.sam, cam_id, a.hz, a.jobs, a.max_mb, people, window, phases=a.phases)
     path = a.out or a.replay.replace(".json", ".pose3d.json")
     json.dump(out, open(path + ".tmp", "w"), separators=(",", ":"))
     os.replace(path + ".tmp", path)
