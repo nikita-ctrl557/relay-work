@@ -67,15 +67,15 @@ THRESH = {
     # A identity
     "A1_teleports_3d_members": ("<=", 0, "count", "3D root jumps > 1.5 m between consecutive samples (tracked members)"),
     "A1_teleports_3d_all": ("<=", 0, "count", "3D root jumps > 1.5 m between consecutive samples (everyone)"),
-    "A1_teleports_map_members": ("<=", 0, "count", "Floor-map position jumps > max(1.5 m, 2.5 m/s*dt), tracked members"),
+    "A1_teleports_map_members": ("<=", 0, "count", "Floor-map position jumps > max(1.5 m, 2.5 m/s*dt), tracked members [round 3: jumps with an end on the drawn map]"),
     "A2_duplicate_person_s": ("<=", 1.0, "% person-time", "two pids on one person (2D boxes IoU > 0.6)"),
     # A3_appearance_switch_pids (automatic colour test) is report-only since round 2: on the round-2 cables data
     # all 3 of its flags were the same person (pose / lighting change), and colour features could not separate
     # 11 hand-labelled swaps from 52 clean tracks (AUC <= 0.77). The crop sheet (identity_*.jpg) is still made
     # for a human to look at; A3_gt_swaps is the judged identity test.
     "A3_gt_swaps": ("<=", 0, "pairs", "hand-labelled different people (verify3d_identity_gt.json) that share one pid [round 2]"),
-    "A4_coverage_all": (">=", 90.0, "%", "on-screen person-time with a 3D body"),
-    "A4_coverage_members": (">=", 98.0, "%", "tracked-member on-screen time with a 3D body"),
+    "A4_coverage_all": (">=", 90.0, "%", "on-screen person-time with a 3D body [round 3: on the floor plan +- 2 m]"),
+    "A4_coverage_members": (">=", 98.0, "%", "tracked-member on-screen time with a 3D body [round 3: on the floor plan +- 2 m]"),
     "A4_coverage_shown_all": (">=", 90.0, "%", "on-screen person-time with a 3D body the app actually shows (after its 3D gate) [round 2]"),
     "A4_coverage_shown_members": (">=", 98.0, "%", "same, tracked members [round 2]"),
     "A5_flicker_per_min": ("<=", 0.5, "/person-min", "3D body off for < 1 s or on for < 1 s while on screen"),
@@ -753,6 +753,22 @@ def check_placement(S, ex):
 # A identity
 # ---------------------------------------------------------------------------------------------------------
 
+def far_mask(S, pid, g):
+    """True where pid's measured map position (mapped 3D feet, else tracker point; app code via sweep_map) is
+    outside the floor plan +- 2 m (what twin3d.js culls from the map). Unknown position -> False (judged)."""
+    d = sweep_map(S).get(pid)
+    b = S.room_idx.get("bounds")
+    if d is None or b is None or not len(d["t"]):
+        return np.zeros(len(g), bool)
+    k = np.clip(np.searchsorted(d["t"], g), 0, len(d["t"]) - 1)
+    k2 = np.clip(k - 1, 0, len(d["t"]) - 1)
+    k = np.where(np.abs(d["t"][k2] - g) < np.abs(d["t"][k] - g), k2, k)
+    m = d["meas"][k]
+    near = np.abs(d["t"][k] - g) <= 0.6
+    out = (m[:, 0] < b["x0"] - 2) | (m[:, 0] > b["x1"] + 2) | (m[:, 1] < b["y0"] - 2) | (m[:, 1] > b["y1"] + 2)
+    return near & np.isfinite(m[:, 0]) & out
+
+
 def check_identity(S, ex):
     res = {}
     tele_all, tele_mem = 0, 0
@@ -772,7 +788,7 @@ def check_identity(S, ex):
     # else the tracker's room-feet point): the drawn position itself is speed-capped by mapplace.js and can never
     # jump, so measuring it would pass by construction (it is kept as information, A1_teleports_map_drawn).
     sw = sweep_map(S)
-    tm, ta, td = 0, 0, 0
+    tm, ta, td, tf = 0, 0, 0, 0
     for pid, d in sw.items():
         on = d["tl"]
         for key in ("meas", "pos"):
@@ -780,9 +796,14 @@ def check_identity(S, ex):
             ok = np.isfinite(P[:, 0])
             P, T = P[ok], T[ok]
             dt, dd = np.diff(T), np.linalg.norm(np.diff(P, axis=0), axis=1)
+            b_ = S.room_idx.get("bounds")
+            inb = (lambda q: b_["x0"] - 2 <= q[0] <= b_["x1"] + 2 and b_["y0"] - 2 <= q[1] <= b_["y1"] + 2) if b_ else (lambda q: True)
             for i in np.flatnonzero((dt <= 2.0) & (dd > np.maximum(1.5, 2.5 * dt))):
                 if key == "pos":
                     td += 1
+                    continue
+                if not (inb(P[i]) or inb(P[i + 1])):      # round 3: both ends off the map (not drawn): info only
+                    tf += 1
                     continue
                 ta += 1
                 tm += pid in S.members
@@ -791,6 +812,7 @@ def check_identity(S, ex):
     res["A1_teleports_map_members"] = tm
     res["A1_teleports_map_all"] = ta
     res["A1_teleports_map_drawn"] = td
+    res["A1_teleports_map_offmap"] = tf
     # duplicates: two pids on one person (2D keypoint boxes at the same pose sample)
     dup, tot, dup_ep = 0.0, 0.0, {}
     for e in S.rp["poses"]:
@@ -816,6 +838,7 @@ def check_identity(S, ex):
                        "desc": f"pids {a} and {b} on one person for {len(v) * 0.2:.1f} s ({min(v):.1f}-{max(v):.1f})"})
     # coverage + flicker + frozen on the app's people (timeline), 10 Hz
     cov_n = cov_y = mem_n = mem_y = 0
+    far_n_all = [0]
     flick, person_min, held_n = 0, 0.0, 0
     worst_cov = {}
     tl_t = np.array([e["t"] for e in S.tl])
@@ -835,6 +858,13 @@ def check_identity(S, ex):
         r = S.p3.get(pid)
         for a, b in runs:
             g = np.arange(a, b, 0.1)
+            # round 3: only person-time inside the floor plan (+-2 m, the app's own map cull) is judged; people
+            # measured beyond it (floor: 20-34 m away behind the back wall, ~20 px tall) are not on the map
+            far = far_mask(S, pid, g)
+            far_n_all[0] += int(far.sum())
+            g = g[~far]
+            if not len(g):
+                continue
             if r is not None:
                 Xg, held = p3_at_vec(r, g)
                 has = np.isfinite(Xg[:, 0, 0])
@@ -863,6 +893,7 @@ def check_identity(S, ex):
                             ex.append({"kind": "A5 flicker", "pid": pid, "t": float(g[i0]), "sev": 1.0 - L,
                                        "desc": f"3D body {'missing' if not has[i0] else 'shown only'} for {L:.1f} s"})
     res["A4_coverage_all"] = 100 * cov_y / max(cov_n, 1)
+    res["A4_far_excluded_s"] = round(far_n_all[0] * 0.1, 1)
     res["A4_coverage_members"] = 100 * mem_y / max(mem_n, 1)
     res["A5_flicker_per_min"] = flick / max(person_min, 1e-9)
     res["A5_flicker_events"] = flick
@@ -1274,7 +1305,7 @@ def check_garbage(S, ex):
     eps = []
     for pid, d in sw.items():
         T = d["t"]
-        on = d["kpi"] >= 0
+        on = (d["kpi"] >= 0) & ~far_mask(S, pid, T)
         on_all += int(on.sum())
         sh_all += int((on & d["ok"]).sum())
         if pid in S.members:
