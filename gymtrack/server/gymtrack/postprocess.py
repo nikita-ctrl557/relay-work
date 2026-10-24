@@ -27,7 +27,7 @@ from .credit import CREDIT_MIN, assign
 from .exercises import drop_fake_sets, refine_sets
 
 AT_KEEP = 0.35      # credited person at the machine this share of the set (of the time they were seen): keep
-AT_TAKE = 0.6       # someone else at the machine this share of the set, planted for half of it: they take it
+AT_TAKE = 0.6       # someone else seen for half the set or more, at the machine this share of it and planted / still: they take it
 AT_PLAN_M = 0.6     # "at the machine" also counts feet within this of the zone's floor footprint (plan metres): its user station
 AT_FAR_M = 1.5      # ... but feet inside the zone's picture this far from the footprint are someone behind it
 STILL_PX = 4.0      # median feet step (px per timeline step, ~1 s) of someone lying / sitting still at a machine (not "planted": upright)
@@ -159,7 +159,7 @@ def lifter_location(sets: list[dict], timeline: list[dict], zones: dict, W: floa
             f = np.asarray(feet[p], float)
             return planted[p] >= 0.5 * seen[p] or (len(f) > 2 and float(np.median(np.hypot(*np.diff(f, axis=0).T))) <= STILL_PX)
         alts = [(at[p] / n * (0.5 + 0.5 * inside[p] / seen[p]), p) for p in at
-                if p != c and p not in busy and at[p] >= AT_TAKE * n and still(p)]
+                if p != c and p not in busy and seen[p] >= 0.5 * n and at[p] >= AT_TAKE * seen[p] and still(p)]
         if not alts:
             if c is not None:
                 s["off_machine"] = round(at.get(c, 0) / max(seen.get(c, 1), 1), 2)
