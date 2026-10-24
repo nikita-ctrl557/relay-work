@@ -476,7 +476,7 @@ class RefineProblem(P3._Problem):
         self.lying = okl & (np.abs(d[:, 0]) > 1.6 * np.abs(d[:, 1])) & (np.linalg.norm(d, axis=-1) > 15)
         self.bend_ok = np.where(self.lying, np.maximum(self.bend_ok, 2.0), self.bend_ok)
 
-    def set_neutral(self, X0, groups, seated=None):
+    def set_neutral(self, X0, groups, seated=None, inner=None):
         """Unseen limb joints get a weak pull to a relaxed pose hanging from their visible parents (legs straight
         down from the hips, arms down the sides): a partly visible person stands or sits plausibly instead of
         flailing limbs into the air."""
@@ -484,7 +484,7 @@ class RefineProblem(P3._Problem):
         T = self.T
         tgt = np.full((T, 13, 3), np.nan)
         uv = self.uv
-        border = (uv[..., 0] <= 4) | (uv[..., 0] >= 636) | (uv[..., 1] <= 4) | (uv[..., 1] >= 356)
+        border = ((uv[..., 0] <= 4) | (uv[..., 0] >= 636) | (uv[..., 1] <= 4) | (uv[..., 1] >= 356)) if inner is None else ~inner
         unseen = (self.w <= 0) | border
         mh = (X0[:, LHIP] + X0[:, RHIP]) / 2
         ms = (X0[:, LSH] + X0[:, RSH]) / 2
@@ -718,7 +718,7 @@ def seated_pose(X, groups, hand, P):
 
 
 def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=None, anchor=None, sets=(),
-                       seat=None):
+                       seat=None, inner=None):
     import os
     iters = iters or int(os.environ.get("REFINE_ITERS", 20))
     """Robust windowed solve on the grid. Xs: smoothed fitted track (G, 13, 3) used as prior + start."""
@@ -768,7 +768,7 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         sl = slice(s, e)
         pr = RefineProblem(cam, UV[sl], W[sl], g[sl], L, hand, (prior[0][sl], prior[1][sl]), bend_ok[sl], pins[sl],
                            anchor=None if anchor is None else anchor[sl])
-        pr.set_neutral(X0[sl], groups, seated[sl])
+        pr.set_neutral(X0[sl], groups, seated[sl], None if inner is None else inner[sl])
         if ex_rows:
             pr.lin = [(f - s, terms, tgt, sg) for f, terms, tgt, sg in ex_rows if s <= f < e]
         x0 = X0[sl].copy()

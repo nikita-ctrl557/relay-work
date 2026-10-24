@@ -235,16 +235,35 @@ def aim_warps(segcams, room_index, session, same_px=1.0):
         seg = dict(seg)
         st = [e for e in ridx.get("segments", []) if e["t1"] > seg["start"] + 1e-6 and e["t0"] < seg["end"] - 1e-6]
         warps, stretches = [], []
-        for e in st:
-            c = room_cam(json.load(open(rdir / e["file"])))
-            a, b = max(e["t0"], seg["start"]), min(e["t1"], seg["end"])
-            stretches.append((a, b, c.to_dict(), e["seg"]))
-            if cam is not None and _cam_offset_px(cam, c) >= same_px:
-                warps.append((a, b, c.to_dict()))
-        if warps:
+        cs = [(e, room_cam(json.load(open(rdir / e["file"])))) for e in st]
+        if cam is not None and cs and any(_cam_offset_px(cam, c) >= same_px for _, c in cs):
+            # a rotation-only warp needs one camera centre and focal length: the base becomes the room framing
+            # nearest to the calibrated camera (all framings of a segment share the room's centre and lens)
+            cam = min((c for _, c in cs), key=lambda c: _cam_offset_px(cam, c))
+            for e, c in cs:
+                a, b = max(e["t0"], seg["start"]), min(e["t1"], seg["end"])
+                stretches.append((a, b, c.to_dict(), e["seg"]))
+                if _cam_offset_px(cam, c) >= 0.05:
+                    warps.append((a, b, c.to_dict()))
             seg["warps"], seg["stretches"] = warps, stretches
         out.append((seg, cam))
     return out
+
+
+_WARPS = []        # [(t0, t1, true camera dict)] of the current session (set by make before the worker pool forks)
+
+
+def raw_inner(cam, g, UV):
+    """(G, 13) joints inside the real frame (not pinned to its border): for samples warped from a re-aimed stretch
+    the test is on the pixels the real camera saw."""
+    UVr = np.array(UV, float)
+    for a, b, d in _WARPS:
+        m = (g >= a) & (g < b)
+        if m.any():
+            tc = PinholeCamera.from_dict(d)
+            UVr[m] = tc.project(cam.C + cam.ray(UVr[m]))
+    with np.errstate(invalid="ignore"):
+        return (UVr[..., 0] > 4) & (UVr[..., 0] < 636) & (UVr[..., 1] > 4) & (UVr[..., 1] < 356)
 
 
 def true_cam_at(segcams, t):
@@ -274,7 +293,9 @@ def cam_entries(replay, segcams):
         own = PinholeCamera.from_dict(groups[0][0]["base"]) if groups[0][0].get("base") else groups[0][1]
         out.append(ent(rs["name"], own))      # the segment's base aim (the floor-plan calibration's)
         for a, b, d, nm in groups[0][0].get("stretches") or []:
-            out.append(ent(rs["name"], PinholeCamera.from_dict(d), t0=round(a, 3), t1=round(b, 3), aim=nm))
+            c_ = PinholeCamera.from_dict(d).to_dict()
+            c_["R"] = [[round(v, 7) for v in row] for row in c_["R"]]
+            out.append({"segment": rs["name"], "t0": round(a, 3), "t1": round(b, 3), "aim": nm, "camera": c_})
         if len(groups) > 1:
             for s_, c in groups:
                 out.append(ent(rs["name"], c, t0=round(s_["start"], 3), t1=round(s_["end"], 3), aim=s_["aim"]))
@@ -376,10 +397,10 @@ def collapse_unseen(uv, w):
     return w
 
 
-HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), 1.95)
+HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.64)), 1.95)
 Q_MIN = int(os.environ.get("Q_MIN", 20))          # frames below this confidence are not exported
 DEPTH_CAP_ON = os.environ.get("DEPTH_CAP", "1") == "1"     # far people: no faster-than-walking depth hops
-HIDDEN_FEET_ON = os.environ.get("HIDDEN_FEET", "1") == "1"   # ankles behind an occluder: trust the head ray
+HIDDEN_FEET_ON = os.environ.get("HIDDEN_FEET", "0") == "1"   # ankles behind an occluder: trust the head ray
 SEATS_ON = os.environ.get("SEATS", "1") == "1"          # seated prior from the seat / bench geometry
 AIMS_ON = os.environ.get("AIMS", "1") == "1"            # per re-aim cameras (assets/room/index.json stretches)
 EX_PRIORS_ON = os.environ.get("EX_PRIORS", "1") == "1"     # exercise-aware priors during credited sets
@@ -470,9 +491,15 @@ def cap_depth_speed(cam, g, X, near=8.0, win=1.5, vmax=2.5):
         lim = vmax * (g[i + 1] - g[i])
         b[i] = np.clip(rm[i], b[i + 1] - lim, b[i + 1] + lim)
     rs = (f + b) / 2
-    use = (r > near) | (rs > near)
-    k = np.where(use, rs / np.maximum(r, 1e-6), 1.0)
-    shift = v * (k - 1)[:, None]
+    # the correction itself is smooth in time (no frame-to-frame steps) and fades in beyond `near`
+    d = rs - r
+    wgt = np.clip((np.maximum(r, rs) - near) / 2.0, 0, 1)
+    d = d * wgt
+    sig = 0.4
+    K = np.exp(-0.5 * ((g[:, None] - g[None, :]) / sig) ** 2)
+    K = K * (np.abs(g[:, None] - g[None, :]) < 3 * sig)
+    d = (K @ d) / np.maximum(K.sum(1), 1e-9)
+    shift = (v / np.maximum(r, 1e-6)[:, None]) * d[:, None]
     Y = X.copy()
     Y[:, :, :2] += shift[:, None, :]
     return Y
@@ -518,6 +545,14 @@ def hidden_feet(cam, g, Xs, UV, Wg, anc, seat=None, tol=1.5, rel=0.12):
     d = np.linalg.norm(hs[:, :2] - cam.C[:2], axis=1)
     off = np.linalg.norm(foot - hs, axis=1)
     hid = ok & np.isfinite(off) & (off > np.maximum(tol, rel * d))
+    # steady decisions: isolated frames do not count, and a hidden stretch is widened by 0.5 s each side
+    if hid.any():
+        idx = np.flatnonzero(hid)
+        keep = np.zeros(G, bool)
+        for run in np.split(idx, np.flatnonzero(np.diff(idx) > 2) + 1):
+            if len(run) >= 3:
+                keep[max(0, run[0] - 5):run[-1] + 6] = True
+        hid = keep & np.isfinite(hs).all(1)
     if hid.any():
         Wg[np.ix_(hid, [P3.LKN, P3.RKN, P3.LAN, P3.RAN])] = 0.0
         anc[hid] = hs[hid]
@@ -542,16 +577,17 @@ def reject_hops(g, anc, win=2.5, tol=0.8):
     return out
 
 
-def frame_quality(cam, g, X, UV, Wg, boxes=None):
+def frame_quality(cam, g, X, UV, Wg, boxes=None, inner=None):
     """Per grid frame confidence 0..100 from what the 2D shows: reprojection error relative to the person's image
     height, number of joints seen, body cut by the frame edge, body unreasonably close to the camera. Frames
     without a 2D sample take the nearest sampled frames' value."""
     G = len(g)
+    INNER = raw_inner(cam, g, UV) if inner is None else inner
     q = np.full(G, np.nan)
     for i in range(G):
         m = Wg[i] > 0
         # joints the detector pinned to the frame border are clamped guesses: judge the body on the rest
-        inner = (UV[i][:, 0] > 4) & (UV[i][:, 0] < 636) & (UV[i][:, 1] > 4) & (UV[i][:, 1] < 356)
+        inner = INNER[i]
         edge = bool((m & ~inner).any() or (m.sum() < 13))
         m = m & inner
         if m.sum() < 3:
@@ -635,14 +671,14 @@ def app_gate_ok(cam, X, t, t2, uv2, w2, box_t=None, box_v=None):
     return ok
 
 
-def seat_targets(cam, UV, Wg, seats):
+def seat_targets(cam, UV, Wg, seats, g=None):
     """(G, 3) mid-hip on a seat, NaN elsewhere: both hips seen, the hip ray meets a seat's height inside its footprint
     (+10 cm), and the legs are hidden or bent in the image (a person standing next to a bench keeps standing)."""
     G = len(UV)
     out = np.full((G, 3), np.nan)
     if not seats:
         return out
-    inner = (UV[..., 0] > 4) & (UV[..., 0] < 636) & (UV[..., 1] > 4) & (UV[..., 1] < 356)
+    inner = raw_inner(cam, g, UV)
     seen = (Wg > 0) & inner
     for i in range(G):
         if not (seen[i, P3.LHIP] and seen[i, P3.RHIP]):
@@ -729,15 +765,16 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
         far = np.array([np.abs(ta - gi).min() > 1.1 for gi in g])
         anc[far] = np.nan
         anc = reject_hops(g, anc)
-    seat = seat_targets(cam, UV, Wg, seats) if SEATS_ON else None
+    seat = seat_targets(cam, UV, Wg, seats, g) if SEATS_ON else None
     if HIDDEN_FEET_ON:
         UV, Wg, anc = hidden_feet(cam, g, Xs, UV, Wg, anc, seat)
-    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc, sets=ex_sets, seat=seat)
+    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc, sets=ex_sets, seat=seat,
+                                     inner=raw_inner(cam, g, UV))
     if DEPTH_CAP_ON:
         Xr = cap_depth_speed(cam, g, Xr)
-    Q = frame_quality(cam, g, Xr, UV, Wg, boxes)
+    Q = frame_quality(cam, g, Xr, UV, Wg, boxes, raw_inner(cam, g, UV))
     # per-joint confidence: seen in the 2D (not pinned to the frame border) 100, seen within 0.5 s 70, inferred 30
-    inner = (UV[..., 0] > 4) & (UV[..., 0] < 636) & (UV[..., 1] > 4) & (UV[..., 1] < 356)
+    inner = raw_inner(cam, g, UV)
     seen = (Wg > 0) & inner
     Cj = np.where(seen, 100, 30).astype(float)
     for j in range(13):
@@ -781,7 +818,8 @@ def conf_decay(C, hz=10):
         d = np.abs(np.arange(n) - idx[np.clip(k, 0, len(idx) - 1)])
         if len(idx) > 1:
             d = np.minimum(d, np.abs(np.arange(n) - idx[k - 1]))
-        out[:, j] = np.where(d == 0, 100, np.where(d <= 0.5 * hz, 70, np.where(d <= 1.0 * hz, 50, 30)))
+        # between the 5 Hz 2D samples (<= 0.25 s away) a joint counts as seen
+        out[:, j] = np.where(d <= 0.25 * hz, 100, np.where(d <= 0.5 * hz, 70, np.where(d <= 1.0 * hz, 50, 30)))
     return out
 
 
@@ -955,6 +993,7 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
     tasks.sort(key=lambda x: (x[0], x[1]))
     log(f"{cam_id}: {len(tasks)} person-segments " + str({ph: (sum(1 for x in tasks if x[0] == ph), -sum(x[1] for x in tasks if x[0] == ph)) for ph in "ABC"}))
     results = []
+    _WARPS[:] = [w_ for sg_, _ in segcams for w_ in (sg_.get("warps") or [])]
     from concurrent.futures import ProcessPoolExecutor, as_completed
     with ProcessPoolExecutor(jobs) as ex:
         futs = {}
