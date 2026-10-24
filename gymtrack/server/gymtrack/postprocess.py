@@ -16,7 +16,11 @@ Order matters:
    it, the set goes to them (a neighbour's arms reaching into the zone, a stander out-scoring the lifter, an
    identity split handing the set to the wrong piece). Without such a person the credit is left as it is,
    unless the set had no pose evidence and a concurrent set's lifter at a neighbouring station reaches into
-   this zone's picture: then it is that set's motion spilling over and is dropped.
+   this zone's picture: then it is that set's motion spilling over and is dropped. When the credited person's
+   feet were well away from the machine's floor footprint (> AT_FAR_M: a free-weight lifter in front of it whose
+   arms cross its picture, someone behind it, a reflection in a back mirror), the set goes to someone who stood
+   or sat still right next to the footprint through a good part of it (a lever's handle end the outline doesn't
+   cover); without one the zone's motion came from outside the machine and the set is dropped ("drop_reason").
    Then one person's set on one machine that a camera move cut in two is joined again.
 5. exercise naming among the station's candidate exercises (exercises.refine_sets).
 """
@@ -32,7 +36,9 @@ AT_TAKE = 0.6       # someone else seen for half the set or more, at the machine
 AT_PLAN_M = 0.6     # "at the machine" also counts feet within this of the zone's floor footprint (plan metres): its user station
 AT_FAR_M = 1.5      # ... but feet inside the zone's picture this far from the footprint are someone behind it
 STILL_PX = 4.0      # median feet step (px per timeline step, ~1 s) of someone lying / sitting still at a machine (not "planted": upright)
-SPILL_BOX = 0.2     # a concurrent lifter elsewhere whose box covers this much of this zone on average reaches into it
+NEAR_GAIN_M = 0.5   # someone taking a set from a credited person far from the machine stands at least this much nearer
+NEAR_SEEN = 0.4     # ... and was there for this share of the set (they may arrive after the zone started moving)
+SPILL_BOX = 0.2    # a concurrent lifter elsewhere whose box covers this much of this zone on average reaches into it
 
 
 def _conflict(a: dict, b: dict) -> bool:
@@ -131,7 +137,7 @@ def lifter_location(sets: list[dict], timeline: list[dict], zones: dict, W: floa
         n = i1 - i0
         if n < 5:
             continue
-        seen, at, planted, inside, feet = {}, {}, {}, {}, {}
+        seen, at, planted, inside, feet, dpl = {}, {}, {}, {}, {}, {}
         x0p, y0p, x1p, y1p = poly[:, 0].min(), poly[:, 1].min(), poly[:, 0].max(), poly[:, 1].max()
         for e in timeline[i0:i1]:
             for q in e["p"]:
@@ -145,6 +151,7 @@ def lifter_location(sets: list[dict], timeline: list[dict], zones: dict, W: floa
                     # feet on the floor footprint, or in the zone's picture and not far from the footprint on the
                     # floor (the polygon also covers whatever stands behind the machine in the picture)
                     ok = dp <= AT_PLAN_M or (ok and dp <= AT_FAR_M)
+                    dpl.setdefault(pid, []).append(dp)
                 seen[pid] = seen.get(pid, 0) + 1
                 at[pid] = at.get(pid, 0) + ok
                 planted[pid] = planted.get(pid, 0) + bool(q[3])
@@ -161,6 +168,29 @@ def lifter_location(sets: list[dict], timeline: list[dict], zones: dict, W: floa
             return planted[p] >= 0.5 * seen[p] or (len(f) > 2 and float(np.median(np.hypot(*np.diff(f, axis=0).T))) <= STILL_PX)
         alts = [(at[p] / n * (0.5 + 0.5 * inside[p] / seen[p]), p) for p in at
                 if p != c and p not in busy and seen[p] >= 0.5 * n and at[p] >= AT_TAKE * seen[p] and still(p)]
+        dc = float(np.median(dpl[c])) if c is not None and len(dpl.get(c, ())) >= 0.5 * seen.get(c, 0) > 0 else None
+        if not alts and dc is not None and dc > AT_FAR_M:
+            # the credited person's feet were well away from the machine's floor footprint through the set (a
+            # free-weight lifter in front of it whose arms cross its picture, someone behind it, a reflection in a
+            # back mirror). Someone standing / sitting still next to the footprint the whole set uses it from a side
+            # its outline doesn't cover (a lever's handle end): theirs. Nobody there: the zone's motion came from
+            # outside the machine, it is not this machine's set, drop it.
+            near = [(float(np.median(dpl[p])), p) for p in dpl
+                    if p != c and p not in busy and seen[p] >= NEAR_SEEN * n and len(dpl[p]) >= 0.5 * seen[p] and still(p)
+                    and float(np.median(dpl[p])) <= min(AT_FAR_M, dc - NEAR_GAIN_M)]
+            if near:
+                d_to, p = min(near)
+                changes.append({"m": s["m"], "t0": s["t0"], "from": c, "to": p, "why": "credited_far", "d_from": round(dc, 2), "d_to": round(d_to, 2)})
+                s["pid"] = p
+                s["credit_by"] = "location"
+                s["credit"] = None
+                s.pop("off_machine", None)
+            else:
+                s["_spill"] = "off_machine"
+                s["drop_reason"] = (f"credited person's feet {dc:.1f} m from the {s['m']} footprint and nobody at it: "
+                                    "the zone's motion came from outside the machine")
+                changes.append({"m": s["m"], "t0": s["t0"], "from": c, "to": None, "why": "nobody_at_machine", "d_from": round(dc, 2)})
+            continue
         if not alts:
             if c is not None:
                 s["off_machine"] = round(at.get(c, 0) / max(seen.get(c, 1), 1), 2)

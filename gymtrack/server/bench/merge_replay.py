@@ -13,7 +13,9 @@ os.makedirs(MERGED, exist_ok=True)
 CAMS = {"floor": [f"floor{i}" for i in range(7)], "cables": ["cables0", "cables1"]}
 if len(sys.argv) > 1:  # merge only these cameras, e.g. "python merge_replay.py cables"
     CAMS = {k: v for k, v in CAMS.items() if k in sys.argv[1:]}
-SET_KEYS = ("t0", "t1", "m", "reps", "who", "pid", "ex", "ex_conf", "credit", "reps_low_conf")
+SET_KEYS = ("t0", "t1", "m", "reps", "who", "pid", "ex", "ex_conf", "credit", "reps_low_conf", "ex_fix")
+# hand-verified label fixes, keyed by session, machine and overall start time (within 1 s)
+SET_FIXES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "set_fixes.json")
 
 for cam, segs in CAMS.items():
     old = json.load(open(OUT + f'{cam}.json'))
@@ -73,6 +75,11 @@ for cam, segs in CAMS.items():
         segments.append({"name": n, "start": off, "end": round(end, 2)})
     duration = old['duration']
     sets.sort(key=lambda s: s['t0'])
+    for f in (json.load(open(SET_FIXES)).get(cam, []) if os.path.exists(SET_FIXES) else []):
+        hit = [s for s in sets if s['m'] == f['m'] and abs(s['t0'] - f['t0']) < 1.0]
+        for s in hit:
+            s['ex'], s['ex_fix'] = f['ex'], f['why']
+        print(cam, 'fix', f['m'], f['t0'], f['ex'], 'applied' if hit else 'NOT FOUND')
     # machine state per timeline step from the FINAL sets (live engine state still shows sets post-processing vetoed)
     by_m = collections.defaultdict(list)
     for s in sets:

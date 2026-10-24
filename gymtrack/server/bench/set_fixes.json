@@ -1,0 +1,10 @@
+{
+ "floor": [
+  {
+   "m": "dumbbells",
+   "t0": 1190.5,
+   "ex": "lateral_raise",
+   "why": "verified by eye: arms rise to shoulder height, not overhead"
+  }
+ ]
+}
