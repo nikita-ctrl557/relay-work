@@ -418,7 +418,10 @@ def extra_terms(X, hand, bend_ok, cam=None):
     fb = (trunk[:, :2] * fwd[:, :2]).sum(-1)
     cz = trunk[:, 2]
     back = 1 / (1 + np.exp(fb / 0.05))
-    out.append(_relu(np.cos(np.radians(25)) - cz) / 0.03 * back)
+    bend_ok = np.asarray(bend_ok, float)
+    lie = (bend_ok >= 1.5).astype(float)        # 2 = lying allowed (bench press, lying in the image)
+    bend_ok = np.minimum(bend_ok, 1.0)
+    out.append(_relu(np.cos(np.radians(25)) - cz) / 0.03 * back * (1 - lie))
     kf = np.minimum((_unit(X[:, LKN] - X[:, LHIP]) * _unit(X[:, LAN] - X[:, LKN])).sum(-1),
                     (_unit(X[:, RKN] - X[:, RHIP]) * _unit(X[:, RAN] - X[:, RKN])).sum(-1))
     straight = 1 / (1 + np.exp(-(kf - 0.88) / 0.02))
@@ -471,6 +474,7 @@ class RefineProblem(P3._Problem):
         d = (uvv[:, LSH] + uvv[:, RSH]) / 2 - (uvv[:, LHIP] + uvv[:, RHIP]) / 2
         okl = ww[:, [LSH, RSH, LHIP, RHIP]].all(1)
         self.lying = okl & (np.abs(d[:, 0]) > 1.6 * np.abs(d[:, 1])) & (np.linalg.norm(d, axis=-1) > 15)
+        self.bend_ok = np.where(self.lying, np.maximum(self.bend_ok, 2.0), self.bend_ok)
 
     def set_neutral(self, X0, groups, seated=None):
         """Unseen limb joints get a weak pull to a relaxed pose hanging from their visible parents (legs straight

@@ -222,6 +222,42 @@ def aim_cams(segcams, room_index, session, tol_px=3.0, same_px=1.0, min_s=1.5):
     return out
 
 
+def aim_warps(segcams, room_index, session, same_px=1.0):
+    """Camera re-aims inside recording segments (assets/room/index.json stretches, bench/room_aims.py). The camera
+    only turns about its fixed centre, so a pixel seen under a stretch's true aim maps exactly to the segment's base
+    camera (warp_2d): the fit stays one continuous solve per segment in the base camera's terms, and the world
+    positions are those of the true aim. seg["warps"]: [(t0, t1, true camera dict)] where the aim differs by >=
+    same_px; seg["stretches"]: every stretch [(t0, t1, camera dict, framing name)] for the export (camera3dAt)."""
+    ridx = json.load(open(room_index))["sessions"].get(session, {})
+    rdir = Path(room_index).parent
+    out = []
+    for seg, cam in segcams:
+        seg = dict(seg)
+        st = [e for e in ridx.get("segments", []) if e["t1"] > seg["start"] + 1e-6 and e["t0"] < seg["end"] - 1e-6]
+        warps, stretches = [], []
+        for e in st:
+            c = room_cam(json.load(open(rdir / e["file"])))
+            a, b = max(e["t0"], seg["start"]), min(e["t1"], seg["end"])
+            stretches.append((a, b, c.to_dict(), e["seg"]))
+            if cam is not None and _cam_offset_px(cam, c) >= same_px:
+                warps.append((a, b, c.to_dict()))
+        if warps:
+            seg["warps"], seg["stretches"] = warps, stretches
+        out.append((seg, cam))
+    return out
+
+
+def true_cam_at(segcams, t):
+    """The camera as truly aimed at time t (a re-aimed stretch's, else the segment's)."""
+    for seg, cam in segcams:
+        if seg["start"] <= t < seg["end"]:
+            for a, b, d in seg.get("warps") or []:
+                if a <= t < b:
+                    return PinholeCamera.from_dict(d), cam
+            return cam, cam
+    return None, None
+
+
 def cam_entries(replay, segcams):
     """pose3d_meta.cams: one entry per recording segment (its base camera), plus one per re-aimed stretch group
     with its t0/t1 and the room framing ("aim") whose exact rotation it uses (core.js camera3dAt / verify3d prefer
@@ -237,6 +273,8 @@ def cam_entries(replay, segcams):
             continue
         own = PinholeCamera.from_dict(groups[0][0]["base"]) if groups[0][0].get("base") else groups[0][1]
         out.append(ent(rs["name"], own))      # the segment's base aim (the floor-plan calibration's)
+        for a, b, d, nm in groups[0][0].get("stretches") or []:
+            out.append(ent(rs["name"], PinholeCamera.from_dict(d), t0=round(a, 3), t1=round(b, 3), aim=nm))
         if len(groups) > 1:
             for s_, c in groups:
                 out.append(ent(rs["name"], c, t0=round(s_["start"], 3), t1=round(s_["end"], 3), aim=s_["aim"]))
@@ -246,10 +284,16 @@ def cam_entries(replay, segcams):
 def warp_2d(t, uv, w, seg, cam):
     """2D samples taken while the camera was aimed elsewhere (a pan inside this aim group) -> this camera's pixels."""
     uv = np.array(uv, float)
+    w = np.array(w, float)
     for a, b, d in seg.get("warps") or []:
         m = (t >= a) & (t < b)
         if not m.any():
             continue
+        # joints the detector pinned to the real frame's border: no longer recognisable as such once warped
+        brd = (uv[m][..., 0] <= 4) | (uv[m][..., 0] >= 636) | (uv[m][..., 1] <= 4) | (uv[m][..., 1] >= 356)
+        wm = w[m]
+        wm[brd] = 0.0
+        w[m] = wm
         tc = PinholeCamera.from_dict(d)
         P = tc.C + tc.ray(uv[m])
         uv[m] = cam.project(P)
@@ -541,34 +585,52 @@ def frame_quality(cam, g, X, UV, Wg, boxes=None):
     return np.round(q * 100)
 
 
-def app_gate_ok(cam, X, t, t2, uv2, w2):
-    """Per frame: would the app's 3D believability gate (assets/mapplace.js body3dOk) accept this body?
-    X (G, 13, 3) at times t; reference = the 2D keypoints of the nearest sample within 0.6 s (>= 5 seen)."""
+def app_gate_ok(cam, X, t, t2, uv2, w2, box_t=None, box_v=None):
+    """Per frame: would the app's 3D believability gate (assets/mapplace.js body3dWhy, ported) accept this body?
+    X (G, 13, 3) at times t; keypoints = the 2D sample nearest in time (within 0.6 s), box = the tracker's."""
     G = len(X)
     ok = np.ones(G, bool)
+    W0, H0 = 640, 360
     leg = lambda a, b: np.linalg.norm(X[:, a] - X[:, b], axis=-1)
     st = (leg(7, 9) + leg(9, 11) + leg(8, 10) + leg(10, 12)) / 2 + np.linalg.norm((X[:, 1] + X[:, 2] - X[:, 7] - X[:, 8]) / 2, axis=-1) + 0.33
     ok &= (st > 1.35) & (st < 2.1)
     ok &= cam.depth(X).min(1) >= 1.2
+    low = ((X[:, 7, 2] + X[:, 8, 2]) / 2 < 0.38) & (np.minimum(X[:, 11, 2], X[:, 12, 2]) > 0.12)
     uv = cam.project(X)
     for i in np.flatnonzero(ok):
-        if not len(t2):
-            break
-        j = int(np.argmin(np.abs(t2 - t[i])))
-        if abs(t2[j] - t[i]) >= 0.6:
+        if not np.isfinite(uv[i]).all():
             continue
-        m = w2[j] > 0
-        if m.sum() < 5 or not np.isfinite(uv[i]).all():
+        vis, kp = [], None
+        if len(t2):
+            j = int(np.argmin(np.abs(t2 - t[i])))
+            if abs(t2[j] - t[i]) < 0.6:
+                kp = uv2[j]
+                vis = list(np.flatnonzero((w2[j] > 0) & (kp[:, 0] >= 0) & (kp[:, 1] >= 0)))
+        box = None
+        if box_t is not None and len(box_t):
+            k = int(np.argmin(np.abs(box_t - t[i])))
+            if abs(box_t[k] - t[i]) < 1.1:
+                box = box_v[k]
+        med, hp = np.inf, 10.0
+        if len(vis) >= 4:
+            ys = kp[vis, 1]
+            hp = max(np.ptp(ys), box[3] * H0 if box is not None else 0, 10)
+            med = float(np.median(np.linalg.norm(uv[i][vis] - kp[vis], axis=1)))
+        if low[i] and not (len(vis) >= 8 and 7 in vis and 8 in vis and (11 in vis or 12 in vis) and med <= max(0.08 * hp, 6)):
+            ok[i] = False
             continue
-        k = uv2[j][m]
-        ref = [k[:, 0].min(), k[:, 1].min(), k[:, 0].max(), k[:, 1].max()]
-        x0, x1, y0, y1 = uv[i][:, 0].min(), uv[i][:, 0].max(), uv[i][:, 1].min(), uv[i][:, 1].max()
-        rh, rw = max(ref[3] - ref[1], 12), max(ref[2] - ref[0], 8)
-        if y1 - y0 > 1.6 * rh + 15 or x1 - x0 > 2.2 * max(rw, rh * 0.6) + 15:
-            ok[i] = False
-        elif (ref[0] < 4 or ref[2] > 636 or ref[3] > 356) and (y1 - y0 > 1.25 * rh + 10 or y0 < ref[1] - 0.2 * rh - 6):
-            ok[i] = False
-        elif not (abs((x0 + x1) / 2 - (ref[0] + ref[2]) / 2) < 0.6 * rw + 0.3 * rh + 10 and abs((y0 + y1) / 2 - (ref[1] + ref[3]) / 2) < 0.6 * rh + 10):
+        if box is not None:
+            cu = np.clip(uv[i], [0, 0], [W0, H0])
+            pw, ph = np.ptp(cu[:, 0]), np.ptp(cu[:, 1])
+            if ph > 1.4 * box[3] * H0 + 12 or pw > 1.4 * box[2] * W0 + 12:
+                ok[i] = False
+                continue
+            head_out = not (0 <= uv[i][0, 0] <= W0 and 0 <= uv[i][0, 1] <= H0)
+            if (box[0] < 0.015 or box[0] + box[2] > 0.985 or box[1] + box[3] > 0.985) and \
+                    (len(vis) < 4 or head_out and not any(v in vis for v in (1, 2, 7, 8)) and not med <= max(0.15 * hp, 9)):
+                ok[i] = False
+                continue
+        if len(vis) >= 4 and med > max(0.29 * hp, 9):
             ok[i] = False
     return ok
 
@@ -636,6 +698,9 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
     for st in sets:
         bend[(g >= st[0] - 1) & (g <= st[1] + 1)] = 1.0
     ex_sets = [(st[0], st[1], st[2], st[3]) for st in sets if len(st) >= 4 and EX_PRIORS_ON]
+    for st in sets:      # supine sets: a level trunk is no implausible back lean
+        if len(st) >= 3 and st[2] == "bench_press":
+            bend[(g >= st[0] - 1) & (g <= st[1] + 1)] = 2.0
     anc, boxes = None, None
     if anchors is not None and len(anchors) >= 1:
         ta = anchors[:, 0]
@@ -830,6 +895,17 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
             feet = len(q) > 10 and q[9] is not None and q[5] + q[7] < 0.97
             anchors.setdefault(q[0], []).append((e["t"], q[9] if feet else np.nan, q[10] if feet else np.nan) + tuple(q[4:8]))
     anchors = {k: np.array(v, float) for k, v in anchors.items()}
+    if any(sg.get("warps") for sg, _ in segcams):        # box bottoms seen under a re-aim -> base-camera pixels
+        for k, A_ in anchors.items():
+            for r_ in A_:
+                tc, bc = true_cam_at(segcams, r_[0])
+                if tc is None or tc is bc or not np.isfinite(r_[3:7]).all():
+                    continue
+                p = np.array([(r_[3] + r_[5] / 2) * W, (r_[4] + r_[6]) * Hh])
+                q = bc.project(tc.C + tc.ray(p))
+                if np.isfinite(q).all():
+                    r_[3] += (q[0] - p[0]) / W
+                    r_[4] += (q[1] - p[1]) / Hh
     present = {}
     for pid, ts in pres.items():
         runs, s0 = [], ts[0]
@@ -840,6 +916,14 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
         runs.append((s0, ts[-1] + 1.0))
         present[pid] = runs
     sam, n_rec, n_match = load_sam(sam_dir, cam_id, replay, W, Hh)
+    if any(sg.get("warps") for sg, _ in segcams):        # SAM camera frames under a re-aim -> base camera frame
+        for pid_, (tk_, Xc_, fk_) in list(sam.items()):
+            Xc_ = np.array(Xc_, float)
+            for i_, tt_ in enumerate(tk_):
+                tc, bc = true_cam_at(segcams, tt_)
+                if tc is not None and tc is not bc:
+                    Xc_[i_] = Xc_[i_] @ (bc._M() @ tc._M().T).T
+            sam[pid_] = (tk_, Xc_, fk_)
     log(f"{cam_id}: SAM crops {n_rec}, matched to people {n_match}, people with learned prior {len(sam)}")
     setp = {s["pid"] for s in replay.get("sets", []) if s.get("pid") is not None}
     rows = replay.get("people", {}).get("rows", [])
@@ -898,6 +982,13 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
 
 def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_match=0, log=print):
     tracks, meta_people, angles_by_pid, qual = [], {}, {}, []
+    tlbox = {}
+    for e in replay.get("timeline", []):
+        for q in e["p"]:
+            tlbox.setdefault(q[0], ([], []))
+            tlbox[q[0]][0].append(e["t"])
+            tlbox[q[0]][1].append(q[4:8])
+    tlbox = {k: (np.array(a, float), np.array(b, float)) for k, (a, b) in tlbox.items()}
     for ph, si, pid, items in sorted(results, key=lambda r: (r[0], r[2])):
         seg, cam = segcams[si]
         for it in items:
@@ -925,7 +1016,7 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                 R["C"] = conf_decay(R["C"])
             # frames the app's own gate would reject (it then hides the person for a whole second): bridge short
             # runs of them from the neighbouring accepted frames
-            okg = app_gate_ok(cam, R["X"], R["t"], it["t"], it["uv"], it["w"])
+            okg = app_gate_ok(cam, R["X"], R["t"], it["t"], it["uv"], it["w"], *tlbox.get(pid, (None, None)))
             i = 0
             while i < len(okg):
                 if not okg[i]:
@@ -1109,7 +1200,7 @@ def main(argv=None):
     segcams = segment_cams(replay, a.configs, a.cams_cache)
     ri_ = Path(__file__).resolve().parents[2] / "assets" / "room" / "index.json"
     if AIMS_ON and ri_.exists():
-        segcams = aim_cams(segcams, str(ri_), a.cam_id or Path(a.replay).stem)
+        segcams = aim_warps(segcams, str(ri_), a.cam_id or Path(a.replay).stem)
     people = {int(p) for p in a.people.split(",")} if a.people else None
     window = tuple(float(v) for v in a.window.split(",")) if a.window else None
     if a.reassemble:
