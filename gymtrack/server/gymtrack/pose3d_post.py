@@ -428,6 +428,9 @@ def extra_terms(X, hand, bend_ok, cam=None):
     up = 1 / (1 + np.exp(-(mh[:, 2] - 0.65) / 0.03))
     out.append(_relu(za - 0.02) / 0.01 * straight * up)
     out.append(_relu(-za - 0.02) / 0.01)
+    # crouched (hips this low): a foot on the floor, not sitting on air with both feet raised
+    low = 1 / (1 + np.exp(-(0.42 - mh[:, 2]) / 0.03))
+    out.append(_relu(za - 0.05) / 0.02 * low)
     # elbows <= 150 deg, knees not hyper-extended
     for a, b, c in ((LSH, LEL, LWR), (RSH, REL, RWR)):
         co = (_unit(X[:, b] - X[:, a]) * _unit(X[:, c] - X[:, b])).sum(-1)
@@ -461,6 +464,7 @@ class RefineProblem(P3._Problem):
         self.anchor = np.full((self.T, 2), np.nan) if anchor is None else np.asarray(anchor, float)
         self.anc_sig = 0.35
         self.neutral = None          # (T, 13, 3) rest targets for limbs nobody saw (set_neutral)
+        self.lin = []                # exercise priors: [(frame, [(joint, coord, coef)], target, sigma)]
         # lying in the image (torso closer to horizontal than vertical over a long torso): a lying 3D trunk
         uvv = np.asarray(uv, float)
         ww = np.asarray(w, float) > 0
@@ -520,6 +524,8 @@ class RefineProblem(P3._Problem):
         tr_ = (X[:, LSH] + X[:, RSH]) / 2 - (X[:, LHIP] + X[:, RHIP]) / 2
         cz = tr_[:, 2] / np.maximum(np.linalg.norm(tr_, axis=-1), 1e-6)
         r.append(np.where(self.lying, _relu(np.abs(cz) - 0.45) / 0.05, 0.0))
+        if self.lin:
+            r.append(np.array([(sum(c * X[f, j, k] for j, k, c in terms) - tgt) / sg for f, terms, tgt, sg in self.lin]))
         return np.concatenate(r)
 
     def residuals(self, x):
@@ -586,6 +592,10 @@ class RefineProblem(P3._Problem):
                 nz = dd != 0
                 R.append(r0 + np.flatnonzero(nz)); C.append(base[nz, jn] + c); V.append(dd[nz])
         r0 += T
+        for q_, (f, terms, tgt, sg) in enumerate(self.lin):
+            for j, k, c in terms:
+                R.append(np.array([r0 + q_])); C.append(np.array([base[f, j] + k])); V.append(np.array([c / sg]))
+        r0 += len(self.lin)
         J1 = coo_matrix((np.concatenate(V), (np.concatenate(R), np.concatenate(C))), shape=(r0, T * 39)).tocsr()
         return vstack([J0, J1]).tocsr()
 
@@ -633,7 +643,59 @@ def grid_2d(t, uv, w, g, max_dt=0.4):
     return UV, W
 
 
-def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=None, anchor=None):
+# exercise -> which soft priors hold during the set (see exercise_rows)
+EX_PRIORS = {
+    "squat": ("feet", "legsym", "hipxy", "facing"), "deadlift": ("feet", "legsym", "hipxy", "facing"),
+    "bench_press": ("feet", "lying", "armsym", "pelvis"),
+    "cable_row": ("feet", "pelvis"), "seated": ("feet", "pelvis"), "lat_pulldown": ("feet", "pelvis"),
+    "row": ("feet", "lean", "facing"),
+    "overhead_press": ("feet", "pelvis", "armsym", "facing"), "lateral_raise": ("feet", "pelvis", "armsym", "facing"),
+    "triceps_pushdown": ("feet", "pelvis", "facing"), "curl": ("feet", "pelvis", "facing"),
+}
+
+
+def exercise_rows(X0, sets, g, bench_h=None):
+    """Soft linear priors for the credited lifter during each set, from the set's own median pose (so a true
+    mislabel can still pull away): feet locked, pelvis on the seat / bench, legs moving symmetrically, hips on a
+    vertical path, facing and trunk lean constant, bilateral arms level. sets: [(t0, t1, ex, machine_h or None)]."""
+    rows = []
+    for t0, t1, ex, mh_ in sets:
+        kinds = EX_PRIORS.get(ex or "", ())
+        idx = np.flatnonzero((g >= t0) & (g <= t1))
+        if not kinds or len(idx) < 5:
+            continue
+        M = np.median(X0[idx], axis=0)
+        for f in idx:
+            if "feet" in kinds:
+                for an in (LAN, RAN):
+                    for k in range(3):
+                        rows.append((f, [(an, k, 1.0)], M[an, k], 0.02))
+            if "pelvis" in kinds:
+                for k in range(3):
+                    rows.append((f, [(LHIP, k, 0.5), (RHIP, k, 0.5)], (M[LHIP, k] + M[RHIP, k]) / 2, 0.04))
+            if "hipxy" in kinds:
+                for k in range(2):
+                    rows.append((f, [(LHIP, k, 0.5), (RHIP, k, 0.5)], (M[LHIP, k] + M[RHIP, k]) / 2, 0.06))
+            if "legsym" in kinds:
+                rows.append((f, [(LKN, 2, 1.0), (RKN, 2, -1.0)], 0.0, 0.04))
+                rows.append((f, [(LHIP, 2, 1.0), (RHIP, 2, -1.0)], 0.0, 0.04))
+            if "armsym" in kinds:
+                rows.append((f, [(LWR, 2, 1.0), (RWR, 2, -1.0)], 0.0, 0.06))
+                rows.append((f, [(LEL, 2, 1.0), (REL, 2, -1.0)], 0.0, 0.06))
+            if "facing" in kinds:
+                for k in range(2):
+                    rows.append((f, [(LHIP, k, 1.0), (RHIP, k, -1.0)], M[LHIP, k] - M[RHIP, k], 0.05))
+            if "lean" in kinds:
+                for k in range(3):
+                    rows.append((f, [(LSH, k, 0.5), (RSH, k, 0.5), (LHIP, k, -0.5), (RHIP, k, -0.5)],
+                                 (M[LSH, k] + M[RSH, k] - M[LHIP, k] - M[RHIP, k]) / 2, 0.06))
+            if "lying" in kinds and mh_ is not None:
+                rows.append((f, [(LHIP, 2, 0.5), (RHIP, 2, 0.5)], mh_ + 0.1, 0.05))
+                rows.append((f, [(LSH, 2, 0.5), (RSH, 2, 0.5)], mh_ + 0.12, 0.05))
+    return rows
+
+
+def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=None, anchor=None, sets=()):
     import os
     iters = iters or int(os.environ.get("REFINE_ITERS", 20))
     """Robust windowed solve on the grid. Xs: smoothed fitted track (G, 13, 3) used as prior + start."""
@@ -658,6 +720,7 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         pm[bad] = 0.0
     pins = stance_pins(X0)
     pins[bad] = np.nan
+    ex_rows = exercise_rows(X0, sets, g) if sets else []
     prior = (Xs, pm)
     out = np.zeros_like(X0)
     wsum = np.zeros(G)
@@ -672,6 +735,8 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         pr = RefineProblem(cam, UV[sl], W[sl], g[sl], L, hand, (prior[0][sl], prior[1][sl]), bend_ok[sl], pins[sl],
                            anchor=None if anchor is None else anchor[sl])
         pr.set_neutral(X0[sl], groups)
+        if ex_rows:
+            pr.lin = [(f - s, terms, tgt, sg) for f, terms, tgt, sg in ex_rows if s <= f < e]
         x0 = X0[sl].copy()
         if prev is not None and s < prev:
             # continuity: the overlap starts from, and is held near, the previous window's answer

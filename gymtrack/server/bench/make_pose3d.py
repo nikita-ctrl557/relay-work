@@ -227,6 +227,7 @@ def collapse_unseen(uv, w):
 
 HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), 1.95)
 Q_MIN = int(os.environ.get("Q_MIN", 20))          # frames below this confidence are not exported
+EX_PRIORS_ON = os.environ.get("EX_PRIORS", "1") == "1"     # exercise-aware priors during credited sets
 EXPORT_ANGLES = os.environ.get("EXPORT_ANGLES", "0") == "1"
 FIT_MIRROR = os.environ.get("FIT_MIRROR", "0") == "1"   # orientation is resolved later (pose3d_post.fix_flips)
 
@@ -246,7 +247,9 @@ def person_groups(cam, pieces, prior_w):
         target = P3.DEFAULT_HEIGHT
     else:
         target = float(np.clip(h, *HEIGHT_RANGE))
-    return groups * target / h, target
+    # proportions within +-20 % of the population's (a calibration on a bad stretch can give 60 cm thighs)
+    ref = P3.RATIO_V * target
+    return np.clip(groups * target / h, 0.8 * ref, 1.2 * ref), target
 
 
 def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, try_mirror=True, sets=(), present=(),
@@ -308,7 +311,7 @@ def frame_quality(cam, g, X, UV, Wg, boxes=None):
         if m.sum() < 3:
             continue
         uv = UV[i][m]
-        ph = max(np.ptp(uv[:, 1]), 0.5 * np.ptp(uv[:, 0]), 12.0)
+        ph = max(np.ptp(uv[:, 1]), 0.5 * np.ptp(uv[:, 0]), 25.0)   # a few px of 2D noise on a tiny far person
         if boxes is not None and np.isfinite(boxes[i]).all():     # as the gate: relative to the person's box too
             ph = max(ph, boxes[i, 3] * 360)
         e = np.linalg.norm(cam.project(X[i])[m] - uv, axis=-1)
@@ -375,8 +378,9 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
     g, Xs = PP.resample_smooth(t, X, U, hz)
     UV, Wg = PP.grid_2d(t2, uv2, w2, g)
     bend = np.zeros(len(g))
-    for a, b in sets:
-        bend[(g >= a - 1) & (g <= b + 1)] = 1.0
+    for st in sets:
+        bend[(g >= st[0] - 1) & (g <= st[1] + 1)] = 1.0
+    ex_sets = [(st[0], st[1], st[2], st[3]) for st in sets if len(st) >= 4 and EX_PRIORS_ON]
     anc, boxes = None, None
     if anchors is not None and len(anchors) >= 1:
         ta = anchors[:, 0]
@@ -404,7 +408,7 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
             anc[okb] = tmp
         far = np.array([np.abs(ta - gi).min() > 1.1 for gi in g])
         anc[far] = np.nan
-    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc)
+    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc, sets=ex_sets)
     Q = frame_quality(cam, g, Xr, UV, Wg, boxes)
     # per-joint confidence: seen in the 2D (not pinned to the frame border) 100, seen within 0.5 s 70, inferred 30
     inner = (UV[..., 0] > 4) & (UV[..., 0] < 636) & (UV[..., 1] > 4) & (UV[..., 1] < 356)
@@ -435,6 +439,25 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
 # ---------------------------------------------------------------------------------------------------------
 # encoding
 # ---------------------------------------------------------------------------------------------------------
+
+def conf_decay(C, hz=10):
+    """Per-joint confidence from the frames where the joint was seen (100): it decays with the time to the nearest
+    observation, 70 within 0.5 s, 50 within 1 s (a short bridge between, or hold after, real observations), and 30
+    beyond (inferred: hidden limb, the app hides it)."""
+    C = np.asarray(C, float)
+    out = np.full(C.shape, 30.0)
+    n = len(C)
+    for j in range(C.shape[1]):
+        idx = np.flatnonzero(C[:, j] >= 99.5)
+        if not len(idx):
+            continue
+        k = np.clip(np.searchsorted(idx, np.arange(n)), 1, len(idx)) if len(idx) > 1 else np.zeros(n, int)
+        d = np.abs(np.arange(n) - idx[np.clip(k, 0, len(idx) - 1)])
+        if len(idx) > 1:
+            d = np.minimum(d, np.abs(np.arange(n) - idx[k - 1]))
+        out[:, j] = np.where(d == 0, 100, np.where(d <= 0.5 * hz, 70, np.where(d <= 1.0 * hz, 50, 30)))
+    return out
+
 
 def _b64(a):
     return base64.b64encode(np.ascontiguousarray(a).tobytes()).decode()
@@ -479,7 +502,8 @@ def encode_track(pid, t, X, A, fwd, U, hz):
 # ---------------------------------------------------------------------------------------------------------
 
 def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0, people=None, window=None,
-         log=print, min_frames=5, member_s=45, phases="ABC", extra2d=None, results_path=None, override2d=None):
+         log=print, min_frames=5, member_s=45, phases="ABC", extra2d=None, results_path=None, override2d=None,
+         equipment=None):
     W, Hh = 640, 360
     t_start = time.time()
     if extra2d:     # 2D poses filled in for on-screen people the replay had none for (bench.fill_poses2d)
@@ -526,9 +550,13 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
         replay = dict(replay, poses=[byt[k] for k in sorted(byt) if byt[k]["k"]])
         log(f"{cam_id}: {n_ov} 2D poses replaced by SAM 3D Body whole-body keypoints")
     sets_by = {}
+    heights = {}
+    for e in equipment or []:
+        if e.get("h") and not e.get("area"):
+            heights.setdefault(e["machine"], e["h"])
     for st in replay.get("sets", []):
         if st.get("pid") is not None:
-            sets_by.setdefault(st["pid"], []).append((st["t0"], st["t1"]))
+            sets_by.setdefault(st["pid"], []).append((st["t0"], st["t1"], st.get("ex"), heights.get(st.get("m"))))
     pres = {}
     tl = replay.get("timeline", [])
     for e in tl:
@@ -631,6 +659,8 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                 UVg, Wg_ = PP.grid_2d(it["t"], it["uv"], it["w"], R["t"])
                 R["Q"] = frame_quality(cam, R["t"], R["X"], UVg, Wg_)
             Q = R["Q"]
+            if "C" in R:
+                R["C"] = conf_decay(R["C"])
             # frames the app's own gate would reject (it then hides the person for a whole second): bridge short
             # runs of them from the neighbouring accepted frames
             okg = app_gate_ok(cam, R["X"], R["t"], it["t"], it["uv"], it["w"])
@@ -822,8 +852,12 @@ def main(argv=None):
         rr = pickle.load(open(a.reassemble, "rb"))
         out = assemble(replay, segcams, rr["results"], cam_id, a.hz, a.max_mb, time.time(), rr["n_rec"], rr["n_match"])
     else:
+        eq = None
+        ri = Path(__file__).resolve().parents[2] / "assets" / "room" / "index.json"
+        if ri.exists():
+            eq = json.load(open(ri)).get("sessions", {}).get(cam_id, {}).get("equipment")
         out = make(replay, segcams, a.sam, cam_id, a.hz, a.jobs, a.max_mb, people, window, phases=a.phases,
-                   extra2d=a.extra2d, results_path=a.results, override2d=a.override2d)
+                   extra2d=a.extra2d, results_path=a.results, override2d=a.override2d, equipment=eq)
     path = a.out or a.replay.replace(".json", ".pose3d.json")
     json.dump(out, open(path + ".tmp", "w"), separators=(",", ":"))
     os.replace(path + ".tmp", path)
