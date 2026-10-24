@@ -46,6 +46,8 @@ AMP_FULL = 0.25            # joint travel (torso lengths) that counts as a full-
 ELSEWHERE_PENALTY = 0.8    # score cut for people whose feet were mostly in another machine's zone
 SCORE_WIN_S = 15.0         # long sets are scored in windows of this length...
 SCORE_HOP_S = 5.0          # ...every this many seconds
+LIFT_RUN_S = 25.0          # ...and someone matching the zone in the best windows covering this long counts as well
+LIFT_RUN_DISCOUNT = 0.85
 ACTIVE_WIN_S = 3.0         # rolling window for "is the lifter moving right now" (set trimming)
 ACTIVE_BRIDGE_S = 4.0      # pauses shorter than this inside a set don't split it
 CONF_MIN = 0.3             # joint confidence below this = not seen
@@ -335,6 +337,14 @@ def score_person(zs: dict[str, np.ndarray], obs: list, grid: np.ndarray, in_zone
         res = sorted(res, key=lambda r: -r[0])
         top = res[:max(1, (len(res) + 1) // 2)]
         best = (float(np.mean([r[0] for r in top])), top[0][1], top[0][2], top[0][3])
+        # a long stretch of zone motion (a busy area behind the machine, a camera that never settles) can hold a
+        # whole set of someone's inside it: a person matching the zone through LIFT_RUN_S of windows counts too,
+        # a little discounted (a bystander's chance correlations don't last that long)
+        k = int(np.ceil((LIFT_RUN_S - SCORE_WIN_S) / SCORE_HOP_S)) + 1
+        if len(res) > 2 * k:
+            run = float(np.mean([r[0] for r in res[:k]])) * LIFT_RUN_DISCOUNT
+            if run > best[0]:
+                best = (run, res[0][1], res[0][2], res[0][3])
     best = (*best, valid[best[3].split("~")[0]] if best[3] else None)
     c.score, c.corr, c.amp, c.best = best[0], best[1], best[2], best[3]
     # walking through the zone moves it too, but a lifter stays put (lunges travel a little)

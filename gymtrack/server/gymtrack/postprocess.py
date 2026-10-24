@@ -17,6 +17,7 @@ Order matters:
    identity split handing the set to the wrong piece). Without such a person the credit is left as it is,
    unless the set had no pose evidence and a concurrent set's lifter at a neighbouring station reaches into
    this zone's picture: then it is that set's motion spilling over and is dropped.
+   Then one person's set on one machine that a camera move cut in two is joined again.
 5. exercise naming among the station's candidate exercises (exercises.refine_sets).
 """
 from __future__ import annotations
@@ -187,6 +188,29 @@ def lifter_location(sets: list[dict], timeline: list[dict], zones: dict, W: floa
     return changes
 
 
+def join_split_sets(sets: list[dict], gap_s: float = 2.0) -> int:
+    """In place: one person's set on one machine that was cut in two (a camera move ends sets under way, see
+    offline._apply_geometry) is one set again. Returns how many were joined."""
+    sets.sort(key=lambda s: s["t0"])
+    out, n = [], 0
+    for s in sets:
+        p = next((o for o in reversed(out) if o["m"] == s["m"]), None)
+        if p is not None and s.get("pid") is not None and p.get("pid") == s.get("pid") and 0 <= s["t0"] - p["t1"] <= gap_s:
+            longer = p if p["t1"] - p["t0"] >= s["t1"] - s["t0"] else s
+            for k in ("reps", "reps_est"):
+                if p.get(k) is not None or s.get(k) is not None:
+                    p[k] = (p.get(k) or 0) + (s.get(k) or 0)
+            p["ex"] = longer.get("ex")
+            if s.get("credit") is not None:
+                p["credit"] = max(p.get("credit") or 0.0, s["credit"])
+            p["t1"] = s["t1"]
+            n += 1
+        else:
+            out.append(s)
+    sets[:] = out
+    return n
+
+
 def finish_sets(data: dict, cfg, cam=None) -> dict:
     """data: {"timeline", "poses", "sets": [replay-format set dicts with "_i"], ...}; modified in place."""
     sets = data["sets"]
@@ -226,6 +250,7 @@ def finish_sets(data: dict, cfg, cam=None) -> dict:
         info["moved_to_lifter_at_machine"] = sum(1 for c in ch if c["to"] is not None)
         info["dropped_spill_over"] = sum(1 for c in ch if c["to"] is None)
         sets[:] = [s for s in sets if not s.get("_spill")]
+        info["joined_split_sets"] = join_split_sets(sets)
     machines = [{"id": m.id, "name": m.name, "kind": m.kind} for m in cfg.machines]
     refine_sets(sets, machines, data.get("poses", []))
     info["sets_out"] = len(sets)

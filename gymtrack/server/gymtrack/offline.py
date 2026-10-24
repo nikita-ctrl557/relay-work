@@ -221,16 +221,25 @@ def _finish(cfg: GymConfig, cam: Camera, engine: Engine, sink, start_ts: float, 
 
 
 def replay_trace(trace: list, cfg: GymConfig, cam: Camera, timeline: list | None = None, poses: list | None = None,
-                 start_ts: float = 0.0, postprocess: bool = True) -> dict:
+                 start_ts: float = 0.0, postprocess: bool = True, zone_epochs: list | None = None) -> dict:
     """Re-run sets, crediting, reps and post-processing on a trace recorded by `analyse(trace=[...])`.
 
-    No video, detector or pose model needed: seconds instead of minutes, for tuning and tests."""
+    No video, detector or pose model needed: seconds instead of minutes, for tuning and tests. zone_epochs: the
+    recording's followed-camera zone changes (analyse's report "zone_epochs"), replayed into the engine."""
     import copy
 
+    from .config import Zone
     from .vision import FrameReading, ZoneReading
     engine = Engine(cfg, None, keep_all=True)
     end = start_ts
+    eps = sorted(zone_epochs or [], key=lambda e: e["t"])
+    k = 0
     for f in trace:
+        while k < len(eps) and start_ts + eps[k]["t"] <= f["t"] + 1e-6:
+            e = eps[k]
+            _apply_geometry({"zones": [Zone(m, p) for m, p in e["zones"].items()], "ignore": [], "mirrors": [], "H_plan": None},
+                            f["camera"], None, None, None, engine, f["t"], e.get("jump_px", 0.0))
+            k += 1
         r = FrameReading(f["camera"], f["t"], [ZoneReading(m, mo, th, list(tg)) for m, mo, th, tg in f["zones"]],
                          dict(f["tags"]), list(f["people"]), f["tracking"])
         engine.ingest(r)
@@ -320,7 +329,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
                 if prev_raw is not None:  # difference the next frame against the previous one seen through the new warp
                     pw = cv2.warpPerspective(prev_raw, follower.H, (frame.shape[1], frame.shape[0])) if follower.moved else prev_raw
                     analyser.prev = cv2.GaussianBlur(cv2.cvtColor(pw, cv2.COLOR_BGR2GRAY) if pw.ndim == 3 else pw, (5, 5), 0)
-                zone_epochs.append({"t": round(t, 2), "zones": {z.machine: z.polygon for z in geo["zones"]}})
+                zone_epochs.append({"t": round(t, 2), "jump_px": round(geo["jump_px"], 1), "zones": {z.machine: z.polygon for z in geo["zones"]}})
             prev_raw = frame
         if guard is not None and guard.mirrors and cam.mirror_motion:  # mirror glass: motion only counts on real people
             analyser.exclude = guard.motion_exclusion(frame.shape, kept_tracks)
