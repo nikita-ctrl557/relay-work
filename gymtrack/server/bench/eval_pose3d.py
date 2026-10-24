@@ -238,12 +238,16 @@ def run_synth(quick=False, seed=0):
             res_v2 = P3.fit_track(cam, t, uv, w, prior=prior, prior_rel=True)
             R2 = PP.refine_track(t, res_v2["X"], res_v2["unc"], res_v2["groups"], res_v2["hand"])
             Xv2 = _at(R2["t"], R2["X"], t)
+            # v3 (shipped): constrained refinement on the 10 Hz grid (rigid bones, floor, pinned feet, limits)
+            from bench.make_pose3d import refine_v3
+            R3 = refine_v3(cam, t, res_v2["X"], res_v2["unc"], t, uv, w, res_v2["groups"], res_v2["hand"], 10, [], [])
+            Xv3 = _at(R3["t"], R3["X"], t)
             # motion quality, all at the same sample times
-            mot = {"full": _motion(t, res["X"]), "learned_v2": _motion(t, Xv2), "gt": _motion(t, Xg)}
+            mot = {"full": _motion(t, res["X"]), "learned_v2": _motion(t, Xv2), "learned_v3": _motion(t, Xv3), "gt": _motion(t, Xg)}
             rows.append({"kind": kind, "height": h, "full": errors(res["X"], Xg), "init": errors(Xi, Xg),
                          "selfcal": errors(res_sc["X"], Xg),
                          "learned_raw": errors(Xkw, Xg[key]), "learned+refine": errors(res_l["X"][key], Xg[key]),
-                         "learned_v2": errors(Xv2[key], Xg[key]), "mot": mot, "q": P3.quality(cam, t, uv, w, res["X"]),
+                         "learned_v2": errors(Xv2[key], Xg[key]), "learned_v3": errors(Xv3[key], Xg[key]), "mot": mot, "q": P3.quality(cam, t, uv, w, res["X"]),
                          "unc_cm": float(np.median(res["unc"]) * 100),
                          "err_cm": float(np.median(np.linalg.norm(res["X"] - Xg, axis=-1)) * 100),
                          "h_est": res["height"]})
@@ -253,12 +257,12 @@ def run_synth(quick=False, seed=0):
     print("\n%-9s %-14s " % ("motion", "variant") + " ".join("%9s" % k for k in keys))
     for kind in kinds + ["ALL"]:
         rs = [r for r in rows if kind in (r["kind"], "ALL")]
-        for var in ("init", "full", "selfcal", "learned_raw", "learned+refine", "learned_v2"):
+        for var in ("init", "full", "selfcal", "learned_raw", "learned+refine", "learned_v2", "learned_v3"):
             print("%-9s %-14s " % (kind, var) + " ".join("%9.1f" % np.mean([r[var][k] for r in rs]) for k in keys))
     print("\nmotion (at the sample times: mean joint accel m/s^2, stance-foot slide cm/s, stance-foot height above floor cm, bone length CV):")
     for kind in kinds + ["ALL"]:
         rs = [r for r in rows if kind in (r["kind"], "ALL")]
-        for var in ("full", "learned_v2", "gt"):
+        for var in ("full", "learned_v2", "learned_v3", "gt"):
             print("%-9s %-14s " % (kind, var) + " ".join("%9.3f" % np.nanmean([r["mot"][var][i] for r in rs]) for i in range(4)))
     print("\nheight error (cm): %.1f" % np.mean([abs(r["h_est"] - r["height"]) * 100 for r in rows]))
     print("median predicted uncertainty %.1f cm vs median actual error %.1f cm" % (

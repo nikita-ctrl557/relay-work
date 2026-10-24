@@ -204,7 +204,7 @@ def deswap(uv, w):
     return out_u, out_w
 
 
-HEIGHT_RANGE = (1.55, 1.95)
+HEIGHT_RANGE = (1.60, 1.95)
 EXPORT_ANGLES = os.environ.get("EXPORT_ANGLES", "0") == "1"
 FIT_MIRROR = os.environ.get("FIT_MIRROR", "0") == "1"   # orientation is resolved later (pose3d_post.fix_flips)
 
@@ -269,7 +269,7 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, t
     return out
 
 
-def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_hold=0.8):
+def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_hold=1.0):
     """Fitted samples -> steady grid: smooth, then the constrained solve (2D, rigid bones, floor, pinned stance
     feet, plausibility), facing with a capped turn rate; ends held to cover the time the person is on screen."""
     X = PP.fix_flips(cam, t, X, hand)
@@ -441,6 +441,7 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
         seg, cam = segcams[si]
         for it in items:
             R = it["R"]
+            R["X"] = PP.fix_nose(R["X"], it["groups"], it["hand"])
             ang = P3.joint_angles(R["X"], it["hand"])
             A = np.stack([ang[k] for k in P3.ANGLES], 1)
             # one steady track per piece (pieces are split at > 2 s without a 2D sample; shorter gaps are bridged),
@@ -497,7 +498,7 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                 t_end, p_end = last
                 feet = (X[:, P3.LAN, :2] + X[:, P3.RAN, :2]) / 2
                 ts = tr["t0"] + np.arange(tr["n"]) / tr["hz"]
-                ok = [(ts[i] - t_end > 2.0) or np.linalg.norm(feet[i] - p_end) <= max(1.4, 2.4 * (ts[i] - t_end))
+                ok = [(ts[i] - t_end > 2.15) or np.linalg.norm(feet[i] - p_end) <= max(1.4, 2.4 * (ts[i] - t_end))
                       for i in range(tr["n"])]
                 i0 = 0
                 while i0 < tr["n"] and not ok[i0]:

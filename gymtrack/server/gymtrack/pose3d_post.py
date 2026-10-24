@@ -668,3 +668,20 @@ def fix_flips(cam, t, X, hand, switch=1.2):
             out[i] = Xm[i]
         s = back[i, s]
     return out
+
+
+def fix_nose(X, groups, hand, min_above=0.06):
+    """Head on top: when the trunk is roughly upright and the nose comes out below (or level with) the shoulders
+    (a hidden face: the detector guessed the nose), put it where a head is, keeping the head bone lengths."""
+    g = dict(zip(P3.GROUP_NAMES, np.asarray(groups, float)))
+    X = X.copy()
+    ms = (X[:, LSH] + X[:, RSH]) / 2
+    mh = (X[:, LHIP] + X[:, RHIP]) / 2
+    up = _unit(ms - mh)
+    bad = (up[:, 2] > 0.5) & (X[:, NOSE, 2] < ms[:, 2] + min_above)
+    if bad.any():
+        lat = _unit(X[:, LSH] - X[:, RSH])
+        f = _unit(hand * np.cross(lat, up))
+        r = np.sqrt(max(g["head"] ** 2 - (g["shoulder_w"] / 2) ** 2, 0.004))
+        X[bad, NOSE] = ms[bad] + (0.85 * up[bad] + 0.53 * f[bad]) * r
+    return X
