@@ -101,13 +101,14 @@ export function mapBody(P, map, out = null) {
 /* ---------- placer ---------- */
 /* One per person. The 3D feet win whenever there is 3D (followed exactly: no lag, planted feet stay planted);
    the 1 Hz tracker point is only a fallback, smoothed at walking pace. Never a long glide: when the source the
-   body follows is > 1 m from where it is drawn (3D appears far from the tracker point, a 3D track jumps, or the
-   tracker disagrees > 1 m for > 1 s), the placer reports a cut and the view fades the body out and back in at
+   body follows is > 0.7 m from where it is drawn (3D appears far from the tracker point, a 3D track jumps, or the
+   tracker disagrees > 0.7 m for > 0.15 s), the placer reports a cut and the view fades the body out and back in at
    the new spot. During a set, a body already within 1 m of the set's machine gets a gentle (<= 0.3 m) nudge
    towards it; nothing more (the set's machine may be wrongly attributed; dragging bodies would hide that).
-   A body whose feet are inside tall equipment is flagged (the view hides it) rather than pushed around. */
+   Drawn = measured: the body is never held or dragged away from where it was measured (st.inside only reports
+   feet inside tall equipment). */
 export const WALK = 2.0;                 // m/s: the fallback never moves a body faster
-const TAU_FALL = 0.5, TAU_BLEND = 0.3, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 1.0, CUT_HOLD = 1.0, RESET_GAP = 2.0, EQ_IN = 0.15;
+const TAU_FALL = 0.15, TAU_BLEND = 0.2, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 0.7, CUT_HOLD = 0.15, RESET_GAP = 2.0, EQ_IN = 0.15;
 const capStep = (dx, dy, max) => { const l = Math.hypot(dx, dy); return l > max && l > 0 ? [dx * max / l, dy * max / l] : [dx, dy]; };
 const rectDist = (p, r) => { const dx = Math.max(Math.abs(p[0] - r.x) - r.w / 2, 0), dy = Math.max(Math.abs(p[1] - r.y) - r.d / 2, 0); return Math.hypot(dx, dy); };
 const clampRect = (p, r) => [Math.max(r.x - r.w / 2, Math.min(r.x + r.w / 2, p[0])), Math.max(r.y - r.d / 2, Math.min(r.y + r.d / 2, p[1]))];
@@ -177,7 +178,10 @@ export function body3dOk(P, cam, box, kp = null) {
   if (!ref && box) ref = [box[0] * W0, box[1] * H0, (box[0] + box[2]) * W0, (box[1] + box[3]) * H0];
   if (!ref) return true;
   const rh = Math.max(ref[3] - ref[1], 12), rw = Math.max(ref[2] - ref[0], 8);
-  if (y1 - y0 > 1.6 * rh + 15 || x1 - x0 > 2.2 * Math.max(rw, rh * 0.6) + 15) return false;          // drawn far bigger than the person
+  if (y1 - y0 > 1.4 * rh + 10 || x1 - x0 > 2.0 * Math.max(rw, rh * 0.6) + 10) return false;          // drawn far bigger than the person
+  // joint by joint against what the camera saw: a body fitted to someone else (or gone wrong) is off by > 25 % of the height
+  if (kp) { const e = []; for (let i = 0; i < 13; i++) { const q = kp[i]; if (!q) continue; const uv = camProject(cam, [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]]); if (uv) e.push(Math.hypot(uv[0] - q[0] * W0, uv[1] - q[1] * H0)); }
+    if (e.length >= 6) { e.sort((a, b) => a - b); if (e[e.length >> 1] > 0.25 * rh) return false; } }
   // cut off by the frame edge: only the visible part was measured, so the body must not spill far past it
   if ((ref[0] < 4 || ref[2] > W0 - 4 || ref[3] > H0 - 4) && (y1 - y0 > 1.25 * rh + 10 || y0 < ref[1] - 0.2 * rh - 6)) return false;
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
