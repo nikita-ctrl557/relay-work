@@ -204,7 +204,7 @@ def deswap(uv, w):
     return out_u, out_w
 
 
-HEIGHT_RANGE = (1.60, 1.95)
+HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), 1.95)
 EXPORT_ANGLES = os.environ.get("EXPORT_ANGLES", "0") == "1"
 FIT_MIRROR = os.environ.get("FIT_MIRROR", "0") == "1"   # orientation is resolved later (pose3d_post.fix_flips)
 
