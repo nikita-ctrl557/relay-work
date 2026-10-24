@@ -20,7 +20,7 @@ const arc = (th, c, half, f = 0.25) => { let d = Math.abs(th - c) % (2 * PI); d 
 const REGIONS = {
   torso: (th, y) => ({
     chest: arc(th, 0, 1.0, 0.22) * band(y, 0.0, 0.4, 0.05),
-    abs: arc(th, 0, 0.42, 0.14) * band(y, -0.5, -0.01, 0.05),
+    abs: arc(th, 0, 0.36, 0.22) * band(y, -0.46, -0.02, 0.08),
     obliques: Math.max(arc(th, 1.05, 0.48, 0.2), arc(th, -1.05, 0.48, 0.2)) * band(y, -0.46, 0.02, 0.06),
     lats: Math.max(arc(th, 2.0, 0.5, 0.25), arc(th, -2.0, 0.5, 0.25)) * band(y, -0.28, 0.3, 0.08),
     upper_back: arc(th, PI, 0.9, 0.2) * band(y, 0.02, 0.36, 0.05),

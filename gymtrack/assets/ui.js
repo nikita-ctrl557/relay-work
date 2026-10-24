@@ -174,7 +174,8 @@ function trainingHistory(prog) {
   const sets = (prog?.sets_28d || []).map(s => ({exercise: s.exercise ? (ACT_EX[s.exercise] !== undefined ? ACT_EX[s.exercise] : s.exercise) : null,
     machine: s.machine, reps: s.reps, start: s.start, end: s.end, duration_s: (s.end || s.start) - s.start, weight_kg: s.weight_kg}));
   const sessions = (prog?.session_list || []).filter(s => s.end).map(s => ({start: s.start, end: s.end, lifting_s: s.lifting_s || 0, resting_s: s.resting_s || 0, sets: s.sets}));
-  return {sets, sessions, now: Date.now() / 1000};
+  // replay sets are timed from the playhead, so later sets of the recording can sit a little in the future: count them
+  return {sets, sessions, now: Math.max(Date.now() / 1000, ...sets.map(s => s.end || s.start))};
 }
 
 /* a member's per-set 3D mobility (replay with a 3D sidecar, once loaded), or null */

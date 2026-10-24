@@ -206,7 +206,8 @@ function bmSetFactor(s, opts = {}) {
   const effF = bmClamp(0.5 * Math.min(1, reps / BM_EFFORT.reps) + 0.5 * Math.min(1, tul / BM_EFFORT.tul_s), BM_EFFORT.min, 1);
   const romF = bmClamp(rom / ref.full, 0.25, 1);
   if (ref.depth) { const pk = m.main === ref.angle ? (m.reps || []).map(x => x.peak).filter(v => v != null) : []; out.depth = pk.length ? bmAvg(pk) : r ? r[1] : null; }
-  return {...out, f: romF * effF, est: false, rom, romF, effF};
+  // a range under half the reference: partial reps, or a movement the 3D didn't follow; counted as measured, but said so
+  return {...out, f: romF * effF, est: false, rom, romF, effF, note: rom < 0.5 * ref.full ? "short range: partial reps, or the 3D missed part of the movement" : null};
 }
 
 /* Measured muscle load. Per set: f (bmSetFactor) × 1 for each primary muscle, × 0.5 for each secondary one.
@@ -230,7 +231,7 @@ function bmMeasuredLoad(sets, opts = {}) {
 function bmWhy(by) {
   return Object.entries(by).sort((a, b) => b[1].eff - a[1].eff).slice(0, 2).map(([ex, b]) => {
     const E = BM_EXERCISES[ex], ref = BM_ROM_REF[ex], head = `${E?.name || ex} ×${b.n}`;
-    if (!b.rom.length) return `${head}, estimated (no 3D)`;
+    if (!b.rom.length) return `${head}, no 3D`;
     // sets that differ a lot (a full and a partial squat) show their span: an average would describe neither
     const desc = (vals, word) => { const lo = Math.round(Math.min(...vals)), hi = Math.round(Math.max(...vals));
       return vals.length > 1 && hi - lo > 30 ? `${word} ${lo}–${hi}°` : `${vals.length > 1 ? "avg " : ""}${word} ${Math.round(bmAvg(vals))}°`; };

@@ -150,10 +150,11 @@ export function mountBody3D(host, {tr, state, seek}) {
         : `<div class="b3v-mus-h"><b>Exercise not recognised</b><span>no muscles to show</span></div>`;
       if (L) {
         const ref = BM_ROM_REF[F.ex];
-        load = `<div class="b3v-h">Muscle load · this set</div><div class="b3v-lv"><b class="num">${f2(F.f)}</b><span>effective set${F.f === 1 ? "" : "s"} for each primary muscle, half that for secondary</span>${F.est ? `<em class="bm-est">estimated</em>` : ""}</div>`
+        load = `<div class="b3v-h">Muscle load · this set</div><div class="b3v-lv"><b class="num">${f2(F.f)}</b><span>effective set${F.f === 1 ? "" : "s"} for ${E.secondary.length ? "each primary muscle, half that for secondary" : E.primary.length > 1 ? "each muscle worked" : esc(bmMuscleName(E.primary[0]))}</span>${F.est ? `<em class="bm-est">estimated</em>` : ""}</div>`
           + (F.est ? `<div class="b3v-lf"><span>${esc(F.note ? F.note[0].toUpperCase() + F.note.slice(1) : "Not measured")}: counted as 1 set from the exercise label</span></div>`
             : `<div class="b3v-lf"><span>${ref.depth && F.depth != null ? `Avg depth <b class="num">${Math.round(F.depth)}°</b> ${ref.what} · ` : ""}${ref.depth ? "range" : `${ref.what[0].toUpperCase() + ref.what.slice(1)} range`} <b class="num">${Math.round(F.rom)}°</b> <span class="muted">vs ${ref.full}° full-range reference</span></span><b class="num">×${f2(F.romF)}</b></div>`
-            + `<div class="b3v-lf"><span><b class="num">${F.reps}</b> reps · <b class="num">${Math.round(F.tul)} s</b> under load</span><b class="num">×${f2(F.effF)}</b></div>`);
+            + `<div class="b3v-lf"><span><b class="num">${F.reps}</b> reps · <b class="num">${Math.round(F.tul)} s</b> under load</span><b class="num">×${f2(F.effF)}</b></div>`
+            + (F.note ? `<div class="b3v-lnote">${esc(F.note[0].toUpperCase() + F.note.slice(1))}</div>` : ""));
       }
     } else if (HAVE_BM && mode === "session") {
       const S = session(); levels = S.levels;
