@@ -19,7 +19,7 @@
    "default": "cables0",
    "bounds": {
     "x0": 0.51,
-    "x1": 9.49,
+    "x1": 9.5,
     "y0": -0.13,
     "y1": 7.27
    },
@@ -27,23 +27,75 @@
    "equipment": [
     {
      "machine": "c-cable",
-     "x": 1.86,
-     "y": 5.57,
-     "w": 1.37,
-     "d": 0.44,
-     "h": 2.29,
+     "x": 1.41,
+     "y": 5.36,
+     "w": 1.18,
+     "d": 0.74,
+     "h": 2.31,
      "views": 2,
-     "measured": true
+     "measured": true,
+     "solid": true,
+     "part": 0,
+     "station": {
+      "x": 1.41,
+      "y": 5.36,
+      "w": 1.88,
+      "d": 1.44
+     }
+    },
+    {
+     "machine": "c-cable",
+     "x": 1.98,
+     "y": 5.18,
+     "w": 1.03,
+     "d": 0.88,
+     "h": 2.32,
+     "views": 2,
+     "measured": true,
+     "solid": true,
+     "part": 1,
+     "station": {
+      "x": 1.98,
+      "y": 5.18,
+      "w": 1.73,
+      "d": 1.58
+     }
+    },
+    {
+     "machine": "c-cable",
+     "x": 1.66,
+     "y": 5.23,
+     "w": 1.68,
+     "d": 0.99,
+     "h": 0.0,
+     "top": 2.32,
+     "views": 2,
+     "measured": true,
+     "solid": false,
+     "area": true,
+     "station": {
+      "x": 1.66,
+      "y": 5.23,
+      "w": 2.38,
+      "d": 1.69
+     }
     },
     {
      "machine": "c-bench",
      "x": 3.68,
      "y": 2.85,
-     "w": 0.4,
+     "w": 0.37,
      "d": 0.88,
      "h": 0.39,
      "views": 2,
-     "measured": true
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 3.68,
+      "y": 2.85,
+      "w": 1.07,
+      "d": 1.58
+     }
     },
     {
      "machine": "c-decline",
@@ -53,47 +105,138 @@
      "d": 0.69,
      "h": 0.65,
      "views": 2,
-     "measured": true
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 3.61,
+      "y": 5.19,
+      "w": 2.33,
+      "d": 1.39
+     }
     },
     {
      "machine": "c-dumbbells",
-     "x": 6.24,
-     "y": 4.72,
-     "w": 2.16,
-     "d": 1.58,
-     "h": 1.32,
+     "x": 5.34,
+     "y": 4.36,
+     "w": 0.46,
+     "d": 0.87,
+     "h": 1.24,
      "views": 2,
-     "measured": true
+     "measured": true,
+     "solid": true,
+     "part": 0,
+     "station": {
+      "x": 5.34,
+      "y": 4.36,
+      "w": 1.16,
+      "d": 1.57
+     }
+    },
+    {
+     "machine": "c-dumbbells",
+     "x": 6.11,
+     "y": 5.1,
+     "w": 0.73,
+     "d": 0.91,
+     "h": 1.8,
+     "views": 2,
+     "measured": true,
+     "solid": true,
+     "part": 1,
+     "station": {
+      "x": 6.11,
+      "y": 5.1,
+      "w": 1.43,
+      "d": 1.61
+     }
+    },
+    {
+     "machine": "c-dumbbells",
+     "x": 7.07,
+     "y": 4.87,
+     "w": 0.96,
+     "d": 1.32,
+     "h": 1.35,
+     "views": 2,
+     "measured": true,
+     "solid": true,
+     "part": 2,
+     "station": {
+      "x": 7.07,
+      "y": 4.87,
+      "w": 1.66,
+      "d": 2.02
+     }
+    },
+    {
+     "machine": "c-dumbbells",
+     "x": 6.33,
+     "y": 4.74,
+     "w": 2.44,
+     "d": 1.63,
+     "h": 0.0,
+     "top": 1.8,
+     "views": 2,
+     "measured": true,
+     "solid": false,
+     "area": true,
+     "station": {
+      "x": 6.33,
+      "y": 4.74,
+      "w": 3.14,
+      "d": 2.33
+     }
     },
     {
      "machine": "c-racks",
      "x": 2.81,
-     "y": 1.34,
+     "y": 1.33,
      "w": 3.1,
-     "d": 1.9,
+     "d": 1.13,
      "h": 1.94,
      "views": 2,
-     "measured": true
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 2.81,
+      "y": 1.36,
+      "w": 3.8,
+      "d": 1.88
+     }
     },
     {
      "machine": "c-rack3",
      "x": 7.97,
-     "y": 1.11,
+     "y": 0.81,
      "w": 1.42,
-     "d": 1.56,
+     "d": 0.96,
      "h": 0.88,
      "views": 2,
-     "measured": true
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 7.97,
+      "y": 0.94,
+      "w": 2.12,
+      "d": 1.91
+     }
     },
     {
      "machine": "c-seated",
      "x": 1.55,
-     "y": 2.74,
+     "y": 2.95,
      "w": 0.7,
-     "d": 1.7,
+     "d": 1.28,
      "h": 1.61,
      "views": 2,
-     "measured": true
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 1.55,
+      "y": 2.95,
+      "w": 1.4,
+      "d": 1.98
+     }
     }
    ]
   },
@@ -177,103 +320,307 @@
    "equipment": [
     {
      "machine": "cable",
-     "x": 3.55,
-     "y": 7.58,
-     "w": 1.08,
-     "d": 0.55,
-     "h": 2.13,
-     "views": 10,
-     "measured": true
+     "x": 3.35,
+     "y": 7.43,
+     "w": 1.58,
+     "d": 1.06,
+     "h": 2.53,
+     "views": 11,
+     "measured": true,
+     "solid": true,
+     "part": 0,
+     "station": {
+      "x": 3.35,
+      "y": 7.43,
+      "w": 2.28,
+      "d": 1.76
+     }
+    },
+    {
+     "machine": "cable",
+     "x": 3.35,
+     "y": 7.43,
+     "w": 1.58,
+     "d": 1.06,
+     "h": 0.0,
+     "top": 2.53,
+     "views": 11,
+     "measured": true,
+     "solid": false,
+     "area": true,
+     "station": {
+      "x": 3.35,
+      "y": 7.43,
+      "w": 2.28,
+      "d": 1.76
+     }
     },
     {
      "machine": "seated",
-     "x": 2.75,
-     "y": 3.88,
-     "w": 0.4,
-     "d": 1.35,
+     "x": 2.6,
+     "y": 3.95,
+     "w": 0.37,
+     "d": 1.0,
      "h": 1.14,
-     "views": 10,
-     "measured": true
+     "views": 11,
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 2.6,
+      "y": 3.95,
+      "w": 1.07,
+      "d": 1.7
+     }
     },
     {
      "machine": "bench",
-     "x": 5.06,
+     "x": 5.05,
      "y": 7.05,
-     "w": 1.93,
-     "d": 0.98,
-     "h": 0.63,
-     "views": 10,
-     "measured": true
+     "w": 1.95,
+     "d": 0.97,
+     "h": 0.62,
+     "views": 11,
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 5.05,
+      "y": 7.05,
+      "w": 2.65,
+      "d": 1.67
+     }
     },
     {
      "machine": "dumbbells",
-     "x": 7.67,
-     "y": 6.95,
-     "w": 1.99,
-     "d": 1.21,
-     "h": 1.27,
-     "views": 10,
-     "measured": true
+     "x": 6.88,
+     "y": 6.11,
+     "w": 0.5,
+     "d": 0.79,
+     "h": 1.15,
+     "views": 11,
+     "measured": true,
+     "solid": true,
+     "part": 0,
+     "station": {
+      "x": 6.88,
+      "y": 6.11,
+      "w": 1.2,
+      "d": 1.49
+     }
+    },
+    {
+     "machine": "dumbbells",
+     "x": 7.74,
+     "y": 6.8,
+     "w": 0.55,
+     "d": 1.55,
+     "h": 1.5,
+     "views": 11,
+     "measured": true,
+     "solid": true,
+     "part": 1,
+     "station": {
+      "x": 7.74,
+      "y": 6.8,
+      "w": 1.25,
+      "d": 2.25
+     }
+    },
+    {
+     "machine": "dumbbells",
+     "x": 8.35,
+     "y": 7.08,
+     "w": 0.76,
+     "d": 0.99,
+     "h": 1.43,
+     "views": 11,
+     "measured": true,
+     "solid": true,
+     "part": 2,
+     "station": {
+      "x": 8.35,
+      "y": 7.08,
+      "w": 1.46,
+      "d": 1.69
+     }
+    },
+    {
+     "machine": "dumbbells",
+     "x": 7.68,
+     "y": 6.64,
+     "w": 2.1,
+     "d": 1.86,
+     "h": 0.0,
+     "top": 1.5,
+     "views": 11,
+     "measured": true,
+     "solid": false,
+     "area": true,
+     "station": {
+      "x": 7.68,
+      "y": 6.64,
+      "w": 2.8,
+      "d": 2.56
+     }
     },
     {
      "machine": "pl-row",
-     "x": 10.12,
-     "y": 5.71,
-     "w": 1.53,
-     "d": 2.53,
-     "h": 0.86,
-     "views": 10,
-     "measured": true
+     "x": 9.73,
+     "y": 6.39,
+     "w": 0.87,
+     "d": 1.12,
+     "h": 0.89,
+     "views": 11,
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 9.91,
+      "y": 5.86,
+      "w": 1.92,
+      "d": 2.87
+     }
     },
     {
      "machine": "pl-press",
-     "x": 10.95,
-     "y": 6.12,
-     "w": 2.1,
-     "d": 2.79,
+     "x": 10.65,
+     "y": 6.84,
+     "w": 1.7,
+     "d": 1.3,
      "h": 0.88,
-     "views": 8,
-     "measured": true
+     "views": 9,
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 10.83,
+      "y": 6.32,
+      "w": 2.75,
+      "d": 3.05
+     }
     },
     {
      "machine": "rack1",
-     "x": 3.42,
-     "y": 1.21,
-     "w": 1.61,
-     "d": 2.47,
-     "h": 1.56,
-     "views": 10,
-     "measured": true
+     "x": 3.35,
+     "y": 0.02,
+     "w": 0.34,
+     "d": 0.55,
+     "h": 1.53,
+     "views": 11,
+     "measured": true,
+     "solid": true,
+     "part": 0,
+     "station": {
+      "x": 3.35,
+      "y": 0.02,
+      "w": 1.04,
+      "d": 1.25
+     }
+    },
+    {
+     "machine": "rack1",
+     "x": 3.84,
+     "y": 0.83,
+     "w": 0.22,
+     "d": 1.37,
+     "h": 1.72,
+     "views": 11,
+     "measured": true,
+     "solid": true,
+     "part": 1,
+     "station": {
+      "x": 3.84,
+      "y": 0.83,
+      "w": 0.92,
+      "d": 2.07
+     }
+    },
+    {
+     "machine": "rack1",
+     "x": 3.56,
+     "y": 0.63,
+     "w": 0.77,
+     "d": 1.77,
+     "h": 0.0,
+     "top": 1.72,
+     "views": 11,
+     "measured": true,
+     "solid": false,
+     "area": true,
+     "station": {
+      "x": 3.56,
+      "y": 0.63,
+      "w": 1.47,
+      "d": 2.47
+     }
     },
     {
      "machine": "rack2",
      "x": 6.29,
-     "y": 1.15,
+     "y": 0.98,
      "w": 2.75,
-     "d": 2.23,
-     "h": 1.45,
-     "views": 10,
-     "measured": true
+     "d": 1.3,
+     "h": 1.4,
+     "views": 11,
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 6.29,
+      "y": 1.11,
+      "w": 3.45,
+      "d": 2.25
+     }
     },
     {
      "machine": "back-a",
-     "x": 10.02,
-     "y": 0.92,
-     "w": 2.23,
-     "d": 1.67,
-     "h": 0.85,
+     "x": 10.07,
+     "y": 0.42,
+     "w": 2.17,
+     "d": 0.94,
+     "h": 0.83,
      "views": 8,
-     "measured": true
+     "measured": true,
+     "solid": false,
+     "station": {
+      "x": 10.07,
+      "y": 0.54,
+      "w": 2.87,
+      "d": 1.89
+     }
     },
     {
      "machine": "back-b",
-     "x": 12.7,
-     "y": 1.18,
-     "w": 2.67,
-     "d": 1.81,
-     "h": 1.18,
-     "views": 10,
-     "measured": true
+     "x": 10.6,
+     "y": 2.62,
+     "w": 0.69,
+     "d": 1.26,
+     "h": 1.01,
+     "views": 11,
+     "measured": true,
+     "solid": true,
+     "part": 0,
+     "station": {
+      "x": 10.6,
+      "y": 2.62,
+      "w": 1.39,
+      "d": 1.96
+     }
+    },
+    {
+     "machine": "back-b",
+     "x": 10.6,
+     "y": 2.62,
+     "w": 0.69,
+     "d": 1.26,
+     "h": 0.0,
+     "top": 1.01,
+     "views": 11,
+     "measured": true,
+     "solid": false,
+     "area": true,
+     "station": {
+      "x": 10.6,
+      "y": 2.62,
+      "w": 1.39,
+      "d": 1.96
+     }
     }
    ]
   }

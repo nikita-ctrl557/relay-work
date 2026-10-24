@@ -105,15 +105,16 @@ export function mapBody(P, map, out = null) {
    tracker disagrees > 0.7 m for > 0.15 s), the placer reports a cut and the view fades the body out and back in at
    the new spot. During a set, a body already within 1 m of the set's machine gets a gentle (<= 0.3 m) nudge
    towards it; nothing more (the set's machine may be wrongly attributed; dragging bodies would hide that).
-   Drawn = measured: the body is never held or dragged away from where it was measured (st.inside only reports
-   feet inside tall equipment). */
+   Drawn = measured: the body is never held or dragged away from where it was measured. st.inside flags feet deep
+   inside a solid piece of equipment (not for anyone planted at a zone); the view hides those. */
 export const WALK = 2.0;                 // m/s: the fallback never moves a body faster
-const TAU_FALL = 0.15, TAU_BLEND = 0.2, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 0.7, CUT_HOLD = 0.15, RESET_GAP = 2.0, EQ_IN = 0.15;
+const TAU_FALL = 0.15, TAU_BLEND = 0.2, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 0.7, CUT_HOLD = 0.15, RESET_GAP = 2.0, EQ_IN = 0.35;
 const capStep = (dx, dy, max) => { const l = Math.hypot(dx, dy); return l > max && l > 0 ? [dx * max / l, dy * max / l] : [dx, dy]; };
 const rectDist = (p, r) => { const dx = Math.max(Math.abs(p[0] - r.x) - r.w / 2, 0), dy = Math.max(Math.abs(p[1] - r.y) - r.d / 2, 0); return Math.hypot(dx, dy); };
 const clampRect = (p, r) => [Math.max(r.x - r.w / 2, Math.min(r.x + r.w / 2, p[0])), Math.max(r.y - r.d / 2, Math.min(r.y + r.d / 2, p[1]))];
 /* equipment a body may not stand in: tall pieces, not cages one steps into */
 export const isObstacle = e => e && e.h >= 1.0 && !/rack/i.test(e.machine) && e.w > 0 && e.d > 0;
+// deep inside a solid piece (>= 0.35 m from every side): not someone seated on it or standing at its edge
 export const insideEq = (p, r) => Math.abs(p[0] - r.x) < r.w / 2 - EQ_IN && Math.abs(p[1] - r.y) < r.d / 2 - EQ_IN;
 
 export function newPlacer() { return {t: null, base: null, off: [0, 0], c: [0, 0], src: null, lastA: null, far: 0, pos: null, cut: false, inside: false}; }
@@ -151,7 +152,7 @@ export function stepPlacer(st, t, A, rf, ctx = {}) {
   if (dr > 1e-3 && dr <= NUDGE_RANGE) { const q = clampRect(b, r), m = Math.min(NUDGE_MAX, dr) / dr; tgt = [(q[0] - b[0]) * m, (q[1] - b[1]) * m]; }
   if (st.cut || !Number.isFinite(dt)) st.c = tgt; else { const kk = 1 - Math.exp(-dt / TAU_NUDGE); st.c = [st.c[0] + (tgt[0] - st.c[0]) * kk, st.c[1] + (tgt[1] - st.c[1]) * kk]; }
   const p = [b[0] + st.c[0], b[1] + st.c[1]];
-  st.inside = (ctx.obstacles || []).some(e => e.machine !== r?.machine && !(ctx.free || []).includes(e.machine) && insideEq(p, e));
+  st.inside = !ctx.planted && !(ctx.free || []).length && (ctx.obstacles || []).some(e => e.machine !== r?.machine && insideEq(p, e)); // never for someone planted at a zone
   st.pos = p;
   return p;
 }
@@ -160,30 +161,38 @@ export function stepPlacer(st, t, A, rf, ctx = {}) {
    box: the tracker's box (0..1 of the frame) or null; kp: 2D keypoints (0..1) or null. False for bodies that
    would be drawn far bigger than the person in the video (fits gone wrong near the camera or at the frame edge),
    bodies right in front of the lens, and impossible statures. */
-export function body3dOk(P, cam, box, kp = null) {
+export function body3dWhy(P, cam, box, kp = null) {
   const leg = (i, j) => Math.hypot(P[i * 3] - P[j * 3], P[i * 3 + 1] - P[j * 3 + 1], P[i * 3 + 2] - P[j * 3 + 2]);
   const stature = (leg(7, 9) + leg(9, 11) + leg(8, 10) + leg(10, 12)) / 2 + Math.hypot((P[3] + P[6] - P[21] - P[24]) / 2, (P[4] + P[7] - P[22] - P[25]) / 2, (P[5] + P[8] - P[23] - P[26]) / 2) + 0.33;
-  if (!(stature > 1.35 && stature < 2.1)) return false;
-  if (!cam) return true;
-  const W0 = cam.width || 640, H0 = cam.height || 360;
-  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  if (!(stature > 1.35 && stature < 2.1)) return "stature";
+  // sitting on nothing: hips a hand above the floor with both feet in the air (fits gone wrong behind equipment)
+  if ((P[23] + P[26]) / 2 < 0.38 && Math.min(P[35], P[38]) > 0.12) return "contorted";
+  if (!cam) return "";
+  const W0 = cam.width || 640, H0 = cam.height || 360, M = camM(cam), uv = [];
   for (let i = 0; i < 13; i++) {
-    const X = [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]], M = cam.R, fl = cam.flip ?? 1, d = [X[0] - cam.C[0], X[1] - cam.C[1], X[2] - cam.C[2]];
-    const z = M[2][0] * d[0] + M[2][1] * d[1] + M[2][2] * fl * d[2]; if (z < 1.2) return false;   // in front of the lens
-    const uv = camProject(cam, X); if (!uv) return false;
-    x0 = Math.min(x0, uv[0]); x1 = Math.max(x1, uv[0]); y0 = Math.min(y0, uv[1]); y1 = Math.max(y1, uv[1]);
+    const d = [P[i * 3] - cam.C[0], P[i * 3 + 1] - cam.C[1], P[i * 3 + 2] - cam.C[2]], q = M.map(r => r[0] * d[0] + r[1] * d[1] + r[2] * d[2]);
+    if (q[2] < 1.2) return "lens";                                                              // right in front of the lens
+    uv.push([cam.f * q[0] / q[2] + cam.cx, cam.f * q[1] / q[2] + cam.cy]);
   }
-  let ref = null;
-  if (kp) { let a = Infinity, b = -Infinity, c = Infinity, e = -Infinity, n = 0; for (const q of kp) if (q) { n++; a = Math.min(a, q[0] * W0); b = Math.max(b, q[0] * W0); c = Math.min(c, q[1] * H0); e = Math.max(e, q[1] * H0); } if (n >= 5) ref = [a, c, b, e]; }
-  if (!ref && box) ref = [box[0] * W0, box[1] * H0, (box[0] + box[2]) * W0, (box[1] + box[3]) * H0];
-  if (!ref) return true;
-  const rh = Math.max(ref[3] - ref[1], 12), rw = Math.max(ref[2] - ref[0], 8);
-  if (y1 - y0 > 1.4 * rh + 10 || x1 - x0 > 2.0 * Math.max(rw, rh * 0.6) + 10) return false;          // drawn far bigger than the person
-  // joint by joint against what the camera saw: a body fitted to someone else (or gone wrong) is off by > 25 % of the height
-  if (kp) { const e = []; for (let i = 0; i < 13; i++) { const q = kp[i]; if (!q) continue; const uv = camProject(cam, [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]]); if (uv) e.push(Math.hypot(uv[0] - q[0] * W0, uv[1] - q[1] * H0)); }
-    if (e.length >= 6) { e.sort((a, b) => a - b); if (e[e.length >> 1] > 0.25 * rh) return false; } }
-  // cut off by the frame edge: only the visible part was measured, so the body must not spill far past it
-  if ((ref[0] < 4 || ref[2] > W0 - 4 || ref[3] > H0 - 4) && (y1 - y0 > 1.25 * rh + 10 || y0 < ref[1] - 0.2 * rh - 6)) return false;
-  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-  return Math.abs(cx - (ref[0] + ref[2]) / 2) < 0.6 * rw + 0.3 * rh + 10 && Math.abs(cy - (ref[1] + ref[3]) / 2) < 0.6 * rh + 10; // and where they are
+  // drawn size (clipped to the frame, as people see it) against the person's tracker box
+  const cx = uv.map(v => Math.max(0, Math.min(W0, v[0]))), cy = uv.map(v => Math.max(0, Math.min(H0, v[1])));
+  const pw = Math.max(...cx) - Math.min(...cx), ph = Math.max(...cy) - Math.min(...cy);
+  const vis = kp ? kp.map((q, i) => q ? i : -1).filter(i => i >= 0) : [];
+  if (box) {
+    const bw = box[2] * W0, bh = box[3] * H0;
+    if (ph > 1.4 * bh + 12 || pw > 1.4 * bw + 12) return "size";
+    // cut off by the frame edge: the 3D is only as good as what was seen; with no shoulder or hip seen it is a guess
+    // (fine when enough of them was seen; a head swelling out of the frame over unseen shoulders and hips is not)
+    const headOut = uv[0][0] < 0 || uv[0][0] > W0 || uv[0][1] < 0 || uv[0][1] > H0;
+    if ((box[0] < 0.015 || box[0] + box[2] > 0.985 || box[1] + box[3] > 0.985) && (vis.length < 4 || headOut && ![1, 2, 7, 8].some(i => kp[i]))) return "edge";
+  }
+  // joint by joint against what the camera saw: a body fitted to someone else (or gone wrong)
+  if (vis.length >= 4) {
+    const ys = vis.map(i => kp[i][1] * H0), hp = Math.max(Math.max(...ys) - Math.min(...ys), box ? box[3] * H0 : 0, 10);
+    const e = vis.map(i => Math.hypot(uv[i][0] - kp[i][0] * W0, uv[i][1] - kp[i][1] * H0)).sort((a, b) => a - b);
+    const med = e.length % 2 ? e[e.length >> 1] : (e[e.length / 2 - 1] + e[e.length / 2]) / 2;
+    if (med > Math.max(0.29 * hp, 9)) return "kp";
+  }
+  return "";
 }
+export const body3dOk = (P, cam, box, kp = null) => !body3dWhy(P, cam, box, kp);

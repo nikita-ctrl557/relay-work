@@ -22,6 +22,8 @@ FORMAT v2 (core.js indexPose3d reads both v1 "poses3d" rows and v2 "tracks"):
        last one cm); without it the app computes them from P (core.js anglesOf = pose3d.joint_angles)
     F: base64 of int16 per frame = body facing (yaw) in 0.01 rad, plan frame: forward = (cos, sin)
     U: 13 ints = median 1-sigma joint uncertainty of the track, cm
+    C: optional per-joint confidence per frame, same encoding as P, 0..100 (100 seen in the video, 70 seen within
+       0.5 s, 30 inferred: hidden or out of the frame); only on tracks where some joints were not seen
     Q: base64 of uint8 per frame = confidence 0..100 (2D agreement, joints seen, frame-edge cut, distance to the
        lens); frames below Q_MIN are not exported at all, the app may fade bodies with low Q
 """
@@ -373,6 +375,15 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
         anc[far] = np.nan
     Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc)
     Q = frame_quality(cam, g, Xr, UV, Wg, boxes)
+    # per-joint confidence: seen in the 2D (not pinned to the frame border) 100, seen within 0.5 s 70, inferred 30
+    inner = (UV[..., 0] > 4) & (UV[..., 0] < 636) & (UV[..., 1] > 4) & (UV[..., 1] < 356)
+    seen = (Wg > 0) & inner
+    Cj = np.where(seen, 100, 30).astype(float)
+    for j in range(13):
+        idx = np.flatnonzero(seen[:, j])
+        if len(idx):
+            d = np.abs(np.arange(len(g))[:, None] - idx[None, :]).min(1)
+            Cj[(d <= 5) & ~seen[:, j], j] = 70
     # hold the end poses while the tracker still shows the person (<= max_hold s each side)
     pre = post = 0
     for a, b in present:
@@ -384,9 +395,10 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
         g = np.r_[g[0] - np.arange(pre, 0, -1) / hz, g, g[-1] + np.arange(1, post + 1) / hz]
         Xr = np.concatenate([np.repeat(Xr[:1], pre, 0), Xr, np.repeat(Xr[-1:], post, 0)])
         Q = np.r_[np.repeat(Q[:1], pre), Q, np.repeat(Q[-1:], post)]
+        Cj = np.concatenate([np.repeat(Cj[:1], pre, 0), Cj, np.repeat(Cj[-1:], post, 0)])
     fwd = PP.cap_yaw_rate(PP._hfwd(Xr, hand), hz)
     Ug = np.stack([np.interp(g, t, np.nan_to_num(U[:, j], nan=0.3)) for j in range(13)], 1)
-    return {"t": np.round(g, 3), "X": Xr, "fwd": fwd, "U": Ug, "pins": pins, "Q": Q}
+    return {"t": np.round(g, 3), "X": Xr, "fwd": fwd, "U": Ug, "pins": pins, "Q": Q, "C": Cj}
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -648,6 +660,8 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                 if b_ - a_ >= 10:
                     tr_ = encode_track(pid, R["t"][a_:b_], R["X"][a_:b_], A[a_:b_], R["fwd"][a_:b_], R["U"][a_:b_], hz)
                     tr_["Q"] = _b64(np.clip(Q[a_:b_], 0, 100).astype(np.uint8))
+                    if "C" in R and (R["C"][a_:b_] < 100).mean() > 0.05:
+                        tr_["C"] = delta_encode(R["C"][a_:b_])     # per-joint confidence 0..100 (app hides limbs)
                     if not EXPORT_ANGLES:      # the app recomputes them from the joints (core.js anglesOf): -20 % size
                         tr_.pop("A")
                     tracks.append((ph, tr_))
@@ -693,11 +707,14 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                     U = np.repeat(np.array(tr["U"], float)[None] / 100, tr["n"], 0)
                     had_a = "A" in tr
                     Qd = np.frombuffer(base64.b64decode(tr["Q"]), np.uint8) if "Q" in tr else None
+                    Cd = tr.get("C")
                     tracks[k] = (tracks[k][0], encode_track(pid, ts[i0:], X[i0:], A[i0:], fw[i0:], U[i0:], tr["hz"]))
                     if not had_a:
                         tracks[k][1].pop("A")
                     if Qd is not None:
                         tracks[k][1]["Q"] = _b64(Qd[i0:])
+                    if Cd is not None:
+                        tracks[k][1]["C"] = delta_encode(delta_decode(Cd, 13)[i0:])
                     tr = tracks[k][1]
                     X = X[i0:]
             last = (tr["t0"] + (tr["n"] - 1) / tr["hz"], (X[-1, P3.LAN, :2] + X[-1, P3.RAN, :2]) / 2)

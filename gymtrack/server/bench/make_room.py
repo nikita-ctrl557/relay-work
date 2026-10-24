@@ -32,6 +32,15 @@ CEIL = 3.6                # ceiling height cap (m)
 FAR = 40.0
 EQ_GROW = float(os.environ.get("EQ_GROW", "1.0"))   # search window around the configured footprint (m) for equipment contacts
 EQ_PCT = float(os.environ.get("EQ_PCT", "4"))       # footprint extent: this percentile .. 100 - it of the contacts
+EQ_MAXD = 1.3             # open / seated equipment: footprint no deeper than this (m) from its front
+STATION = 0.35            # default margin around an outline where its user stands or sits (m)
+SOLID_H, SOLID_W, SOLID_D = 0.9, 0.3, 0.65   # solid upright: min height, min front width, assumed depth (m)
+
+
+def _poly_hit(pt, poly, grow):
+    """Point within `grow` metres of an axis-aligned polygon's bounding box."""
+    lo, hi = np.asarray(poly).min(0) - grow, np.asarray(poly).max(0) + grow
+    return bool((pt >= lo).all() and (pt <= hi).all())
 
 
 def camera(cfg_cam):
@@ -153,6 +162,47 @@ def build(segs_dir, frames_dir, seg, base=None):
     c00, c01, c10, c11 = cls[:-1, :-1], cls[:-1, 1:], cls[1:, :-1], cls[1:, 1:]
     flat = (c00 == c01) & (c00 == c10) & (c00 == c11) & (c00 > 0)
     keep = flat | (zmax / zmin < 1.045)
+    # solid upright things (dumbbell towers, weight stacks): the camera only sees their front, so give them volume.
+    # Per image column: the lowest anchored run (its floor contact and top height). Neighbouring columns whose contacts
+    # continue (< 0.4 m apart) and stand >= SOLID_H tall form one front face; open frames (racks, cages) break up
+    # into thin uprights (< SOLID_W wide) and are left alone. Each face is extruded straight back from the camera by
+    # SOLID_D (clipped at the back wall) -> a prism that hides whoever stands behind it in other views.
+    run_c = np.full((GW, 2), np.nan); run_h = np.full(GW, np.nan); run_r = np.full((GW, 2), -1)
+    for j in range(GW):
+        rows = np.where(anchored[:, j])[0]
+        if not len(rows): continue
+        i1 = rows.max(); i0 = i1
+        while i0 - 1 >= 0 and anchored[i0 - 1, j]: i0 -= 1
+        run_c[j] = contact[i1, j]; run_h[j] = P[i0:i1 + 1, j, 2].max(); run_r[j] = (i0, i1)
+    solids, grp = [], []
+    def close_group(g):
+        if len(g) < 4: return
+        c = run_c[g]; hh = run_h[g]
+        if np.linalg.norm(c[-1] - c[0]) < SOLID_W: return
+        hh = np.array([np.median(hh[max(0, k - 2):k + 3]) for k in range(len(g))])
+        dirs2 = c - C[:2]; dirs2 /= np.linalg.norm(dirs2, axis=1, keepdims=True)
+        back = c + dirs2 * SOLID_D
+        if wall_y is not None:   # never through the back wall
+            lim = np.maximum(0.0, (c[:, 1] - (wall_y + 0.05)) / np.maximum(1e-6, -dirs2[:, 1]))
+            back = c + dirs2 * np.minimum(SOLID_D, np.where(dirs2[:, 1] < 0, lim, SOLID_D))[:, None]
+        solids.append({"front": c, "back": back, "h": hh, "cols": g})
+    miss = 0
+    for j in range(GW):   # a face may skip up to 2 columns (gaps between dumbbells, a bar in front)
+        ok = np.isfinite(run_h[j]) and run_h[j] >= SOLID_H
+        if ok and grp and np.linalg.norm(run_c[j] - run_c[grp[-1]]) < 0.4: grp.append(j); miss = 0; continue
+        if not ok and grp and miss < 2: miss += 1; continue
+        close_group(grp); grp = [j] if ok else []; miss = 0
+    close_group(grp)
+    # each solid belongs to the zone whose image polygon holds most of its columns (the zones are drawn on the image)
+    zmasks = []
+    for p_ in zones_img:
+        mk = np.zeros((GH, GW), np.uint8); cv2.fillPoly(mk, [np.int32(p_ * GW / W)], 1); zmasks.append(mk)
+    for sd in solids:
+        votes = np.zeros(len(zmasks))
+        for jj in sd["cols"]:
+            i0, i1 = run_r[jj]; mid = (i0 + i1) // 2
+            for zi, mk in enumerate(zmasks): votes[zi] += mk[i1, jj] + mk[mid, jj]
+        sd["zone"] = cc["zones"][int(votes.argmax())]["machine"] if votes.max() >= len(sd["cols"]) * 0.5 else None
     # equipment: the floor contacts of upright things seen inside each zone's image polygon, kept near the zone's
     # configured floor footprint (+-1 m), give the measured footprint; heights from the points standing on them.
     # Zones the camera can't measure keep their configured footprint (flagged "measured": false).
@@ -169,15 +219,27 @@ def build(segs_dir, frames_dir, seg, base=None):
             if near.sum() >= 15:
                 lo, hi = np.percentile(cpt[near], EQ_PCT, 0), np.percentile(cpt[near], 100 - EQ_PCT, 0)
                 hgt = float(np.percentile(pts[near][:, 2], 96))
-                e = {"machine": zc_["machine"], "x": (lo[0] + hi[0]) / 2, "y": (lo[1] + hi[1]) / 2, "w": max(0.4, hi[0] - lo[0]), "d": max(0.4, hi[1] - lo[1]), "h": hgt, "n": int(near.sum()), "measured": True}
+                # solid parts inside this zone's window: the object's real outline is their prisms
+                mine = [sd for sd in solids if sd.get("zone") == zc_["machine"]]
+                parts = []
+                for sd in mine:
+                    q = np.r_[sd["front"], sd["back"]]; a0, a1 = q.min(0), q.max(0)
+                    parts.append({"x": (a0[0] + a1[0]) / 2, "y": (a0[1] + a1[1]) / 2, "w": a1[0] - a0[0], "d": a1[1] - a0[1], "h": float(np.percentile(sd["h"], 90))})
+                if parts:
+                    q = np.array([[pt["x"] - pt["w"] / 2, pt["y"] - pt["d"] / 2, pt["x"] + pt["w"] / 2, pt["y"] + pt["d"] / 2] for pt in parts])
+                    lo, hi = q[:, :2].min(0), q[:, 2:].max(0); hgt = max(pt["h"] for pt in parts)
+                else:   # open / seated equipment: the contacts' extent, no deeper than a machine is
+                    hi[1] = min(hi[1], lo[1] + EQ_MAXD) if C[1] < lo[1] else hi[1]; lo[1] = max(lo[1], hi[1] - EQ_MAXD)
+                e = {"machine": zc_["machine"], "x": (lo[0] + hi[0]) / 2, "y": (lo[1] + hi[1]) / 2, "w": max(0.3, hi[0] - lo[0]), "d": max(0.3, hi[1] - lo[1]), "h": hgt,
+                     "n": int(near.sum()), "measured": True, "solid": bool(parts), "parts": [{k: round(v, 2) for k, v in pt.items()} for pt in parts]}
         if e is None and len(pp) >= 3:
             lo, hi = pp.min(0), pp.max(0)
             e = {"machine": zc_["machine"], "x": (lo[0] + hi[0]) / 2, "y": (lo[1] + hi[1]) / 2, "w": hi[0] - lo[0], "d": hi[1] - lo[1], "h": 1.2, "n": 1, "measured": False}
         st = zc_.get("station")  # where the lifter stands / sits to use it, beyond what the contacts measure (m, outward)
-        if e and st and e["measured"]:
-            ex0, ey0 = e["x"] - e["w"] / 2 - st.get("x0", 0), e["y"] - e["d"] / 2 - st.get("y0", 0)
-            ex1, ey1 = e["x"] + e["w"] / 2 + st.get("x1", 0), e["y"] + e["d"] / 2 + st.get("y1", 0)
-            e.update(x=(ex0 + ex1) / 2, y=(ey0 + ey1) / 2, w=ex1 - ex0, d=ey1 - ey0)
+        if e:   # where a lifter stands / sits to use it: the outline grown by the zone's "station" (default STATION m all round)
+            st = st or {}; g = lambda k: st.get(k, STATION)
+            ex0, ey0, ex1, ey1 = e["x"] - e["w"] / 2 - g("x0"), e["y"] - e["d"] / 2 - g("y0"), e["x"] + e["w"] / 2 + g("x1"), e["y"] + e["d"] / 2 + g("y1")
+            e["station"] = {"x": round(float(ex0 + ex1) / 2, 2), "y": round(float(ey0 + ey1) / 2, 2), "w": round(float(ex1 - ex0), 2), "d": round(float(ey1 - ey0), 2)}
         if e: equip.append({k: round(float(v), 2) if isinstance(v, (float, np.floating)) else v for k, v in e.items()})
     # views for the frontend (three.js axes: x = plan x, y = up, z = plan y)
     t3 = lambda p: [round(float(p[0]), 3), round(float(p[2]), 3), round(float(p[1]), 3)]
@@ -200,20 +262,42 @@ def build(segs_dir, frames_dir, seg, base=None):
     return {"seg": seg, "W": W, "H": H, "gw": GW, "gh": GH, "far": FAR, "C": [round(float(c), 4) for c in C],
             "D": [[float(x) for x in r] for r in D], "f": float(K[0, 0]),
             "R": [[float(x) for x in r] for r in M], "depth": base64.b64encode(zq.tobytes()).decode(),
-            "cells": base64.b64encode(bits.tobytes()).decode(), "equipment": equip, "view": view, "shell": shell, "wall_y": round(wall_y, 3), "ceil": CEIL, "info": info}, P, keep, cls
+            "cells": base64.b64encode(bits.tobytes()).decode(), "equipment": equip, "solids": [{"front": np.round(sd["front"], 3).tolist(), "back": np.round(sd["back"], 3).tolist(), "h": np.round(sd["h"], 2).tolist(), "machine": sd.get("zone")} for sd in solids], "view": view, "shell": shell, "wall_y": round(wall_y, 3), "ceil": CEIL, "info": info}, P, keep, cls
 
 
 def merge_equipment(rooms):
-    """One footprint per machine for the session: median over the framings that saw it (weighted by points)."""
+    """Session equipment, one entry per physical object. Open / seated equipment: one outline per machine, the median
+    over the framings that measured it. Solid equipment (towers, stacks): one entry per solid part, as seen by the
+    framing that measured the machine best (several entries share the machine id). Each has its own "station"."""
     by = {}
     for r in rooms:
         for e in r["equipment"]: by.setdefault(e["machine"], []).append(e)
     out = []
     for m, es in by.items():
-        w = np.array([e["n"] for e in es], float)
-        med = lambda k: float(np.average([e[k] for e in es], weights=w)) if len(es) < 3 else float(np.median([e[k] for e in es]))
         ms = [e for e in es if e.get("measured")] or es; es = ms; w = np.array([e["n"] for e in es], float)
-        out.append({"machine": m, **{k: round(med(k), 2) for k in ("x", "y", "w", "d", "h")}, "views": len(es), "measured": bool(es[0].get("measured"))})
+        best = max(es, key=lambda e: e["n"])
+        sb = best.get("station")
+        mar = [best["x"] - best["w"] / 2 - (sb["x"] - sb["w"] / 2), best["y"] - best["d"] / 2 - (sb["y"] - sb["d"] / 2),
+               sb["x"] + sb["w"] / 2 - (best["x"] + best["w"] / 2), sb["y"] + sb["d"] / 2 - (best["y"] + best["d"] / 2)] if sb else [STATION] * 4
+        def with_station(o):
+            x0, y0, x1, y1 = o["x"] - o["w"] / 2 - mar[0], o["y"] - o["d"] / 2 - mar[1], o["x"] + o["w"] / 2 + mar[2], o["y"] + o["d"] / 2 + mar[3]
+            o["station"] = {"x": round((x0 + x1) / 2, 2), "y": round((y0 + y1) / 2, 2), "w": round(x1 - x0, 2), "d": round(y1 - y0, 2)}
+            return o
+        solid = [e for e in es if e.get("solid") and e.get("parts")]
+        if solid:
+            bs = max(solid, key=lambda e: e["n"])
+            for k, pt in enumerate(bs["parts"]):
+                out.append(with_station({"machine": m, **{q: round(float(pt[q]), 2) for q in ("x", "y", "w", "d", "h")}, "views": len(es), "measured": True, "solid": True, "part": k}))
+            # last: the machine's whole floor area (all parts and the gaps between them) for labels and set distances;
+            # height 0 and "area" so nothing takes it for an object one can't stand in
+            q = np.array([[pt["x"] - pt["w"] / 2, pt["y"] - pt["d"] / 2, pt["x"] + pt["w"] / 2, pt["y"] + pt["d"] / 2] for pt in bs["parts"]])
+            (x0, y0), (x1, y1) = q[:, :2].min(0), q[:, 2:].max(0)
+            out.append(with_station({"machine": m, "x": round(float(x0 + x1) / 2, 2), "y": round(float(y0 + y1) / 2, 2), "w": round(float(x1 - x0), 2), "d": round(float(y1 - y0), 2),
+                                     "h": 0.0, "top": round(max(pt["h"] for pt in bs["parts"]), 2), "views": len(es), "measured": True, "solid": False, "area": True}))
+            continue
+        med = lambda k: float(np.average([e[k] for e in es], weights=w)) if len(es) < 3 else float(np.median([e[k] for e in es]))
+        out.append(with_station({"machine": m, **{k: round(med(k), 2) for k in ("x", "y", "w", "d", "h")}, "views": len(es),
+                                 "measured": bool(es[0].get("measured")), "solid": False}))
     return out
 
 

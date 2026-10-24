@@ -460,6 +460,33 @@ class RefineProblem(P3._Problem):
         # keeps a distant person's depth from drifting where the 2D is ambiguous
         self.anchor = np.full((self.T, 2), np.nan) if anchor is None else np.asarray(anchor, float)
         self.anc_sig = 0.35
+        self.neutral = None          # (T, 13, 3) rest targets for limbs nobody saw (set_neutral)
+
+    def set_neutral(self, X0, groups):
+        """Unseen limb joints get a weak pull to a relaxed pose hanging from their visible parents (legs straight
+        down from the hips, arms down the sides): a partly visible person stands or sits plausibly instead of
+        flailing limbs into the air."""
+        g = dict(zip(P3.GROUP_NAMES, np.asarray(groups, float)))
+        T = self.T
+        tgt = np.full((T, 13, 3), np.nan)
+        uv = self.uv
+        border = (uv[..., 0] <= 4) | (uv[..., 0] >= 636) | (uv[..., 1] <= 4) | (uv[..., 1] >= 356)
+        unseen = (self.w <= 0) | border
+        mh = (X0[:, LHIP] + X0[:, RHIP]) / 2
+        ms = (X0[:, LSH] + X0[:, RSH]) / 2
+        trunk = _unit(ms - mh)
+        for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
+            k = X0[:, hp] - UP * g["thigh"]
+            a = k - UP * g["shank"]
+            tgt[:, kn] = np.where(unseen[:, kn][:, None], k, np.nan)
+            tgt[:, an] = np.where(unseen[:, an][:, None], a, np.nan)
+        for sh, el, wr in ((LSH, LEL, LWR), (RSH, REL, RWR)):
+            e = X0[:, sh] - trunk * g["upper_arm"]
+            wv = e - trunk * g["forearm"] * 0.9
+            tgt[:, el] = np.where(unseen[:, el][:, None], e, np.nan)
+            tgt[:, wr] = np.where(unseen[:, wr][:, None], wv, np.nan)
+        self.neutral = tgt
+        self.neu_sig = 0.15
 
     def robust_mask(self, x):
         """soft-L1 on the 2D observations and the prior (they can be wrong); constraints stay quadratic."""
@@ -481,6 +508,9 @@ class RefineProblem(P3._Problem):
         A = self.anchor
         feet = (X[:, LAN, :2] + X[:, RAN, :2]) / 2
         r.append(np.where(np.isfinite(A), feet - np.nan_to_num(A), 0.0).ravel() / self.anc_sig)
+        if self.neutral is not None:
+            N = self.neutral
+            r.append(np.where(np.isfinite(N), X - np.nan_to_num(N), 0.0).ravel() / self.neu_sig)
         return np.concatenate(r)
 
     def residuals(self, x):
@@ -530,6 +560,11 @@ class RefineProblem(P3._Problem):
             for an in (LAN, RAN):
                 R.append(rows[m, c]); C.append(base[m, an] + c); V.append(np.full(m.sum(), 0.5 / self.anc_sig))
         r0 += T * 2
+        if self.neutral is not None:
+            okn = np.isfinite(self.neutral).ravel()
+            rows = r0 + np.arange(T * 39)
+            R.append(rows[okn]); C.append(np.arange(T * 39)[okn]); V.append(np.full(okn.sum(), 1 / self.neu_sig))
+            r0 += T * 39
         J1 = coo_matrix((np.concatenate(V), (np.concatenate(R), np.concatenate(C))), shape=(r0, T * 39)).tocsr()
         return vstack([J0, J1]).tocsr()
 
@@ -615,6 +650,7 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         sl = slice(s, e)
         pr = RefineProblem(cam, UV[sl], W[sl], g[sl], L, hand, (prior[0][sl], prior[1][sl]), bend_ok[sl], pins[sl],
                            anchor=None if anchor is None else anchor[sl])
+        pr.set_neutral(X0[sl], groups)
         x0 = X0[sl].copy()
         if prev is not None and s < prev:
             # continuity: the overlap starts from, and is held near, the previous window's answer

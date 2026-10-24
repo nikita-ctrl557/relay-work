@@ -189,6 +189,26 @@ function roomMesh(d, tex) {
   const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({map: tex, side: THREE.DoubleSide})); m.userData.room = d.seg;
   // the room's shell under and behind it: floor and back wall where the camera saw neither (behind equipment, off to the sides)
   const g = new THREE.Group(); g.add(m);
+  // solid upright things (dumbbell towers, weight stacks) seen only from the front get their volume: the front face
+  // extruded back from the camera (bench/make_room.py "solids"), textured by projecting the footage through the camera,
+  // so the camera's own view is unchanged and from other angles whoever stands behind them is hidden, not on top
+  if (d.solids?.length) {
+    const Di = new THREE.Matrix3().set(...D.flat()).invert(), e = Di.elements; // column-major
+    const sp = [], su = [], si = [];
+    const vert = (x, y, h) => { const dx = x - C[0], dy = y - C[1], dh = h - C[2];
+      const u = e[0] * dx + e[3] * dy + e[6] * dh, v = e[1] * dx + e[4] * dy + e[7] * dh, w = e[2] * dx + e[5] * dy + e[8] * dh;
+      sp.push(x, h, y); su.push(Math.min(1, Math.max(0, u / w / W)), Math.min(1, Math.max(0, 1 - v / w / H))); return sp.length / 3 - 1; };
+    const quad = (a, b, c2, d2) => si.push(a, b, c2, a, c2, d2);
+    for (const sd of d.solids) {
+      const n2 = sd.front.length, F0 = [], F1 = [], B0 = [], B1 = [];
+      for (let k = 0; k < n2; k++) { const [fx, fy] = sd.front[k], [bx, by] = sd.back[k], h = sd.h[k];
+        F0.push(vert(fx, fy, 0)); F1.push(vert(fx, fy, h)); B0.push(vert(bx, by, 0)); B1.push(vert(bx, by, h)); }
+      for (let k = 0; k < n2 - 1; k++) { quad(F1[k], F1[k + 1], B1[k + 1], B1[k]); quad(B0[k], B0[k + 1], B1[k + 1], B1[k]); }   // lid, back
+      quad(F0[0], B0[0], B1[0], F1[0]); quad(F0[n2 - 1], B0[n2 - 1], B1[n2 - 1], F1[n2 - 1]);                                   // ends
+    }
+    const sg = new THREE.BufferGeometry(); sg.setAttribute("position", new THREE.Float32BufferAttribute(sp, 3)); sg.setAttribute("uv", new THREE.Float32BufferAttribute(su, 2)); sg.setIndex(si);
+    const sm = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({map: tex, side: THREE.DoubleSide})); sm.userData.room = d.seg; g.add(sm);
+  }
   if (d.shell) {
     const {x0, x1, y0, y1, h} = d.shell, fm = new THREE.MeshBasicMaterial({color: 0x2c2f33}), wm = new THREE.MeshBasicMaterial({color: 0x3a3631});
     const fl = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, y1 - y0), fm); fl.rotation.x = -Math.PI / 2; fl.position.set((x0 + x1) / 2, -0.01, (y0 + y1) / 2);
@@ -231,7 +251,9 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const camera = new THREE.PerspectiveCamera(42, 16 / 9, 0.1, 300);
 
   // with a reconstructed room, equipment stands where the room measured it: the same floor frame as the room and its people
-  const eqOf = id => room?.equipment?.find(e => e.machine === id), eqRect = e => [[e.x - e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y + e.d / 2], [e.x - e.w / 2, e.y + e.d / 2]];
+  // a machine's entries: its parts (solid towers, each an object) and, for multi-part machines, a last "area" entry
+  const eqOf = id => { const es = room?.equipment?.filter(e => e.machine === id) || []; return es.find(e => e.area) || es[0]; };
+  const stationOf = id => { const e = eqOf(id); return e?.station ? {...e.station, machine: id, h: e.top ?? e.h} : e; }, eqRect = e => [[e.x - e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y + e.d / 2], [e.x - e.w / 2, e.y + e.d / 2]];
   const zones = plan.zones.map(z => eqOf(z.machine) ? {...z, poly: eqRect(eqOf(z.machine))} : z);
   // room bounds: the plan plus anything placed around it
   const items = plan.items || [];
@@ -316,9 +338,10 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     tag.onclick = () => { selM = m.id; onMachine?.(m.id); };
     let topY = 0; new THREE.Box3().setFromObject(obj).max.y > 0 && (topY = new THREE.Box3().setFromObject(obj).max.y);
     const eq = eqOf(m.id), roomPoly = eq ? eqRect(eq) : null;
-    if (eq) { const pk = new THREE.Mesh(new THREE.BoxGeometry(eq.w, eq.h, eq.d), pickMat); pk.position.set(eq.x, eq.h / 2, eq.y); pk.userData.machine = m.id; pickers.add(pk); }
+    const eqH = eq ? Math.max(0.3, eq.top ?? eq.h) : 0;
+    if (eq) { const pk = new THREE.Mesh(new THREE.BoxGeometry(eq.w, eqH, eq.d), pickMat); pk.position.set(eq.x, eqH / 2, eq.y); pk.userData.machine = m.id; pickers.add(pk); }
     machineObjs.push({id: m.id, name: m.name, obj, tint, tag, poly: z.poly, roomPoly, fill: "transparent", stroke: HEX(UNUSED), strong: false, prio: 0,
-      top0: new THREE.Vector3(fp.cx, Math.max(0.9, topY) + 0.25, fp.cy), topR: eq ? new THREE.Vector3(eq.x, Math.max(0.9, eq.h) + 0.25, eq.y) : null, top: null});
+      top0: new THREE.Vector3(fp.cx, Math.max(0.9, topY) + 0.25, fp.cy), topR: eq ? new THREE.Vector3(eq.x, Math.max(0.9, eqH) + 0.25, eq.y) : null, top: null});
   }
   for (const it of items) {
     const mk = MODELS[it.type] || MODELS.machine;
@@ -410,12 +433,15 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const std = o => new THREE.MeshStandardMaterial({color: COL.move, roughness: 0.55, transparent: true, opacity: 0, ...o});
     const mat = std({depthWrite: false, depthFunc: THREE.LessEqualDepth}), jmat = std({roughness: 0.5, depthWrite: false, depthFunc: THREE.LessEqualDepth}), faint = std({depthWrite: false});
     const b3 = makeBody({body: mat, joint: jmat, faint, depth: depthOnly}); b3.group.visible = false; b3.meshes.forEach(o => o.userData.pkey = key);
+    // behind walls and equipment of the realistic room the body shows as a faint silhouette, not as cut-off fragments
+    const gmat = new THREE.MeshBasicMaterial({color: COL.move, transparent: true, opacity: 0, depthTest: false, depthWrite: false});
+    const ghost = makeBody({body: gmat}); ghost.group.visible = false; ghost.meshes.forEach(o => { o.renderOrder = 4; o.castShadow = false; o.raycast = () => {}; });
     const shadow = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({color: 0x000000, transparent: true, opacity: 0, depthWrite: false})); shadow.rotation.x = -Math.PI / 2;
     const halo = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({color: LIFT, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide})); halo.rotation.x = -Math.PI / 2;
-    scene.add(shadow, halo, b3.group);
+    scene.add(shadow, halo, b3.group, ghost.group);
     const tag = document.createElement("button"); tag.className = "s3d-tag"; labels.append(tag);
     tag.onmouseenter = () => setHover(key); tag.onmouseleave = () => setHover(null); tag.onclick = () => onOpen?.(ppl.get(key)?.q);
-    p = {mat, jmat, faint, b3, J3: null, Jm: null, A: null, conf: null, shadow, halo, tag, pos: null, q: null, alpha: 0, want: 1, yaw: null, neutral: true}; ppl.set(key, p); return p;
+    p = {mat, jmat, faint, gmat, ghost, b3, J3: null, Jm: null, A: null, conf: null, shadow, halo, tag, pos: null, q: null, alpha: 0, want: 1, yaw: null, neutral: true}; ppl.set(key, p); return p;
   }
   const setHover = k => { hoverPid = k; onHover?.(k == null ? null : ppl.get(k)?.q?.pid); };
   // the tracker's feet point: bottom-centre of the box through the same camera that built the room (1 Hz, a fallback)
@@ -453,12 +479,13 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       if (q.pose3d?.J) { const r = mapBody(q.pose3d.J, fm); if (r) { Jm = r.J; A = fm ? r.A : null; } } // no camera for the 3D: shape only, placed by the tracker
       if (!rf && !A && !placers.get(key)?.st.pos) continue;
       const pl = placers.get(key) || (placers.set(key, {st: newPlacer()}), placers.get(key)); pl.seen = t;
-      const eq = q.setM ? eqOf(q.setM) : null;
-      const pos = stepPlacer(pl.st, t, A, rf, {set: eq, obstacles, free: q.planted && q.zone ? [q.zone] : []});
+      const eq = q.setM ? stationOf(q.setM) : null; // nudge towards where its user stands / sits
+      const pos = stepPlacer(pl.st, t, A, rf, {set: eq, obstacles, free: q.planted && q.zone ? [q.zone] : [], planted: !!q.planted});
       if (!pos || pos[0] < x0 - 2 || pos[0] > x1 + 2 || pos[1] < z0 - 2 || pos[1] > z1 + 2) continue;
       const p = person(key); seen.add(key);
       p.q = q; p.want = 1; p.Jm = Jm; p.A = Jm ? (A || [(Jm[33] + Jm[36]) / 2, (Jm[34] + Jm[37]) / 2]) : null; p.conf = q.pose3d?.c || null; p.s = fm?.s || 1;
       // someone cut off by the frame edge with no believable 3D: where they stand is a guess, so no stand-in body
+      p.inside = pl.st.inside; // deep inside a solid piece of equipment: not drawn
       p.edge = !Jm && !!q.box && q.box[3] > 0.33 && (q.box[0] < 0.012 || q.box[0] + q.box[2] > 0.988 || q.box[1] + q.box[3] > 0.985); // right in front of the lens, cut off
       const lift = q.inSet || q.activity && q.activity !== "standing";
       p.mat.color.setHex(lift ? COL.lift : q.planted && q.zone ? COL.station : COL.move);
@@ -479,8 +506,9 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const score = p => (p.Jm ? 2 : 0) + (p.q.member ? 1 : 0) + (p.q.box ? p.q.box[3] : 0);
     for (let i = 0; i < shown.length; i++) for (let j = i + 1; j < shown.length; j++) {
       const a = shown[i], b = shown[j]; if (a.dup || b.dup) continue;
-      const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z, d = Math.hypot(dx, dz); if (d >= 0.4) continue;
-      if (iou(a.q.box, b.q.box) > 0.35) { (score(a) >= score(b) ? b : a).dup = true; continue; }
+      const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z, d = Math.hypot(dx, dz), ov = iou(a.q.box, b.q.box);
+      if (ov > 0.55 || d < 0.4 && ov > 0.35) { (score(a) >= score(b) ? b : a).dup = true; continue; } // one person, two ids
+      if (d >= 0.4) continue;
       const ux = d > 1e-3 ? dx / d : 1, uz = d > 1e-3 ? dz / d : 0, h = (0.4 - d) / 2;
       a.sepT.x -= ux * h; a.sepT.z -= uz * h; b.sepT.x += ux * h; b.sepT.z += uz * h;
     }
@@ -595,11 +623,11 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const bodyR = []; // screen rects of the drawn bodies: no label may cover one
     const fadeK = 1 - Math.exp(-Math.min(0.5, (ts - (lastFrame ?? ts - 16)) / 1000) / 0.13); lastFrame = ts; // time-based: slow devices fade as fast
     for (const [k, p] of [...ppl]) {
-      const vis = showP && p.want && !p.dup && !p.edge && !p.swapTo ? 1 : 0;
+      const vis = showP && p.want && !p.inside && !p.dup && !p.edge && !p.swapTo ? 1 : 0;
       p.alpha += (vis - p.alpha) * (p.swapTo ? Math.min(1, fadeK * 2.5) : fadeK); // a cut fades out fast
       if (p.swapTo && p.alpha < 0.04) { p.pos = p.swapTo; p.swapTo = null; p.vel = null; p.sep?.set(0, 0, 0); } // faded out: reappear at the new spot
       if (p.sepT) { (p.sep ||= new THREE.Vector3()).lerp(p.sepT, fadeK * 0.5); }
-      if (p.want === 0 && p.alpha < 0.02) { scene.remove(p.shadow, p.halo, p.b3.group); p.mat.dispose(); p.jmat.dispose(); p.faint.dispose(); p.tag.remove(); ppl.delete(k); continue; }
+      if (p.want === 0 && p.alpha < 0.02) { scene.remove(p.shadow, p.halo, p.b3.group, p.ghost.group); p.mat.dispose(); p.jmat.dispose(); p.faint.dispose(); p.gmat.dispose(); p.tag.remove(); ppl.delete(k); continue; }
       const hl = hoverPid === k, a = Math.max(0, Math.min(1, p.alpha));
       // measured 3D body (already on this map's floor) moved to the placer's feet point; or the neutral body there
       const use3d = showP && peopleMode === "skel" && !!p.Jm;
@@ -612,6 +640,8 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       p.mat.opacity = op; p.jmat.opacity = op; p.faint.opacity = op * 0.3; p.mat.transparent = p.jmat.transparent = true;
       p.b3.group.visible = showP && a > 0.02;
       if (p.b3.group.visible) p.b3.set(J, use3d ? p.conf : null);
+      p.ghost.group.visible = p.b3.group.visible && roomOn && !!roomCur; p.gmat.opacity = 0.2 * op; p.gmat.color.copy(p.mat.color);
+      if (p.ghost.group.visible) p.ghost.set(J);
       p.shadow.position.set(fx, 0.015, fz); p.shadow.material.opacity = 0.16 * a; p.shadow.visible = showP && a > 0.02;
       p.halo.position.set(fx, 0.025, fz); p.halo.material.opacity = hl ? 0.85 * a : 0; p.halo.visible = hl;
       p.tag.classList.toggle("hl", hl); const txt = hl ? p.full : p.short; if (p.tag.textContent !== txt) p.tag.textContent = txt;
