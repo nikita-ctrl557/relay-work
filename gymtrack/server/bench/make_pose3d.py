@@ -677,11 +677,20 @@ def app_gate_ok(cam, X, t, t2, uv2, w2, box_t=None, box_v=None):
             if ph > 1.4 * box[3] * H0 + 12 or pw > 1.4 * box[2] * W0 + 12:
                 ok[i] = False
                 continue
-            head_out = not (0 <= uv[i][0, 0] <= W0 and 0 <= uv[i][0, 1] <= H0)
-            if (box[0] < 0.015 or box[0] + box[2] > 0.985 or box[1] + box[3] > 0.985) and \
-                    (len(vis) < 4 or head_out and not any(v in vis for v in (1, 2, 7, 8)) and not med <= max(0.15 * hp, 9)):
-                ok[i] = False
-                continue
+            if box[0] < 0.015 or box[0] + box[2] > 0.985 or box[1] + box[3] > 0.985:
+                head_out = not (0 <= uv[i][0, 0] <= W0 and 0 <= uv[i][0, 1] <= H0)
+                if len(vis) < 4 or head_out and not any(v in vis for v in (1, 2, 7, 8)):
+                    ok[i] = False
+                    continue
+                # drawn largely (> 30 %) beside the cut-off person's box (+ 10 % of its height)
+                bw, bh = box[2] * W0, box[3] * H0
+                m_ = 0.1 * bh
+                bx0, by0 = cu[:, 0].min(), cu[:, 1].min()
+                iw = max(0, min(bx0 + pw, box[0] * W0 + bw + m_) - max(bx0, box[0] * W0 - m_))
+                ih = max(0, min(by0 + ph, box[1] * H0 + bh + m_) - max(by0, box[1] * H0 - m_))
+                if 1 - iw * ih / max(pw * ph, 1) > 0.3:
+                    ok[i] = False
+                    continue
         if len(vis) >= 4 and med > max(0.29 * hp, 9):
             ok[i] = False
     return ok
@@ -1044,6 +1053,29 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             tlbox[q[0]][0].append(e["t"])
             tlbox[q[0]][1].append(q[4:8])
     tlbox = {k: (np.array(a, float), np.array(b, float)) for k, (a, b) in tlbox.items()}
+    # the detector's own keypoints (all of them, as the app judges a body against them)
+    raw2d = {}
+    for e in replay.get("poses", []):
+        for pid_, v in e["k"]:
+            raw2d.setdefault(pid_, ([], []))
+            raw2d[pid_][0].append(e["t"])
+            raw2d[pid_][1].append(v)
+    raw2d = {k: (np.array(a, float), np.array(b, float).reshape(-1, 13, 2)) for k, (a, b) in raw2d.items()}
+
+    def raw_kp(pid_, seg_, cam_):
+        if pid_ not in raw2d:
+            return np.zeros(0), np.zeros((0, 13, 2)), np.zeros((0, 13))
+        t_, k_ = raw2d[pid_]
+        m_ = (t_ >= seg_["start"] - 1) & (t_ < seg_["end"] + 1)
+        t_, k_ = t_[m_], k_[m_]
+        okk = (k_ >= 0).all(-1).astype(float)
+        uv_ = k_ * [640 / 1000, 360 / 1000]
+        for a_, b_, d_ in seg_.get("warps") or []:       # into the base camera's pixels (the fit's terms)
+            mm = (t_ >= a_) & (t_ < b_)
+            if mm.any():
+                tc_ = PinholeCamera.from_dict(d_)
+                uv_[mm] = cam_.project(tc_.C + tc_.ray(uv_[mm]))
+        return t_, uv_, okk
     for ph, si, pid, items in sorted(results, key=lambda r: (r[0], r[2])):
         seg, cam = segcams[si]
         for it in items:
@@ -1071,7 +1103,7 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                 R["C"] = conf_decay(R["C"])
             # frames the app's own gate would reject (it then hides the person for a whole second): bridge short
             # runs of them from the neighbouring accepted frames
-            okg = app_gate_ok(cam, R["X"], R["t"], it["t"], it["uv"], it["w"], *tlbox.get(pid, (None, None)))
+            okg = app_gate_ok(cam, R["X"], R["t"], *raw_kp(pid, seg, cam), *tlbox.get(pid, (None, None)))
             i = 0
             while i < len(okg):
                 if not okg[i]:

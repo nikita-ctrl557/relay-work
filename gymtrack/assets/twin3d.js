@@ -176,17 +176,23 @@ function roomMesh(d, tex) {
   };
   const Z = k => zq[k] / 65535 * far, U = j => j * W / (gw - 1), Vv = i => i * H / (gh - 1);
   for (let i = 0, k = 0; i < gh; i++) for (let j = 0; j < gw; j++, k++) put(k, U(j), Vv(i), Z(k));
-  let c = 0, t = 0, e = n;
+  // front cells first, then the back layers (their own draw group: see the materials below)
+  let c = 0, t = 0, e = n, tb = ((gw - 1) * (gh - 1) - nb) * 6;
+  const nf = tb;
   for (let i = 0; i < gh - 1; i++) for (let j = 0; j < gw - 1; j++, c++) {
     const a = i * gw + j, b = a + 1, g = a + gw, f = g + 1;
     if (cells[c >> 3] >> (c & 7) & 1) { idx.set([a, g, b, b, g, f], t); t += 6; continue; }
     const zb = Math.max(Z(a), Z(b), Z(g), Z(f));
     put(e, U(j), Vv(i), zb); put(e + 1, U(j + 1), Vv(i), zb); put(e + 2, U(j), Vv(i + 1), zb); put(e + 3, U(j + 1), Vv(i + 1), zb);
-    idx.set([e, e + 2, e + 1, e + 1, e + 2, e + 3], t); t += 6; e += 4;
+    idx.set([e, e + 2, e + 1, e + 1, e + 2, e + 3], tb); tb += 6; e += 4;
   }
   const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.BufferAttribute(pos, 3)); geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
-  geo.setIndex(new THREE.BufferAttribute(idx, 1)); geo.computeBoundingSphere();
-  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({map: tex, side: THREE.DoubleSide})); m.userData.room = d.seg;
+  geo.setIndex(new THREE.BufferAttribute(idx, 1)); geo.addGroup(0, nf, 0); geo.addGroup(nf, nb * 6, 1); geo.computeBoundingSphere();
+  // back layers carry the pixels of the thing in front (a tower's own texture pushed onto the floor behind it): seamless
+  // from the camera's own viewpoint, but from anywhere else they smear the tower over the floor behind it, so people
+  // standing there look as if on top of it. Away from the camera they are drawn as plain unseen floor instead.
+  const texM = new THREE.MeshBasicMaterial({map: tex, side: THREE.DoubleSide}), backM = new THREE.MeshBasicMaterial({color: 0x2c2f33, side: THREE.DoubleSide});
+  const m = new THREE.Mesh(geo, [texM, backM]); m.userData.room = d.seg;
   // the room's shell under and behind it: floor and back wall where the camera saw neither (behind equipment, off to the sides)
   const g = new THREE.Group(); g.add(m);
   // solid upright things (dumbbell towers, weight stacks) seen only from the front get their volume: the front face
@@ -215,7 +221,9 @@ function roomMesh(d, tex) {
     const wl = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, h), wm); wl.position.set((x0 + x1) / 2, h / 2, y0 - 0.01);
     g.add(fl, wl);
   }
-  g.userData.room = d.seg; return g;
+  g.userData.room = d.seg;
+  g.userData.backTextured = on => { m.material[1] = on ? texM : backM; };
+  return g;
 }
 
 /* ---------- the view ---------- */
@@ -254,7 +262,9 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   // a machine's entries: its parts (solid towers, each an object) and, for multi-part machines, a last "area" entry
   const eqOf = id => { const es = room?.equipment?.filter(e => e.machine === id) || []; return es.find(e => e.area) || es[0]; };
   const stationOf = id => { const e = eqOf(id); return e?.station ? {...e.station, machine: id, h: e.top ?? e.h} : e; }, eqRect = e => [[e.x - e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y - e.d / 2], [e.x + e.w / 2, e.y + e.d / 2], [e.x - e.w / 2, e.y + e.d / 2]];
-  const zones = plan.zones.map(z => eqOf(z.machine) ? {...z, poly: eqRect(eqOf(z.machine))} : z);
+  // models are sized from the machine alone: an "area" entry (machine + where its user works) carries it as `outline`
+  const bodyOf = e => e?.outline ? {...e, ...e.outline} : e;
+  const zones = plan.zones.map(z => eqOf(z.machine) ? {...z, poly: eqRect(bodyOf(eqOf(z.machine)))} : z);
   // room bounds: the plan plus anything placed around it
   const items = plan.items || [];
   let x0 = 0, z0 = 0, x1 = plan.width, z1 = plan.depth;
@@ -444,7 +454,8 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     // behind walls and equipment of the realistic room the body shows as a faint silhouette, not as cut-off fragments
     const gmat = new THREE.MeshBasicMaterial({color: COL.move, transparent: true, opacity: 0, depthTest: false, depthWrite: false});
     const ghost = makeBody({body: gmat}); ghost.group.visible = false; ghost.meshes.forEach(o => { o.renderOrder = 4; o.castShadow = false; o.raycast = () => {}; });
-    const shadow = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({color: 0x000000, transparent: true, opacity: 0, depthWrite: false})); shadow.rotation.x = -Math.PI / 2;
+    // the contact shadow shows through equipment: someone behind a tower is seen standing on the floor there, not on the tower
+    const shadow = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({color: 0x000000, transparent: true, opacity: 0, depthWrite: false, depthTest: false})); shadow.rotation.x = -Math.PI / 2; shadow.renderOrder = 3;
     const halo = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({color: LIFT, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide})); halo.rotation.x = -Math.PI / 2;
     scene.add(shadow, halo, b3.group, ghost.group);
     const tag = document.createElement("button"); tag.className = "s3d-tag"; labels.append(tag);
@@ -622,6 +633,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     controls.update();
     if (curView === "cam" && !userMoved && !anim && rv()?.roll) camera.rotateZ(rv().roll); // the footage's own roll (orbiting levels it again)
     if (roomCam.visible !== (roomOn && !!roomCur && camera.position.distanceTo(roomCam.position) > 4.5)) roomCam.visible = !roomCam.visible;
+    if (roomCur) roomCur.mesh.userData.backTextured?.(camera.position.distanceTo(roomCam.position) < 1.0); // at the footage's own viewpoint the back layers fill the seams
     const rect = renderer.domElement.getBoundingClientRect(), W = rect.width, H = rect.height, showP = layer() !== "heat" && peopleMode !== "off";
     const taken = []; // screen rects already used by people tags; machine labels avoid them
     const placeTag = (tag, s) => { // above the head, kept inside the picture
@@ -629,7 +641,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       let y = Math.max(h + 2, Math.min(H - 2, (1 - s.y) / 2 * H));
       for (let i = 0; i < 2 && taken.some(q => x - w / 2 < q.r && x + w / 2 > q.l && y - h < q.b && y > q.t) && y - h - 2 > h + 2; i++) y -= h + 2; // stacked heads: lift the tag
       taken.push({l: x - w / 2, r: x + w / 2, t: y - h, b: y}); tag.style.display = ""; tag.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`; };
-    const bodyR = []; // screen rects of the drawn bodies: no label may cover one
+    const bodyR = [], ndc = new THREE.Vector3(); // screen rects of the drawn bodies: no label may cover one
     const fadeK = 1 - Math.exp(-Math.min(0.5, (ts - (lastFrame ?? ts - 16)) / 1000) / 0.13); lastFrame = ts; // time-based: slow devices fade as fast
     for (const [k, p] of [...ppl]) {
       const vis = showP && p.want && !p.inside && !p.glide && !p.dup && !p.edge && !p.swapTo ? 1 : 0;
@@ -644,18 +656,28 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       const sx = p.sep?.x || 0, sz = p.sep?.z || 0;
       const J = p.J3 = use3d ? jointsFrom(p.Jm, [p.pos.x + sx - p.A[0], p.pos.z + sz - p.A[1]], p.J3 || undefined) : jointsFrom(neutralAt(p, sx, sz), null, p.J3 || undefined);
       if (use3d) { const dz = Math.min(J[11].y, J[12].y) - 0.075; if (Math.abs(dz) > 0.005) for (const v of J) v.y -= dz; } // feet on the floor: no floating, no sinking
+      { // right under the viewpoint (the camera view looks from the CCTV camera): a body that fills much of the view or is
+        // partly out of it reads as a grey blob, not a person: faded with its size on screen (gone from 3/4 of the view's
+        // height, or with half of it out of view)
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, behind = false;
+        for (const v of J) { ndc.copy(v).project(camera); if (ndc.z > 1) { behind = true; break; } x0 = Math.min(x0, ndc.x); x1 = Math.max(x1, ndc.x); y0 = Math.min(y0, ndc.y); y1 = Math.max(y1, ndc.y); }
+        const area = Math.max((x1 - x0) * (y1 - y0), 1e-6), inA = Math.max(0, Math.min(x1, 1) - Math.max(x0, -1)) * Math.max(0, Math.min(y1, 1) - Math.max(y0, -1));
+        const hh = (y1 - y0) / 2, fin = inA > 0 ? inA / area : 1;
+        const near = behind ? 0 : Math.min(1, Math.max(0, 1 - (hh - 0.45) / 0.3)) * Math.min(1, Math.max(0, (fin - 0.5) / 0.25));
+        p.near = (p.near ?? near) + (near - (p.near ?? near)) * fadeK;
+      }
       const fx = (J[11].x + J[12].x) / 2, fz = (J[11].z + J[12].z) / 2; // the shadow sits under the drawn feet
-      const op = a * (use3d ? 1 : 0.7);
+      const op = a * (use3d ? 1 : 0.7) * (p.near ?? 1);
       p.mat.opacity = op; p.jmat.opacity = op; p.faint.opacity = op * 0.3; p.mat.transparent = p.jmat.transparent = true;
-      p.b3.group.visible = showP && a > 0.02;
+      p.b3.group.visible = showP && a * (p.near ?? 1) > 0.02;
       if (p.b3.group.visible) p.b3.set(J, use3d ? p.conf : null);
-      p.ghost.group.visible = p.b3.group.visible && roomOn && !!roomCur; p.gmat.opacity = 0.2 * op; p.gmat.color.copy(p.mat.color);
+      p.ghost.group.visible = p.b3.group.visible && roomOn && !!roomCur; p.gmat.opacity = 0.35 * op; // legs behind a tower stay readable down to the floor they stand on p.gmat.color.copy(p.mat.color);
       if (p.ghost.group.visible) p.ghost.set(J);
-      p.shadow.position.set(fx, 0.015, fz); p.shadow.material.opacity = 0.16 * a; p.shadow.visible = showP && a > 0.02;
+      p.shadow.position.set(fx, 0.015, fz); p.shadow.material.opacity = 0.16 * a * (p.near ?? 1); p.shadow.visible = showP && a * (p.near ?? 1) > 0.02;
       p.halo.position.set(fx, 0.025, fz); p.halo.material.opacity = hl ? 0.85 * a : 0; p.halo.visible = hl;
       p.tag.classList.toggle("hl", hl); const txt = hl ? p.full : p.short; if (p.tag.textContent !== txt) p.tag.textContent = txt;
-      p.tag.style.opacity = (use3d ? a : a * 0.8).toFixed(2);
-      if (!showP || a <= 0.05) { p.tag.style.display = "none"; continue; }
+      p.tag.style.opacity = ((use3d ? a : a * 0.8) * (p.near ?? 1)).toFixed(2);
+      if (!showP || a * (p.near ?? 1) <= 0.05) { p.tag.style.display = "none"; continue; }
       // the body's outline on screen
       let l = Infinity, r = -Infinity, tp = Infinity, bt = -Infinity;
       for (const i of [0, 1, 2, 5, 6, 11, 12]) { const v = sp(J[i]); if (!v) continue; const x = (v.x + 1) / 2 * W, y = (1 - v.y) / 2 * H; l = Math.min(l, x); r = Math.max(r, x); tp = Math.min(tp, y); bt = Math.max(bt, y); }
@@ -693,5 +715,5 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   raf = requestAnimationFrame(frame);
   wrap._state = () => [...ppl].map(([k, p]) => ({k, a: +p.alpha.toFixed(2), want: p.want, dup: !!p.dup, edge: !!p.edge, swap: !!p.swapTo, b3d: !!p.Jm, pos: p.pos && [+p.pos.x.toFixed(2), +p.pos.z.toFixed(2)]})); // for checks
   return {highlight(pid) { for (const [k, p] of ppl) if (p.q?.pid === pid) { hoverPid = k; return; } hoverPid = null; },
-    setColourMode(m) { colourMode = m; savePref("colour", m); wrap.querySelectorAll("[data-cm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.cm === m)); applyColours(); }, destroy() { destroyed = true; cancelAnimationFrame(raf); roomCache.forEach(p => p.then(r => { r.mesh.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); }).catch(() => {})); ro.disconnect(); controls.dispose(); renderer.dispose(); wrap.remove(); }};
+    setColourMode(m) { colourMode = m; savePref("colour", m); wrap.querySelectorAll("[data-cm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.cm === m)); applyColours(); }, destroy() { destroyed = true; cancelAnimationFrame(raf); roomCache.forEach(p => p.then(r => { r.mesh.traverse(o => { o.geometry?.dispose(); for (const mt of [o.material].flat()) { mt?.map?.dispose(); mt?.dispose(); } }); }).catch(() => {})); ro.disconnect(); controls.dispose(); renderer.dispose(); wrap.remove(); }};
 }

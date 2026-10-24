@@ -171,10 +171,11 @@ export function stepPlacer(st, t, A, rf, ctx = {}) {
    box: the tracker's box (0..1 of the frame) or null; kp: 2D keypoints (0..1) or null. False for bodies that
    would be drawn far bigger than the person in the video (fits gone wrong near the camera or at the frame edge),
    bodies right in front of the lens, impossible statures, and bodies whose joints the camera saw elsewhere.
-   Judged on what the camera actually saw: a person cut off by the frame edge is shown when the joints that are in
-   the frame sit tightly on the person (legs at the edge fitted right are fine; too little seen, or seen joints off,
-   is a guess); an unusual pose (sitting low, feet up) is shown when every part of it was seen and matches. */
-const EDGE_TOL = 0.15, KP_TOL = 0.29, SEEN_TOL = 0.08;
+   Judged on what the camera actually saw: a person cut off by the frame edge needs a shoulder or hip in view when the
+   head is out of it (a torso-less fit draws as a shapeless blob at the edge); a body drawn largely beside a cut-off
+   person's box belongs to someone else (an identity slip); an unusual pose (sitting low, feet up) is shown
+   when every part of it was seen and matches. */
+const KP_TOL = 0.29, SEEN_TOL = 0.08, OUT_BOX = 0.3;
 export function body3dWhy(P, cam, box, kp = null) {
   const leg = (i, j) => Math.hypot(P[i * 3] - P[j * 3], P[i * 3 + 1] - P[j * 3 + 1], P[i * 3 + 2] - P[j * 3 + 2]);
   const stature = (leg(7, 9) + leg(9, 11) + leg(8, 10) + leg(10, 12)) / 2 + Math.hypot((P[3] + P[6] - P[21] - P[24]) / 2, (P[4] + P[7] - P[22] - P[25]) / 2, (P[5] + P[8] - P[23] - P[26]) / 2) + 0.33;
@@ -204,11 +205,16 @@ export function body3dWhy(P, cam, box, kp = null) {
   if (box) {
     const bw = box[2] * W0, bh = box[3] * H0;
     if (ph > 1.4 * bh + 12 || pw > 1.4 * bw + 12) return "size";
-    // cut off by the frame edge: the 3D is only as good as what was seen. Too little seen (< 4 joints) is a guess;
-    // with the head out of the frame and no shoulder or hip seen, what was seen (e.g. the legs) must fit tightly
-    const headOut = uv[0][0] < 0 || uv[0][0] > W0 || uv[0][1] < 0 || uv[0][1] > H0;
-    if ((box[0] < 0.015 || box[0] + box[2] > 0.985 || box[1] + box[3] > 0.985) &&
-        (vis.length < 4 || headOut && ![1, 2, 7, 8].some(i => kp[i]) && !(med <= Math.max(EDGE_TOL * hp, 9)))) return "edge";
+    // cut off by the frame edge: the 3D is only as good as what was seen; too little seen (< 4 joints), or the head out
+    // of the frame with no shoulder or hip seen, is a guess; and a body drawn largely beside the cut-off person's box
+    // (> 30 % of its rectangle, as clipped to the frame, outside the box + 10 %) is someone else's (an identity slip)
+    if (box[0] < 0.015 || box[0] + box[2] > 0.985 || box[1] + box[3] > 0.985) {
+      const headOut = uv[0][0] < 0 || uv[0][0] > W0 || uv[0][1] < 0 || uv[0][1] > H0;
+      if (vis.length < 4 || headOut && ![1, 2, 7, 8].some(i => kp[i])) return "edge";
+      const m = 0.1 * bh, bx0 = Math.min(...cx), by0 = Math.min(...cy);
+      const iw = Math.max(0, Math.min(bx0 + pw, box[0] * W0 + bw + m) - Math.max(bx0, box[0] * W0 - m)), ih = Math.max(0, Math.min(by0 + ph, box[1] * H0 + bh + m) - Math.max(by0, box[1] * H0 - m));
+      if (1 - iw * ih / Math.max(pw * ph, 1) > OUT_BOX) return "edge";
+    }
   }
   // joint by joint against what the camera saw: a body fitted to someone else (or gone wrong)
   if (vis.length >= 4 && med > Math.max(KP_TOL * hp, 9)) return "kp";
