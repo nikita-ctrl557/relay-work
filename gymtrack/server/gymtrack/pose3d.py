@@ -444,7 +444,9 @@ def init_frame(cam: PinholeCamera, uv, L, hand=1.0, root_depth=None, w=None):
     uv = np.asarray(uv, float)
     if w is not None:
         w = np.asarray(w, float) > 0
-        if not w[[LKN, RKN, LAN, RAN]].any() and (w[[LHIP, RHIP]].any() or w[[LSH, RSH]].any()):
+        if w.any():                       # unseen joints: at least somewhere on this person, not the image corner
+            uv = np.where(w[:, None], uv, uv[w].mean(0))
+        if not w[[LKN, RKN, LAN, RAN]].any() or not (w[[LHIP, RHIP]].any() or w[[LSH, RSH]].any()):
             return _init_standing(cam, uv, w, L, hand)
         if not w.all():
             # unseen joints: borrow a plausible image position so the rays are not garbage
@@ -492,25 +494,31 @@ def init_frame(cam: PinholeCamera, uv, L, hand=1.0, root_depth=None, w=None):
     return X
 
 
-def _init_standing(cam, uv, w, L, hand):
+def _init_standing(cam, uv, w, L, hand, feet_xy=None):
     Lmap = {tuple(sorted(b)): L[i] for i, b in enumerate(BONES)}
     Lg = lambda a, b: Lmap[tuple(sorted((a, b)))]
     X = np.zeros((NJ, 3))
-    if w[[LHIP, RHIP]].any():
+    hip_h = Lg(LHIP, LKN) + Lg(LKN, LAN) + ANKLE_Z - 0.02
+    if feet_xy is not None:      # standing on a known floor point (the tracker's)
+        mh = np.array([feet_xy[0], feet_xy[1], hip_h])
+    elif not (w[[LHIP, RHIP]].any() or w[[LSH, RSH]].any()):
+        mh = cam.backproject_to_height(uv[w].mean(0) if w.any() else np.array([cam.cx, cam.cy]), hip_h + 0.25) - np.array([0, 0, 0.25])
+    elif w[[LHIP, RHIP]].any():
         hv = uv[[LHIP, RHIP]][w[[LHIP, RHIP]]].mean(0)
         mh = cam.backproject_to_height(hv, Lg(LHIP, LKN) + Lg(LKN, LAN) + ANKLE_Z - 0.02)
     else:
         sv = uv[[LSH, RSH]][w[[LSH, RSH]]].mean(0)
         mh = cam.backproject_to_height(sv, Lg(LHIP, LKN) + Lg(LKN, LAN) + ANKLE_Z + Lg(LSH, LHIP) * 0.97) - np.array([0, 0, Lg(LSH, LHIP) * 0.97])
-    if not np.all(np.isfinite(mh)) or cam.depth(mh) < 1.0:
-        r = cam.ray(uv[[LSH, RSH, LHIP, RHIP]][w[[LSH, RSH, LHIP, RHIP]]].mean(0))
+    if not np.all(np.isfinite(mh)) or cam.depth(mh) < 1.0 or cam.depth(mh) > 25:
+        sel = w[[LSH, RSH, LHIP, RHIP]]
+        r = cam.ray(uv[[LSH, RSH, LHIP, RHIP]][sel].mean(0) if sel.any() else np.array([cam.cx, cam.cy]))
         mh = cam.C + r * 2.0
         mh[2] = 0.95
     v = mh - cam.C
     v[2] = 0
     v = _unit(v)
     lat = np.cross(UP, v)                      # perpendicular to the view, horizontal
-    if w[LSH] and w[RSH]:                      # facing the camera iff the left shoulder is on the image right
+    if w is not None and w[LSH] and w[RSH]:    # facing the camera iff the left shoulder is on the image right
         facing_cam = uv[LSH, 0] > uv[RSH, 0]
         fwd = -v if facing_cam else v
         lat = _unit(np.cross(UP, fwd)) * hand

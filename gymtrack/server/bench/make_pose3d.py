@@ -315,6 +315,38 @@ def frame_quality(cam, g, X, UV, Wg, boxes=None):
     return np.round(q * 100)
 
 
+def app_gate_ok(cam, X, t, t2, uv2, w2):
+    """Per frame: would the app's 3D believability gate (assets/mapplace.js body3dOk) accept this body?
+    X (G, 13, 3) at times t; reference = the 2D keypoints of the nearest sample within 0.6 s (>= 5 seen)."""
+    G = len(X)
+    ok = np.ones(G, bool)
+    leg = lambda a, b: np.linalg.norm(X[:, a] - X[:, b], axis=-1)
+    st = (leg(7, 9) + leg(9, 11) + leg(8, 10) + leg(10, 12)) / 2 + np.linalg.norm((X[:, 1] + X[:, 2] - X[:, 7] - X[:, 8]) / 2, axis=-1) + 0.33
+    ok &= (st > 1.35) & (st < 2.1)
+    ok &= cam.depth(X).min(1) >= 1.2
+    uv = cam.project(X)
+    for i in np.flatnonzero(ok):
+        if not len(t2):
+            break
+        j = int(np.argmin(np.abs(t2 - t[i])))
+        if abs(t2[j] - t[i]) >= 0.6:
+            continue
+        m = w2[j] > 0
+        if m.sum() < 5 or not np.isfinite(uv[i]).all():
+            continue
+        k = uv2[j][m]
+        ref = [k[:, 0].min(), k[:, 1].min(), k[:, 0].max(), k[:, 1].max()]
+        x0, x1, y0, y1 = uv[i][:, 0].min(), uv[i][:, 0].max(), uv[i][:, 1].min(), uv[i][:, 1].max()
+        rh, rw = max(ref[3] - ref[1], 12), max(ref[2] - ref[0], 8)
+        if y1 - y0 > 1.6 * rh + 15 or x1 - x0 > 2.2 * max(rw, rh * 0.6) + 15:
+            ok[i] = False
+        elif (ref[0] < 4 or ref[2] > 636 or ref[3] > 356) and (y1 - y0 > 1.25 * rh + 10 or y0 < ref[1] - 0.2 * rh - 6):
+            ok[i] = False
+        elif not (abs((x0 + x1) / 2 - (ref[0] + ref[2]) / 2) < 0.6 * rw + 0.3 * rh + 10 and abs((y0 + y1) / 2 - (ref[1] + ref[3]) / 2) < 0.6 * rh + 10):
+            ok[i] = False
+    return ok
+
+
 def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_hold=1.0, anchors=None):
     """Fitted samples -> steady grid: smooth, then the constrained solve (2D, rigid bones, floor, pinned stance
     feet, plausibility), facing with a capped turn rate; ends held to cover the time the person is on screen."""
@@ -556,6 +588,22 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                 UVg, Wg_ = PP.grid_2d(it["t"], it["uv"], it["w"], R["t"])
                 R["Q"] = frame_quality(cam, R["t"], R["X"], UVg, Wg_)
             Q = R["Q"]
+            # frames the app's own gate would reject (it then hides the person for a whole second): bridge short
+            # runs of them from the neighbouring accepted frames
+            okg = app_gate_ok(cam, R["X"], R["t"], it["t"], it["uv"], it["w"])
+            i = 0
+            while i < len(okg):
+                if not okg[i]:
+                    j = i
+                    while j < len(okg) and not okg[j]:
+                        j += 1
+                    if j - i <= 8 and i > 0 and j < len(okg):
+                        f = ((np.arange(i, j) - (i - 1)) / (j - (i - 1)))[:, None, None]
+                        R["X"][i:j] = PP.rebuild(R["X"][i - 1] * (1 - f) + R["X"][j] * f, it["groups"], it["hand"])
+                        R["fwd"][i:j] = PP._unit(R["fwd"][i - 1] * (1 - f[:, 0]) + R["fwd"][j] * f[:, 0])
+                    i = j
+                else:
+                    i += 1
             bad = Q < Q_MIN
             i = 0
             while i < len(bad):

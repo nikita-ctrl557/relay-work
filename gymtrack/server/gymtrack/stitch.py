@@ -46,6 +46,8 @@ RD_RELINK = 0.24      # ... below which a piece cut off by the identity check ma
 CUT_SURE = 0.50       # identity check: this large a change between the two sides is another person, whatever the boxes did
 CUT_WEAK = 0.36       # ... this large only with evidence in the boxes (a jump onto someone, an overlap, a gap)
 CUT_TALL = 0.30       # ... with that evidence and the shoulder height changing too
+CUT_NN = 0.38         # ... or, with that evidence, views on either side with no close match on the other side
+CUT_NN_MIN_MD = 0.26  # ... (only for changes at least this large on average)
 CUT_SAME_H = 0.47     # ... with that evidence but the same shoulder height
 EXC_RUN = 0.42        # a short run this unlike the ID's appearance before and after it is someone else ...
 EXC_ONE = 0.45        # ... a single second, this unlike
@@ -426,6 +428,10 @@ def identity_cuts(tl, sigs: dict, min_bins: int = 4, heights=None, excursions: l
                 dh = _height_change((heights or {}).get(pid), tc)
                 ev = _swap_evidence(tl_by_id[pid], tl_at, pid, ts[k - 1], ts[k])
                 ok = _accept_cut(md, dh, ev)
+                if not ok and ev and md == md and md >= CUT_NN_MIN_MD:
+                    # mean signatures can blur two people in similar kit; the views on each side having no close
+                    # match on the other side is the stronger test
+                    ok = _nn_split(seq, tc) >= CUT_NN
                 if DIAG is not None:
                     DIAG.append({"pid": pid, "t": tc, "kind": "cp", "md": md, "dh": dh, "ev": ev, "ok": ok})
                 if not ok and (bad is None or md < bad[0] or bad[0] != bad[0]):
@@ -510,6 +516,18 @@ def _accept_cut(md: float, dh, ev: bool) -> bool:
     if dh is not None and dh <= HEIGHT_SAME:
         return md >= CUT_SAME_H
     return md >= CUT_WEAK
+
+
+def _nn_split(seq, tc: float, win: float = 30.0) -> float:
+    """Symmetric set-to-set distance across time tc: median over views on each side of the distance to the
+    closest view on the other side (NaN with fewer than 3 views a side)."""
+    from .reid import distance_matrix
+    A = np.array([v for t, v in seq if tc - win <= t < tc], np.float32)
+    B = np.array([v for t, v in seq if tc <= t < tc + win], np.float32)
+    if len(A) < 3 or len(B) < 3:
+        return float("nan")
+    D = distance_matrix(B, A)
+    return float(np.nanmedian(np.concatenate([np.nanmin(D, 1), np.nanmin(D, 0)])))
 
 
 def _swap_evidence(boxes, tl_at: dict, pid: int, ta: float, tb: float) -> bool:
