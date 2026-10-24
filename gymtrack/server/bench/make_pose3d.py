@@ -168,7 +168,7 @@ def _cam_offset_px(a, b):
     return float(np.nanmedian(d)) if np.isfinite(d).any() else 1e9
 
 
-def aim_cams(segcams, room_index, session, tol_px=6.0, same_px=3.0):
+def aim_cams(segcams, room_index, session, tol_px=3.0, same_px=1.0, min_s=1.5):
     """Split each recording segment at the camera re-aims measured for the realistic room (index.json stretches,
     bench/room_aims.py): consecutive stretches within tol_px of the group's first one share one camera (the
     longest stretch's true aim); a group within same_px of the segment's camera keeps that camera. Returns
@@ -192,11 +192,46 @@ def aim_cams(segcams, room_index, session, tol_px=6.0, same_px=3.0):
                     g.update(best_len=b - a, cam=c, aim=e["seg"])
             else:
                 groups.append(dict(first=c, cam=c, start=a, end=b, best_len=b - a, aim=e["seg"]))
-        for k, g in enumerate(groups):
+        # a pan (stretches < min_s while the camera turns) joins the neighbouring steady aims, split at its middle;
+        # its 2D is warped into that aim's camera (a pure rotation about the same centre: exact)
+        steady = [g for g in groups if g["end"] - g["start"] >= min_s] or [max(groups, key=lambda g: g["end"] - g["start"])]
+        for g in steady:
+            g["warps"] = []
+        for g in groups:
+            if any(g is h for h in steady):
+                continue
+            mid = (g["start"] + g["end"]) / 2
+            prev = [h for h in steady if h["end"] <= g["start"] + 1e-6]
+            nxt = [h for h in steady if h["start"] >= g["end"] - 1e-6]
+            pan0 = max((h["end"] for h in prev), default=seg["start"])
+            pan1 = min((h["start"] for h in nxt), default=seg["end"])
+            h = (prev[-1] if prev and (not nxt or mid < (pan0 + pan1) / 2) else nxt[0])
+            h["warps"].append((g["start"], g["end"], g["first"]))
+        steady.sort(key=lambda g: g["start"])
+        for a_, b_ in zip(steady[:-1], steady[1:]):      # contiguous: the pan time goes to the side it was given to
+            ws = [w for w in a_["warps"] if w[0] >= a_["end"] - 1e-6]
+            cut = max((w[1] for w in ws), default=a_["end"])
+            a_["end"], b_["start"] = cut, cut
+        steady[0]["start"], steady[-1]["end"] = seg["start"], seg["end"]
+        for k, g in enumerate(steady):
             c = cam if _cam_offset_px(cam, g["cam"]) < same_px else g["cam"]
-            name = seg["name"] if len(groups) == 1 else f"{seg['name']}~g{k:02d}"
-            out.append(({"name": name, "start": g["start"], "end": g["end"], "parent": seg["name"], "aim": g["aim"]}, c))
+            name = seg["name"] if len(steady) == 1 else f"{seg['name']}~g{k:02d}"
+            out.append(({"name": name, "start": g["start"], "end": g["end"], "parent": seg["name"], "aim": g["aim"],
+                         "warps": [(a, b, wc.to_dict()) for a, b, wc in g["warps"]]}, c))
     return out
+
+
+def warp_2d(t, uv, w, seg, cam):
+    """2D samples taken while the camera was aimed elsewhere (a pan inside this aim group) -> this camera's pixels."""
+    uv = np.array(uv, float)
+    for a, b, d in seg.get("warps") or []:
+        m = (t >= a) & (t < b)
+        if not m.any():
+            continue
+        tc = PinholeCamera.from_dict(d)
+        P = tc.C + tc.ray(uv[m])
+        uv[m] = cam.project(P)
+    return t, uv, w
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -645,7 +680,7 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
         for (pid, piece), (t, uv, w) in sorted(AP.tracks_in(replay, t0, t1, W, Hh).items()):
             if (people and pid not in people) or len(t) < min_frames:
                 continue
-            by.setdefault(pid, []).append((t, uv, w))
+            by.setdefault(pid, []).append(warp_2d(t, uv, w, seg, cam))
         for pid, pieces in by.items():
             ph = "A" if pid in setp else "B" if pid in memb else "C"
             if ph not in phases:
