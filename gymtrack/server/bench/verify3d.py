@@ -1215,7 +1215,8 @@ def check_cameras(S):
     res["D3_cam_vs_manifest_px"] = max(pxm)
     res["D3_cam_vs_room_m"] = max(dm) if dm else None
     res["D3_cam_yaw_deg"] = max(dy) if dy else None
-    res["D3_cam_pitch_deg_aims"] = max((p for p, a in pitch if a), default=None)
+    # no re-aimed stretches -> nothing to judge (0); stretches without a room framing -> None (fails)
+    res["D3_cam_pitch_deg_aims"] = max((p for p, a in pitch if a), default=None if any(S.cams3d_aim) else 0.0)
     res["D3_cameras"] = rows
     return res
 

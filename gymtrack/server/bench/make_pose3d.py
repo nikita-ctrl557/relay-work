@@ -149,6 +149,56 @@ def segment_cams(replay, configs, cache=None):
     return out
 
 
+def room_cam(d):
+    """A realistic-room framing (assets/room/<f>.json: C, D, R, f of a 1280 x 720 plate) as our 640 x 360 camera."""
+    R = np.array(d["R"], float)
+    K = np.linalg.inv(R @ np.array(d["D"], float))
+    sx, sy = 640 / d["W"], 360 / d["H"]
+    return PinholeCamera(f=float(d["f"]) * sx, cx=float(K[0, 2]) * sx, cy=float(K[1, 2]) * sy, R=R,
+                         C=np.array(d["C"], float), width=640, height=360, flip=1.0)
+
+
+def _cam_offset_px(a, b):
+    """Median pixel distance between where two cameras see the same floor points (floor part of the frame)."""
+    gu, gv = np.meshgrid(np.arange(20, 640, 40), np.arange(130, 360, 30))
+    G = np.c_[gu.ravel(), gv.ravel()].astype(float)
+    P = a.backproject_to_height(G, 0.0)
+    uv = b.project(P)
+    d = np.linalg.norm(uv - G, axis=1)
+    return float(np.nanmedian(d)) if np.isfinite(d).any() else 1e9
+
+
+def aim_cams(segcams, room_index, session, tol_px=6.0, same_px=3.0):
+    """Split each recording segment at the camera re-aims measured for the realistic room (index.json stretches,
+    bench/room_aims.py): consecutive stretches within tol_px of the group's first one share one camera (the
+    longest stretch's true aim); a group within same_px of the segment's camera keeps that camera. Returns
+    [(seg-like dict {name, start, end, parent, aim}, cam)]: fits never span a re-aim."""
+    ridx = json.load(open(room_index))["sessions"].get(session, {})
+    rdir = Path(room_index).parent
+    out = []
+    for seg, cam in segcams:
+        st = [e for e in ridx.get("segments", []) if e["t1"] > seg["start"] + 1e-6 and e["t0"] < seg["end"] - 1e-6]
+        if cam is None or len(st) <= 1 and all(_cam_offset_px(cam, room_cam(json.load(open(rdir / e["file"])))) < same_px for e in st):
+            out.append((dict(seg, parent=seg["name"], aim=None), cam))
+            continue
+        groups = []
+        for e in st:
+            c = room_cam(json.load(open(rdir / e["file"])))
+            a, b = max(e["t0"], seg["start"]), min(e["t1"], seg["end"])
+            if groups and _cam_offset_px(groups[-1]["first"], c) < tol_px:
+                g = groups[-1]
+                g["end"] = b
+                if b - a > g["best_len"]:
+                    g.update(best_len=b - a, cam=c, aim=e["seg"])
+            else:
+                groups.append(dict(first=c, cam=c, start=a, end=b, best_len=b - a, aim=e["seg"]))
+        for k, g in enumerate(groups):
+            c = cam if _cam_offset_px(cam, g["cam"]) < same_px else g["cam"]
+            name = seg["name"] if len(groups) == 1 else f"{seg['name']}~g{k:02d}"
+            out.append(({"name": name, "start": g["start"], "end": g["end"], "parent": seg["name"], "aim": g["aim"]}, c))
+    return out
+
+
 # ---------------------------------------------------------------------------------------------------------
 # per-person work (runs in worker processes)
 # ---------------------------------------------------------------------------------------------------------
