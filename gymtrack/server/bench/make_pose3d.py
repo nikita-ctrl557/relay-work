@@ -398,14 +398,14 @@ def collapse_unseen(uv, w):
         ang = lambda v: np.degrees(np.arctan2(np.abs(v[:, 0]), np.maximum(v[:, 1], 1e-6)))
         upright = (w[:, [1, 2, 7, 8]] > 0).all(1) & (mh_[:, 1] - ms_[:, 1] > 0.5 * np.nan_to_num(ref, nan=1e9))
         slant = (ang(th) > 40) & (ang(sh_) > 40) & (np.sign(th[:, 0]) == np.sign(sh_[:, 0])) & (th[:, 1] > 0) & (sh_[:, 1] > 0)
-        bad |= upright & slant & (w[:, [a, b, c]] > 0).all(1)
+        bad |= upright & slant & (w[:, [a, b, c]] > 0).all(1) & (os.environ.get("SLANT", "1") == "1")
         w[bad, b] = 0
         w[bad, c] = 0
     return w
 
 
-HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), 1.95)
-HEIGHT_PLAUSIBLE = (1.55, 2.00)   # a calibration outside this is a failed one (partial view, seated): population mean
+HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), float(os.environ.get("HEIGHT_MAX", 1.95)))
+HEIGHT_PLAUSIBLE = (1.45, 2.25)   # a calibration outside this is a failed one (partial view, seated): population mean
 Q_MIN = int(os.environ.get("Q_MIN", 20))          # frames below this confidence are not exported
 DEPTH_CAP_ON = os.environ.get("DEPTH_CAP", "1") == "1"     # far people: no faster-than-walking depth hops
 HIDDEN_FEET_ON = os.environ.get("HIDDEN_FEET", "0") == "1"   # ankles behind an occluder: trust the head ray

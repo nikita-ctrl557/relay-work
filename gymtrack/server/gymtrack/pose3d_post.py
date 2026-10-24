@@ -20,6 +20,7 @@ World frame as in pose3d: X, Y floor-plan metres, Z up.
 """
 from __future__ import annotations
 
+import os as _os
 import numpy as np
 from scipy.sparse import diags
 from scipy.sparse.linalg import spsolve
@@ -434,8 +435,9 @@ def extra_terms(X, hand, bend_ok, cam=None):
     # upright unless lying: head and shoulders above the hips (a body folded head-down is a failed fit)
     # (lying: head and shoulders at least level with the hips, not hanging below them)
     flat = (lie > 0) | (bend_ok > 0.5)          # lying, or hinged over in a set: level is fine, hanging is not
-    out.append(_relu(mh[:, 2] + np.where(flat, -0.12, 0.25) - X[:, NOSE, 2]) / 0.03)
-    out.append(_relu(mh[:, 2] + np.where(flat, -0.08, 0.15) - ms[:, 2]) / 0.03)
+    uw = float(_os.environ.get("UPRIGHT", "1"))
+    out.append(_relu(mh[:, 2] + np.where(flat, -0.12, 0.25) - X[:, NOSE, 2]) / 0.03 * uw)
+    out.append(_relu(mh[:, 2] + np.where(flat, -0.08, 0.15) - ms[:, 2]) / 0.03 * uw)
     # crouched (hips this low): a foot on the floor, not sitting on air with both feet raised
     low = 1 / (1 + np.exp(-(0.42 - mh[:, 2]) / 0.03))
     out.append(_relu(za - 0.05) / 0.02 * low)
