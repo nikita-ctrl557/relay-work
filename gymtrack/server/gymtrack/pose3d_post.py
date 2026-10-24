@@ -439,7 +439,7 @@ def extra_terms(X, hand, bend_ok, cam=None):
     if cam is not None:
         z = cam.depth(X)
         out.append((_relu(1.0 - z) / 0.05).sum(1))
-        out.append((_relu(z - 22.0) / 0.5).sum(1))          # nobody beyond the room
+        out.append((_relu(z - 35.0) / 0.5).sum(1))          # nobody far beyond the room
     # the fit's own hard joint limits, firmer here
     lim = P3._limits(X, hand)[:, :P3.N_HARD]
     out += [lim[:, k] for k in range(P3.N_HARD)]
@@ -643,7 +643,7 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
     # frames where the fit is physically impossible (off the floor, at the camera): restart from the 2D
     mh = (X0[:, LHIP, 2] + X0[:, RHIP, 2]) / 2
     dz = cam.depth(X0)
-    bad = (mh < 0.2) | (mh > 1.3) | (dz.min(1) < 1.0) | (dz.max(1) > 22) | ~np.isfinite(X0).all((1, 2))
+    bad = (mh < 0.2) | (mh > 1.3) | (dz.min(1) < 1.0) | (dz.max(1) > 35) | ~np.isfinite(X0).all((1, 2))
     if anchor is not None:      # feet far from the tracker's floor point: restart there
         fa = (X0[:, LAN, :2] + X0[:, RAN, :2]) / 2
         bad |= np.isfinite(anchor[:, 0]) & (np.linalg.norm(np.nan_to_num(fa - anchor), axis=1) > 1.5)

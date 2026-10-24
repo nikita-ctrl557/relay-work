@@ -226,7 +226,7 @@ def collapse_unseen(uv, w):
 
 
 HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), 1.95)
-Q_MIN = 35          # frames below this confidence are not exported
+Q_MIN = int(os.environ.get("Q_MIN", 20))          # frames below this confidence are not exported
 EXPORT_ANGLES = os.environ.get("EXPORT_ANGLES", "0") == "1"
 FIT_MIRROR = os.environ.get("FIT_MIRROR", "0") == "1"   # orientation is resolved later (pose3d_post.fix_flips)
 
@@ -309,6 +309,8 @@ def frame_quality(cam, g, X, UV, Wg, boxes=None):
             continue
         uv = UV[i][m]
         ph = max(np.ptp(uv[:, 1]), 0.5 * np.ptp(uv[:, 0]), 12.0)
+        if boxes is not None and np.isfinite(boxes[i]).all():     # as the gate: relative to the person's box too
+            ph = max(ph, boxes[i, 3] * 360)
         e = np.linalg.norm(cam.project(X[i])[m] - uv, axis=-1)
         rel = float(np.nanmedian(e)) / ph if np.isfinite(e).any() else 9.0
         qi = np.clip(1.0 - (rel - 0.08) / 0.22, 0, 1)                  # 8 % of height: full, 30 %: none
@@ -387,7 +389,19 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
                 vals[i] = anchors[a, 1:] * (1 - f) + anchors[b, 1:] * f
             elif abs(gi - ta[a]) < 1.05 or abs(gi - ta[b]) < 1.05:
                 vals[i] = anchors[a if abs(gi - ta[a]) <= abs(gi - ta[b]) else b, 1:]
-        anc, boxes = vals[:, :2].copy(), vals[:, 2:6]
+        boxes = vals[:, 2:6]
+        # the floor point under the box bottom through OUR camera (the tracker's plan point can be clamped to
+        # the room, e.g. for people seen beyond the back wall); only where the feet are inside the frame
+        anc = np.full((len(g), 2), np.nan)
+        okb = np.isfinite(boxes).all(1) & (boxes[:, 1] + boxes[:, 3] < 0.97)
+        if okb.any():
+            bb = boxes[okb]
+            uvb = np.stack([(bb[:, 0] + bb[:, 2] / 2) * cam.width, (bb[:, 1] + bb[:, 3]) * cam.height], 1)
+            fp = cam.backproject_to_height(uvb, 0.0)
+            good = np.isfinite(fp).all(1) & (cam.depth(fp) > 1.0) & (cam.depth(fp) < 30)
+            tmp = np.full((okb.sum(), 2), np.nan)
+            tmp[good] = fp[good, :2]
+            anc[okb] = tmp
         far = np.array([np.abs(ta - gi).min() > 1.1 for gi in g])
         anc[far] = np.nan
     Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc)
