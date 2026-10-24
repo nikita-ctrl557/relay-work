@@ -118,6 +118,7 @@ THRESH = {
     "D3_cam_vs_plan_px": ("<=", 10.0, "px", "floor-plan calibration points through the solved 3D camera"),
     "D3_cam_vs_room_m": ("<=", 0.5, "m", "solved 3D camera position vs the realistic room's camera"),
     "D3_cam_yaw_deg": ("<=", 5.0, "deg", "heading difference solved 3D camera vs room camera (bodies turned in the map)"),
+    "D3_cam_pitch_deg_aims": ("<=", 1.0, "deg", "tilt difference of each re-aimed-stretch 3D camera vs the room aim measured from the video"),
     "D4_set_off_machine": ("<=", 10.0, "% set-time", "lifter's measured position (mapped 3D feet, else tracker) > 1.0 m from the set's machine (not the placer's snapped one) [round 2]"),
     "D4_set_off_machine_tracker": ("<=", 10.0, "% set-time", "same, on the tracker's room-feet point [round 2]"),
     "D5_inside_equipment": ("<=", 1.0, "% person-time", "measured feet inside tall equipment (not their set machine / planted zone) [round 2: measured, not the pushed-out placer]"),
@@ -235,11 +236,18 @@ class Session:
             d = json.load(open(ASSETS / "room" / s["file"]))
             self.rooms.append((s["t0"], s["t1"], {k: d[k] for k in ("W", "H", "C", "D", "f", "R", "equipment", "depth", "gw", "gh", "far", "seg") if k in d}))
         self.equip = ridx.get("equipment", [])
-        self.cams3d = []
+        # One camera per segment, plus optional per-aim-stretch entries (t0/t1 set) for segments where the
+        # camera was re-aimed. Stretch entries come first so cam3d_at prefers them over the segment fallback.
+        self.cams3d, self.cams3d_aim, stretch, base = [], [], [], []
         for c in (self.meta or {}).get("cams", []):
             sg = next((s for s in self.segs if s["name"] == c["segment"]), None)
             if sg and c.get("camera"):
-                self.cams3d.append((sg["start"], sg["end"], PinholeCamera.from_dict(c["camera"]), c["segment"]))
+                if c.get("t0") is not None and c.get("t1") is not None:
+                    stretch.append((float(c["t0"]), float(c["t1"]), PinholeCamera.from_dict(c["camera"]), c["segment"]))
+                else:
+                    base.append((sg["start"], sg["end"], PinholeCamera.from_dict(c["camera"]), c["segment"]))
+        self.cams3d = stretch + base
+        self.cams3d_aim = [True] * len(stretch) + [False] * len(base)
         self.hand = self.cams3d[0][2].flip if self.cams3d else 1.0
         rows = self.rp.get("people", {}).get("rows", [])
         self.seen = {r["id"]: r.get("seen_s", 0) for r in rows}
@@ -1176,13 +1184,19 @@ def check_cameras(S):
         return np.c_[np.array(cal["plan"], float), np.zeros(len(cal["plan"]))], np.array(cal["image"], float)
     Pm, Im = calib_pts(S.cam["calib"])
     px, pxm, dm, dy, rows = [], [], [], [], []
-    for t0, t1, cam, name in S.cams3d:
-        cfgp = SEG_CONFIGS / f"{name}-config.json"
-        cal = json.load(open(cfgp))["cameras"][0].get("calib") if cfgp.exists() else None
-        P, I = calib_pts(cal) if cal else (Pm, Im)
-        e = np.linalg.norm(cam.project(P) - I, axis=1)
-        px.append(float(np.max(e)))
-        pxm.append(float(np.max(np.linalg.norm(cam.project(Pm) - Im, axis=1))))
+    pitch = []
+    for (t0, t1, cam, name), aim in zip(S.cams3d, S.cams3d_aim):
+        if not aim:
+            # The segment's calib points belong to its base aim; re-aimed stretches are judged against the
+            # room framing measured from the video for that stretch (C, yaw, pitch) instead.
+            cfgp = SEG_CONFIGS / f"{name}-config.json"
+            cal = json.load(open(cfgp))["cameras"][0].get("calib") if cfgp.exists() else None
+            P, I = calib_pts(cal) if cal else (Pm, Im)
+            e = np.linalg.norm(cam.project(P) - I, axis=1)
+            px.append(float(np.max(e)))
+            pxm.append(float(np.max(np.linalg.norm(cam.project(Pm) - Im, axis=1))))
+        else:
+            cal = None
         room = S.room_at((t0 + t1) / 2)
         if room:
             Cr = np.array(room["C"])
@@ -1191,13 +1205,17 @@ def check_cameras(S):
             fwr = np.array(room["D"]) @ np.array([room["W"] / 2, room["H"] / 2, 1.0])
             y3, yr = np.degrees(np.arctan2(fw3[1], fw3[0])), np.degrees(np.arctan2(fwr[1], fwr[0]))
             dy.append(float(abs((y3 - yr + 180) % 360 - 180)))
-            rows.append({"segment": name, "calib": "segment config" if cal else "manifest (no segment config)",
-                         "calib_px_max": round(px[-1], 1), "manifest_calib_px_max": round(pxm[-1], 1), "C_3d": np.round(cam.C, 2).tolist(), "C_room": np.round(Cr, 2).tolist(),
+            p3_, pr_ = np.degrees(np.arctan2(fw3[2], np.hypot(fw3[0], fw3[1]))), np.degrees(np.arctan2(fwr[2], np.hypot(fwr[0], fwr[1])))
+            pitch.append((float(abs(p3_ - pr_)), aim))
+            rows.append({"segment": name, "aim_stretch": [t0, t1] if aim else None, "pitch_diff_deg": round(pitch[-1][0], 2),
+                         "calib": "room aim" if aim else ("segment config" if cal else "manifest (no segment config)"),
+                         "calib_px_max": round(px[-1], 1) if not aim else None, "manifest_calib_px_max": round(pxm[-1], 1) if not aim else None, "C_3d": np.round(cam.C, 2).tolist(), "C_room": np.round(Cr, 2).tolist(),
                          "f_3d": round(cam.f, 1), "f_room_640": round(room["f"] * W / room["W"], 1), "yaw_diff_deg": round(dy[-1], 1)})
     res["D3_cam_vs_plan_px"] = max(px)
     res["D3_cam_vs_manifest_px"] = max(pxm)
     res["D3_cam_vs_room_m"] = max(dm) if dm else None
     res["D3_cam_yaw_deg"] = max(dy) if dy else None
+    res["D3_cam_pitch_deg_aims"] = max((p for p, a in pitch if a), default=None)
     res["D3_cameras"] = rows
     return res
 
