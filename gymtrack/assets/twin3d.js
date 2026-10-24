@@ -657,13 +657,13 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       const J = p.J3 = use3d ? jointsFrom(p.Jm, [p.pos.x + sx - p.A[0], p.pos.z + sz - p.A[1]], p.J3 || undefined) : jointsFrom(neutralAt(p, sx, sz), null, p.J3 || undefined);
       if (use3d) { const dz = Math.min(J[11].y, J[12].y) - 0.075; if (Math.abs(dz) > 0.005) for (const v of J) v.y -= dz; } // feet on the floor: no floating, no sinking
       { // right under the viewpoint (the camera view looks from the CCTV camera): a body that fills much of the view or is
-        // partly out of it reads as a grey blob, not a person: faded with its size on screen (gone from 3/4 of the view's
-        // height, or with half of it out of view)
+        // partly out of it reads as a grey blob, not a person: faded with its size on screen (from 30 % of the view's height,
+        // gone at 55 %, or with half of it out of view)
         let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, behind = false;
         for (const v of J) { ndc.copy(v).project(camera); if (ndc.z > 1) { behind = true; break; } x0 = Math.min(x0, ndc.x); x1 = Math.max(x1, ndc.x); y0 = Math.min(y0, ndc.y); y1 = Math.max(y1, ndc.y); }
-        const area = Math.max((x1 - x0) * (y1 - y0), 1e-6), inA = Math.max(0, Math.min(x1, 1) - Math.max(x0, -1)) * Math.max(0, Math.min(y1, 1) - Math.max(y0, -1));
+        const area = Math.max((x1 - x0) * (y1 - y0), 1e-6), inA = Math.max(0, Math.min(x1, 1) - Math.max(x0, -1)) * Math.max(0, Math.min(y1, 1) - Math.max(y0, -0.76)); // the view bar covers the bottom
         const hh = (y1 - y0) / 2, fin = inA > 0 ? inA / area : 1;
-        const near = behind ? 0 : Math.min(1, Math.max(0, 1 - (hh - 0.45) / 0.3)) * Math.min(1, Math.max(0, (fin - 0.5) / 0.25));
+        const near = behind ? 0 : Math.min(1, Math.max(0, 1 - (hh - 0.3) / 0.25)) * Math.min(1, Math.max(0, (fin - 0.5) / 0.25));
         p.near = (p.near ?? near) + (near - (p.near ?? near)) * fadeK;
       }
       const fx = (J[11].x + J[12].x) / 2, fz = (J[11].z + J[12].z) / 2; // the shadow sits under the drawn feet
