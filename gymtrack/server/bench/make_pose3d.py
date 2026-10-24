@@ -445,8 +445,26 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             A = np.stack([ang[k] for k in P3.ANGLES], 1)
             # one steady track per piece (pieces are split at > 2 s without a 2D sample; shorter gaps are bridged),
             # cut where the body jumps (> 0.6 m in one step: a tracker identity switch or a depth jump)
-            jump = np.flatnonzero(np.linalg.norm(np.diff(R["X"], axis=0), axis=-1).max(1) > 0.6) + 1
-            for a_, b_ in zip(np.r_[0, jump], np.r_[jump, len(R["t"])]):
+            jump = list(np.flatnonzero(np.linalg.norm(np.diff(R["X"], axis=0), axis=-1).max(1) > 0.6) + 1)
+            # the hip axis turning round in < 0.3 s: not a person turning (identity switch or a left/right mix-up
+            # we cannot resolve): cut, and show nothing for 1 s rather than a spinning body
+            hl = R["X"][:, P3.LHIP, :2] - R["X"][:, P3.RHIP, :2]
+            hy = np.arctan2(hl[:, 1], hl[:, 0])
+            k3 = 3
+            turn = np.degrees(np.abs((hy[k3:] - hy[:-k3] + np.pi) % (2 * np.pi) - np.pi)) if len(hy) > k3 else np.zeros(0)
+            skip = np.zeros(len(R["t"]), bool)
+            i = 0
+            while i < len(turn):
+                if turn[i] > 140:
+                    jump.append(i + 1)
+                    skip[i + 1:i + 1 + 10] = True
+                    i += 10
+                else:
+                    i += 1
+            jump = sorted(set(jump))
+            for a_, b_ in zip([0] + jump, jump + [len(R["t"])]):
+                while a_ < b_ and skip[a_]:
+                    a_ += 1
                 if b_ - a_ >= 5:
                     tr_ = encode_track(pid, R["t"][a_:b_], R["X"][a_:b_], A[a_:b_], R["fwd"][a_:b_], R["U"][a_:b_], hz)
                     if not EXPORT_ANGLES:      # the app recomputes them from the joints (core.js anglesOf): -20 % size
