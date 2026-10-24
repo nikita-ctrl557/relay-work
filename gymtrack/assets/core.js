@@ -866,6 +866,34 @@ class ReplaySource {
     return this.cams.some(c => c.p3);
   }
   indexPose3d(c, d) {
+    /* joint angles (pose3d_meta.angles order) from joints, as gymtrack.pose3d.joint_angles: used when a v2 track
+       ships without "A" (the sidecar stays small) */
+    const anglesOf = (P, n, s, hand) => {
+      const out = new Float32Array(n * 12), v = (i, j) => [P[i * 39 + j * 3] * s, P[i * 39 + j * 3 + 1] * s, P[i * 39 + j * 3 + 2] * s];
+      const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], unit = a => mul(a, 1 / Math.max(Math.hypot(...a), 1e-9));
+      const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+      const ang = (a, b) => Math.acos(Math.max(-1, Math.min(1, dot(unit(a), unit(b))))) * 180 / Math.PI;
+      const rej = (a, u) => sub(a, mul(u, dot(a, u)));
+      for (let i = 0; i < n; i++) {
+        const J = Array.from({length: 13}, (_, j) => v(i, j));
+        const mh = mul(add(J[7], J[8]), 0.5), ms = mul(add(J[1], J[2]), 0.5), trunk = unit(sub(ms, mh));
+        const lat = unit(add(unit(sub(J[7], J[8])), unit(sub(J[1], J[2])))), up = unit(rej(trunk, lat)), fwd = mul(cross(lat, up), hand), down = mul(trunk, -1);
+        const o = i * 12;
+        [[7, 9, 11], [8, 10, 12]].forEach(([hp, kn, an], k) => {
+          out[o + k] = ang(sub(J[kn], J[hp]), sub(J[an], J[kn]));
+          const ts = rej(sub(J[kn], J[hp]), lat), a = ang(ts, down); out[o + 2 + k] = dot(ts, fwd) >= 0 ? a : -a;
+        });
+        [[1, 3, 5], [2, 4, 6]].forEach(([sh, el, wr], k) => {
+          out[o + 4 + k] = ang(sub(J[el], J[sh]), sub(J[wr], J[el]));
+          const ua = sub(J[el], J[sh]), sag = rej(ua, lat), a = ang(sag, down); out[o + 6 + k] = dot(sag, fwd) >= 0 ? a : -a;
+          const cor = rej(ua, fwd), b = ang(cor, down); out[o + 8 + k] = (k ? -1 : 1) * dot(cor, lat) >= 0 ? b : -b;
+        });
+        out[o + 10] = ang(trunk, [0, 0, 1]);
+        out[o + 11] = (mh[2] - (J[9][2] + J[10][2]) / 2) * 100;
+      }
+      return out;
+    };
     const raw = {}, meta = d.pose3d_meta || {};
     for (const e of d.poses3d || []) for (const row of e.k) { const [pid, P, , A, U] = row; if (!P || P.length < 39) continue; (raw[pid] ||= []).push([e.t, P, A || [], U || []]); }
     const idx = {};
@@ -875,6 +903,7 @@ class ReplaySource {
         for (let j = 0; j < k; j++) out[j] = dv.getInt16(j * 2, true);
         if (b) { const ds = new Int8Array(bytes(b).buffer); for (let i = 1; i < n; i++) for (let j = 0; j < k; j++) out[i * k + j] = out[(i - 1) * k + j] + ds[(i - 1) * k + j]; }
         return out; };
+      const hand = (meta.cams || []).find(x => x.camera)?.camera?.flip ?? 1;
       const by = {};
       for (const tr of d.tracks) (by[tr.pid] ||= []).push(tr);
       for (const [pid, trs] of Object.entries(by)) {
@@ -882,7 +911,7 @@ class ReplaySource {
         const n = trs.reduce((s, tr) => s + tr.n, 0), t = new Float64Array(n), P = new Float32Array(n * 39), A = new Float32Array(n * 12), U = new Float32Array(n * 13), F = new Float32Array(n), Cf = new Float32Array(n * 13).fill(NaN);
         let o = 0;
         for (const tr of trs) {
-          const p = dec(tr.P, 39, tr.n), a = tr.A ? dec(tr.A, 12, tr.n) : new Float32Array(tr.n * 12).fill(NaN), fb = bytes(tr.F), fv = new DataView(fb.buffer), pu = (tr.u || 1) / 100;
+          const p = dec(tr.P, 39, tr.n), a = tr.A ? dec(tr.A, 12, tr.n) : anglesOf(p, tr.n, (tr.u || 1) / 100, hand), fb = bytes(tr.F), fv = new DataView(fb.buffer), pu = (tr.u || 1) / 100;
           // per-joint confidence if the sidecar has one ("C": 13 values, or per frame "|"-encoded like P; 0..1 or 0..100)
           const cr = tr.C ?? tr.conf, cs = typeof cr === "string" ? dec(cr, 13, tr.n) : null, cmax = Array.isArray(cr) ? Math.max(...cr) : cs ? Math.max(...cs) : 1, ck = cmax > 1.5 ? 1 / 100 : 1;
           for (let i = 0; i < tr.n; i++, o++) {

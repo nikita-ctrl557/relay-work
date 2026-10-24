@@ -13,14 +13,6 @@ def pi(self, *a, **k): k['threads'] = threads; _pi(self, *a, **k)
 pose.RTMPoseEstimator.__init__ = pi
 from eval_sets import _camera
 from gymtrack.offline import analyse
-if os.environ.get('DUMP_PRESTITCH'):  # dev only: keep post-processing's input (incl. appearance) to tune it offline; delete after
-    import copy
-    from gymtrack import postprocess as _pp, offline as _off
-    _fs = _pp.finish_sets
-    def _dump_fs(data, cfg_, cam_=None):
-        pickle.dump(copy.deepcopy(data), open(OUT + f'{seg}.prestitch.pkl', 'wb'))
-        return _fs(data, cfg_, cam_)
-    _pp.finish_sets = _dump_fs
 S = '/tmp/claude-0/-home-user-relay-work/851771c1-781b-56fa-9dda-a42b6ec0afa3/scratchpad/'
 OUT = os.environ.get('RUN_DIR', S + 'rerun/')  # where per-segment results go
 cfg, cam = _camera(os.environ.get('SEG_DIR', S + 'yt/segs'), seg)

@@ -18,8 +18,8 @@ FORMAT v2 (core.js indexPose3d reads both v1 "poses3d" rows and v2 "tracks"):
   tracks: [{pid, t0 (s), hz, n, u, P, A, F, U}]
     P: base64 of int16[39] (frame 0, in units of u cm (default 1): x, y floor plan, z height; pose3d_meta.joints
        order) followed by int8[39] per later frame = closed-loop deltas (so quantisation never drifts)
-    A: base64, same scheme for the 12 joint angles (pose3d_meta.angles, degrees; last one cm); omitted for
-       passers-by (group C)
+    A: optional (EXPORT_ANGLES=1): base64, same scheme for the 12 joint angles (pose3d_meta.angles, degrees;
+       last one cm); without it the app computes them from P (core.js anglesOf = pose3d.joint_angles)
     F: base64 of int16 per frame = body facing (yaw) in 0.01 rad, plan frame: forward = (cos, sin)
     U: 13 ints = median 1-sigma joint uncertainty of the track, cm
 """
@@ -205,6 +205,7 @@ def deswap(uv, w):
 
 
 HEIGHT_RANGE = (1.55, 1.95)
+EXPORT_ANGLES = os.environ.get("EXPORT_ANGLES", "0") == "1"
 FIT_MIRROR = os.environ.get("FIT_MIRROR", "0") == "1"   # orientation is resolved later (pose3d_post.fix_flips)
 
 
@@ -448,7 +449,7 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             for a_, b_ in zip(np.r_[0, jump], np.r_[jump, len(R["t"])]):
                 if b_ - a_ >= 5:
                     tr_ = encode_track(pid, R["t"][a_:b_], R["X"][a_:b_], A[a_:b_], R["fwd"][a_:b_], R["U"][a_:b_], hz)
-                    if ph == "C":          # passers-by: no joint angles (not shown for them), saves ~20 %
+                    if not EXPORT_ANGLES:      # the app recomputes them from the joints (core.js anglesOf): -20 % size
                         tr_.pop("A")
                     tracks.append((ph, tr_))
             angles_by_pid.setdefault(pid, []).append((R["t"], A))
