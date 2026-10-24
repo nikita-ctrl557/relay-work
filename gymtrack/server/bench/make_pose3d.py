@@ -392,6 +392,13 @@ def collapse_unseen(uv, w):
     for a, b, c in ((7, 9, 11), (8, 10, 12)):
         leg = np.linalg.norm(uv[:, b] - uv[:, a], axis=-1) + np.linalg.norm(uv[:, c] - uv[:, b], axis=-1)
         bad = np.isfinite(ref) & (leg < 0.35 * ref) & (w[:, [a, b, c]] > 0).all(1)
+        # an upright person with a straight leg slanting > 40 deg off vertical (thigh and shank alike): the feet are
+        # hidden (behind a rack, a bench) and the detector strung the leg along the occluder's edge
+        th, sh_ = uv[:, b] - uv[:, a], uv[:, c] - uv[:, b]
+        ang = lambda v: np.degrees(np.arctan2(np.abs(v[:, 0]), np.maximum(v[:, 1], 1e-6)))
+        upright = (w[:, [1, 2, 7, 8]] > 0).all(1) & (mh_[:, 1] - ms_[:, 1] > 0.5 * np.nan_to_num(ref, nan=1e9))
+        slant = (ang(th) > 40) & (ang(sh_) > 40) & (np.sign(th[:, 0]) == np.sign(sh_[:, 0])) & (th[:, 1] > 0) & (sh_[:, 1] > 0)
+        bad |= upright & slant & (w[:, [a, b, c]] > 0).all(1)
         w[bad, b] = 0
         w[bad, c] = 0
     return w
@@ -418,7 +425,13 @@ def person_groups(cam, pieces, prior_w):
     w = np.concatenate([p[2] for p in pieces])[o]
     hp = (P3.DEFAULT_HEIGHT, 0.08)
     if prior_w is not None and len(prior_w[0]) >= 4:
-        hp = (float(np.clip(np.median(sam_groups(prior_w[1]) / P3.RATIO_V), *HEIGHT_RANGE)), 0.04)
+        hs = float(np.median(sam_groups(prior_w[1]) / P3.RATIO_V))
+        if HEIGHT_PLAUSIBLE[0] <= hs <= HEIGHT_PLAUSIBLE[1]:
+            hp = (float(np.clip(hs, *HEIGHT_RANGE)), 0.04)
+    # seen whole (>= 11 joints inside the frame) in too few samples: a partial view says nothing about stature
+    inside = (uv[..., 0] > 4) & (uv[..., 0] < 636) & (uv[..., 1] > 4) & (uv[..., 1] < 356) & (w > 0)
+    if (inside.sum(1) >= 11).mean() < 0.3 and prior_w is None:
+        return P3.RATIO_V * P3.DEFAULT_HEIGHT, P3.DEFAULT_HEIGHT
     groups, h = P3.calibrate_bones(cam, uv, w, cam.flip, height_prior=hp)
     if len(allt) < 40 and prior_w is None:
         target = P3.DEFAULT_HEIGHT

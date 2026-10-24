@@ -18,6 +18,11 @@ Per camera framing (segment):
      optional "station" (metres added on each side: where a lifter stands or sits to use it, e.g. inside a
      rack's cage in front of its measured uprights, or on a plate-loaded machine's seat). Contacts are searched
      around the zone's "plan_hint" (else its "plan"), so writing the result back as "plan" doesn't move the search.
+Each machine's last equipment entry is its "area": the measured outline plus its working position (config zone "work",
+measured from the video: where its users' feet are during verified sets; apply_work). Set distances, labels and the
+placer's station use it; the solid parts before it stay the objects one can't stand in. To re-apply only that step to an
+existing index.json (meshes, framings and room_aims.py's segments untouched):
+    python make_room.py --work <segs_dir> <out_dir> floor:floor0
 The frontend (assets/twin3d.js) rebuilds vertex = C + depth * (D @ [u, v, 1]) in plan coordinates.
 """
 from __future__ import annotations
@@ -301,6 +306,49 @@ def merge_equipment(rooms):
     return out
 
 
+def work_of(cfg_path):
+    """{machine: (x0, y0, x1, y1)} of the config's zone "work" rects (working positions measured from the video)."""
+    out = {}
+    for z in json.load(open(cfg_path))["cameras"][0]["zones"]:
+        if z.get("work"):
+            a = np.float32(z["work"]); out[z["machine"]] = (float(a[:, 0].min()), float(a[:, 1].min()), float(a[:, 0].max()), float(a[:, 1].max()))
+    return out
+
+
+def apply_work(equip, work):
+    """Each machine's last equipment entry becomes its "area": the machine's outline plus its working position (the
+    floor where its users stand or sit while lifting: a lever's handle end, in front of a cable tower or a rack, the
+    floor around the dumbbell racks), measured from the video (config zone "work"). Height 0 and "area", so nothing takes
+    it for an object one can't stand in; the solid parts before it are unchanged. Set distances, labels and the
+    placer's station use this entry. Idempotent: an earlier working-area entry is replaced."""
+    out = []
+    for e in equip:
+        if e.get("use"):          # an earlier result of this step: back to the plain outline area (multi-part) or nothing
+            if e.get("outline_area"):
+                out.append({k: v for k, v in e.items() if k not in ("use", "outline_area", "outline", "work")} | e["outline_area"])
+            continue
+        out.append(e)
+    for m, (wx0, wy0, wx1, wy1) in work.items():
+        es = [e for e in out if e["machine"] == m]
+        if not es:
+            continue
+        base = next((e for e in es if e.get("area")), es[-1])
+        ox0, oy0, ox1, oy1 = base["x"] - base["w"] / 2, base["y"] - base["d"] / 2, base["x"] + base["w"] / 2, base["y"] + base["d"] / 2
+        x0, y0, x1, y1 = min(ox0, wx0), min(oy0, wy0), max(ox1, wx1), max(oy1, wy1)
+        r = lambda a, b, c, d: {"x": round((a + c) / 2, 2), "y": round((b + d) / 2, 2), "w": round(c - a, 2), "d": round(d - b, 2)}
+        e = {"machine": m, **r(x0, y0, x1, y1), "h": 0.0, "top": base.get("top", base.get("h")), "views": base.get("views"),
+             "measured": True, "solid": False, "area": True, "use": True,
+             "outline": r(ox0, oy0, ox1, oy1), "work": r(wx0, wy0, wx1, wy1)}
+        e["station"] = r(x0, y0, x1, y1)
+        if base.get("area"):      # remember the multi-part floor area it replaces
+            e["outline_area"] = {k: base[k] for k in ("x", "y", "w", "d", "station") if k in base}
+            out.remove(base)
+        out.append(e)
+    # each machine's entries stay together, the area last
+    order = list(dict.fromkeys(e["machine"] for e in out))
+    return [e for m in order for e in sorted((e for e in out if e["machine"] == m), key=lambda e: bool(e.get("area")))]
+
+
 def do_seg(segs_dir, frames_dir, out_dir, seg, base=None):
     if True:  # noqa: one framing -> <out_dir>/<seg>.json + .jpg
         room, P, keep, cls = build(segs_dir, frames_dir, seg, base)
@@ -314,7 +362,17 @@ def do_seg(segs_dir, frames_dir, out_dir, seg, base=None):
         return room
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and sys.argv[1:2] == ["--work"]:
+    # python make_room.py --work <segs_dir> <out_dir> <session>:<config segment> ...: only (re)apply the working positions
+    # (config zone "work") to index.json's equipment; meshes, framings and room_aims' segments are left as they are
+    segs_dir, out_dir = sys.argv[2:4]
+    index = json.load(open(f"{out_dir}/index.json"))
+    for arg in sys.argv[4:]:
+        session, cseg = arg.split(":")
+        index["sessions"][session]["equipment"] = apply_work(index["sessions"][session]["equipment"], work_of(f"{segs_dir}/{cseg}-config.json"))
+        print(session, [(e["machine"], e["x"], e["y"], e["w"], e["d"]) for e in index["sessions"][session]["equipment"] if e.get("use")])
+    json.dump(index, open(f"{out_dir}/index.json", "w"), indent=1)
+elif __name__ == "__main__":
     segs_dir, frames_dir, out_dir, replay_dir = sys.argv[1:5]
     os.makedirs(out_dir, exist_ok=True)
     index = {"about": "Realistic room: textured depth meshes of each camera framing. Depth: Depth Anything V2 Small (Apache-2.0); "
@@ -339,6 +397,6 @@ if __name__ == "__main__":
         sh = [r["shell"] for r in rooms]
         bounds = {"x0": min(b["x0"] for b in sh), "x1": max(b["x1"] for b in sh), "y0": min(b["y0"] for b in sh) - 0.2, "y1": max(b["y1"] for b in sh)}
         index["sessions"][session] = {"segments": entries, "default": longest, "bounds": {k: round(v, 2) for k, v in bounds.items()},
-                                      "height": CEIL, "equipment": merge_equipment(rooms)}
+                                      "height": CEIL, "equipment": apply_work(merge_equipment(rooms), work_of(f"{segs_dir}/{segs[0].split('@')[-2] if '@' in segs[0] else segs[0]}-config.json"))}
     json.dump(index, open(f"{out_dir}/index.json", "w"), indent=1)
 

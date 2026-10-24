@@ -161,6 +161,8 @@ def lifter_location(sets: list[dict], timeline: list[dict], zones: dict, W: floa
         c = s.get("pid")
         if c is not None and at.get(c, 0) >= AT_KEEP * max(seen.get(c, 0), 0.5 * n):
             continue
+        if c is None and s.get("cands") and max(s["cands"].values()) < CREDIT_MIN:
+            continue  # people were seen well and nobody moved with the machine: not given to whoever stands there
         busy = {o.get("pid") for o in sets if o is not s and o.get("pid") is not None and _conflict(o, s)}
 
         def still(p):

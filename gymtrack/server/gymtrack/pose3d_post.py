@@ -432,9 +432,10 @@ def extra_terms(X, hand, bend_ok, cam=None):
     out.append(_relu(za - 0.02) / 0.01 * straight * up)
     out.append(_relu(-za - 0.02) / 0.01)
     # upright unless lying: head and shoulders above the hips (a body folded head-down is a failed fit)
-    up_ok = 1.0 - lie
-    out.append(_relu(mh[:, 2] + 0.25 - X[:, NOSE, 2]) / 0.03 * up_ok)
-    out.append(_relu(mh[:, 2] + 0.15 - ms[:, 2]) / 0.03 * up_ok)
+    # (lying: head and shoulders at least level with the hips, not hanging below them)
+    flat = (lie > 0) | (bend_ok > 0.5)          # lying, or hinged over in a set: level is fine, hanging is not
+    out.append(_relu(mh[:, 2] + np.where(flat, -0.12, 0.25) - X[:, NOSE, 2]) / 0.03)
+    out.append(_relu(mh[:, 2] + np.where(flat, -0.08, 0.15) - ms[:, 2]) / 0.03)
     # crouched (hips this low): a foot on the floor, not sitting on air with both feet raised
     low = 1 / (1 + np.exp(-(0.42 - mh[:, 2]) / 0.03))
     out.append(_relu(za - 0.05) / 0.02 * low)
@@ -660,13 +661,14 @@ EX_PRIORS = {
     "squat": ("feet", "legsym", "hipxy", "facing"), "deadlift": ("feet", "legsym", "facing"),     # a hinge: hips move back
     "bench_press": ("feet", "lying", "armsym", "pelvis"),
     "cable_row": ("feet", "pelvis"), "seated": ("feet", "pelvis"), "lat_pulldown": ("feet", "pelvis"),
-    "row": ("feet", "lean", "facing"),
-    "overhead_press": ("feet", "pelvis", "armsym", "facing"), "lateral_raise": ("feet", "pelvis", "armsym", "facing"),
-    "triceps_pushdown": ("feet", "pelvis", "facing"), "curl": ("feet", "pelvis", "facing"),
+    "row": ("feet", "floor", "lean", "facing"),
+    "overhead_press": ("feet", "floor", "stand", "pelvis", "armsym", "facing"),
+    "lateral_raise": ("feet", "floor", "stand", "pelvis", "armsym", "facing"),
+    "triceps_pushdown": ("feet", "floor", "stand", "pelvis", "facing"), "curl": ("feet", "floor", "stand", "pelvis", "facing"),
 }
 
 
-def exercise_rows(X0, sets, g, bench_h=None):
+def exercise_rows(X0, sets, g, bench_h=None, groups=None):
     """Soft linear priors for the credited lifter during each set, from the set's own median pose (so a true
     mislabel can still pull away): feet locked, pelvis on the seat / bench, legs moving symmetrically, hips on a
     vertical path, facing and trunk lean constant, bilateral arms level. sets: [(t0, t1, ex, machine_h or None)]."""
@@ -677,7 +679,16 @@ def exercise_rows(X0, sets, g, bench_h=None):
         if not kinds or len(idx) < 5:
             continue
         M = np.median(X0[idx], axis=0)
+        gd = dict(zip(P3.GROUP_NAMES, np.asarray(groups, float))) if groups is not None else None
+        if "floor" in kinds:          # standing exercises: the feet on the floor (not on whatever hides them)
+            M[[LAN, RAN], 2] = ANKLE_Z
+        if "stand" in kinds and gd is not None:
+            M[[LHIP, RHIP], 2] = ANKLE_Z + gd["shank"] * 0.97 + gd["thigh"] * 0.95
         for f in idx:
+            if "stand" in kinds and gd is not None:     # standing straight-legged: knees over the ankles
+                for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
+                    rows.append((f, [(kn, 2, 1.0), (an, 2, -1.0)], gd["shank"] * 0.97, 0.05))
+                    rows.append((f, [(hp, 2, 1.0), (kn, 2, -1.0)], gd["thigh"] * 0.95, 0.05))
             if "feet" in kinds:
                 for an in (LAN, RAN):
                     for k in range(3):
@@ -755,7 +766,7 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         pm[seated] = 0.0
     pins = stance_pins(X0)
     pins[bad] = np.nan
-    ex_rows = exercise_rows(X0, sets, g) if sets else []
+    ex_rows = exercise_rows(X0, sets, g, groups=groups) if sets else []
     for i in np.flatnonzero(seated):
         for k in range(3):
             ex_rows.append((i, [(LHIP, k, 0.5), (RHIP, k, 0.5)], seat[i, k], 0.08 if k < 2 else 0.05))
