@@ -397,7 +397,8 @@ def collapse_unseen(uv, w):
     return w
 
 
-HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.64)), 1.95)
+HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), 1.95)
+HEIGHT_PLAUSIBLE = (1.55, 2.00)   # a calibration outside this is a failed one (partial view, seated): population mean
 Q_MIN = int(os.environ.get("Q_MIN", 20))          # frames below this confidence are not exported
 DEPTH_CAP_ON = os.environ.get("DEPTH_CAP", "1") == "1"     # far people: no faster-than-walking depth hops
 HIDDEN_FEET_ON = os.environ.get("HIDDEN_FEET", "0") == "1"   # ankles behind an occluder: trust the head ray
@@ -422,7 +423,9 @@ def person_groups(cam, pieces, prior_w):
     if len(allt) < 40 and prior_w is None:
         target = P3.DEFAULT_HEIGHT
     else:
-        target = float(np.clip(h, *HEIGHT_RANGE))
+        # an implausible estimate says the calibration failed, not that the person is that tall: no evidence, so
+        # the population mean (rather than pinning them to a bound of the range)
+        target = float(np.clip(h, *HEIGHT_RANGE)) if HEIGHT_PLAUSIBLE[0] <= h <= HEIGHT_PLAUSIBLE[1] else P3.DEFAULT_HEIGHT
     # proportions within +-20 % of the population's (a calibration on a bad stretch can give 60 cm thighs)
     ref = P3.RATIO_V * target
     return np.clip(groups * target / h, 0.8 * ref, 1.2 * ref), target
@@ -818,8 +821,8 @@ def conf_decay(C, hz=10):
         d = np.abs(np.arange(n) - idx[np.clip(k, 0, len(idx) - 1)])
         if len(idx) > 1:
             d = np.minimum(d, np.abs(np.arange(n) - idx[k - 1]))
-        # between the 5 Hz 2D samples (<= 0.25 s away) a joint counts as seen
-        out[:, j] = np.where(d <= 0.25 * hz, 100, np.where(d <= 0.5 * hz, 70, np.where(d <= 1.0 * hz, 50, 30)))
+        # the frame next to a 2D sample (<= 0.1 s) counts as seen; flickering occluded limbs decay
+        out[:, j] = np.where(d <= 0.1 * hz, 100, np.where(d <= 0.5 * hz, 70, np.where(d <= 1.0 * hz, 50, 30)))
     return out
 
 

@@ -360,7 +360,7 @@ def bone_cv(X):
 # fixing a pose never costs reprojection that the solve did not accept
 # ---------------------------------------------------------------------------------------------------------
 
-N_EXTRA = 32
+N_EXTRA = 34
 EXTRA_W = 3.0      # plausibility terms are firm: a body that breaks them looks wrong at a glance
 _relu = P3._relu
 _smoothmin = P3._smoothmin
@@ -431,6 +431,10 @@ def extra_terms(X, hand, bend_ok, cam=None):
     up = 1 / (1 + np.exp(-(mh[:, 2] - 0.65) / 0.03))
     out.append(_relu(za - 0.02) / 0.01 * straight * up)
     out.append(_relu(-za - 0.02) / 0.01)
+    # upright unless lying: head and shoulders above the hips (a body folded head-down is a failed fit)
+    up_ok = 1.0 - lie
+    out.append(_relu(mh[:, 2] + 0.25 - X[:, NOSE, 2]) / 0.03 * up_ok)
+    out.append(_relu(mh[:, 2] + 0.15 - ms[:, 2]) / 0.03 * up_ok)
     # crouched (hips this low): a foot on the floor, not sitting on air with both feet raised
     low = 1 / (1 + np.exp(-(0.42 - mh[:, 2]) / 0.03))
     out.append(_relu(za - 0.05) / 0.02 * low)
@@ -653,7 +657,7 @@ def grid_2d(t, uv, w, g, max_dt=0.4):
 
 # exercise -> which soft priors hold during the set (see exercise_rows)
 EX_PRIORS = {
-    "squat": ("feet", "legsym", "hipxy", "facing"), "deadlift": ("feet", "legsym", "hipxy", "facing"),
+    "squat": ("feet", "legsym", "hipxy", "facing"), "deadlift": ("feet", "legsym", "facing"),     # a hinge: hips move back
     "bench_press": ("feet", "lying", "armsym", "pelvis"),
     "cable_row": ("feet", "pelvis"), "seated": ("feet", "pelvis"), "lat_pulldown": ("feet", "pelvis"),
     "row": ("feet", "lean", "facing"),
