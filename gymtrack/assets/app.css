@@ -565,11 +565,13 @@ td.who small { color: var(--muted); font-size: 12px; }
 .s3d canvas { display: block; cursor: grab; }
 .s3d canvas:active { cursor: grabbing; }
 .s3d-load { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; pointer-events: none; color: #c9d1d8; font-size: 13px; }
-.s3d-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.s3d-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 3; }
+.tw-legend { transition: opacity .25s; }
+.tw-legend.under { opacity: .3; } /* a person's label is under it: the label wins */
 .s3d-tag { position: absolute; left: 0; top: 0; pointer-events: auto; white-space: nowrap; font: 600 12px var(--f-body); color: #fff; background: rgba(22, 28, 34, .82); border: 0; padding: 2px 8px; border-radius: 4px; cursor: help; transition: background .12s, opacity .2s; }
 .s3d-tag.link { cursor: pointer; }
 .s3d-tag.hl, .s3d-tag:hover { background: var(--accent); color: #fff; z-index: 2; }
-.s3d-bar { position: absolute; left: 12px; bottom: 12px; right: 12px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; pointer-events: none; }
+.s3d-bar { position: absolute; z-index: 4; left: 12px; bottom: 12px; right: 12px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; pointer-events: none; }
 .s3d-bar button { pointer-events: auto; font: 600 12.5px var(--f-body); color: #fff; background: rgba(22, 28, 34, .74); border: 0; height: 30px; padding: 0 12px; border-radius: 15px; cursor: pointer; }
 .s3d-bar button[aria-pressed="true"] { background: #fff; color: #1f2a33; }
 .s3d-hint { margin-left: auto; color: rgba(255, 255, 255, .8); font-size: 12px; }

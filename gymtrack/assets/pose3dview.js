@@ -11,7 +11,7 @@ const dark = () => matchMedia("(prefers-color-scheme: dark)").matches && documen
 const EX = {overhead_press: "Overhead press", deadlift: "Deadlift", squat: "Squat", row: "Row", bench_press: "Bench press", curl: "Curl", lunge: "Lunge", raise: "Raise", pull_up: "Pull-up", hinge: "Hinge", press: "Press"};
 const exName = e => EX[e] || (e ? e.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()) : "Set");
 const ANG = {elbow_flex: "Elbow", knee_flex: "Knee", hip_flex: "Hip", shoulder_flex: "Shoulder", shoulder_abd: "Shoulder out", trunk_lean: "Trunk lean"};
-const clk = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const clk = s => { s = Math.max(0, s || 0); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; };
 const r0 = v => v == null || Number.isNaN(v) ? "–" : Math.round(v);
 
 export function mountBody3D(host, {tr, state, seek}) {
@@ -72,6 +72,7 @@ export function mountBody3D(host, {tr, state, seek}) {
 
   // the CCTV camera: R, C from the 3D solve (plan frame, z up) -> three.js camera with the replay's crop as a view offset
   const m4 = new THREE.Matrix4();
+  let camRect = null;
   function placeCCTV(cam, st) {
     const fl = cam.flip ?? 1, R = cam.R, row = i => [R[i][0], R[i][1], R[i][2] * fl], tf = v => new THREE.Vector3(v[0], v[2], v[1]);
     const right = tf(row(0)), down = tf(row(1)), fwd = tf(row(2)), C = tf(cam.C);
@@ -83,6 +84,16 @@ export function mountBody3D(host, {tr, state, seek}) {
     const cw = cv.clientWidth, ch = cv.clientHeight, A = cw / ch;
     let rect = {x: 0, y: 0, w: W0, h: H0};
     if (st.crop && st.vw) { const k = W0 / st.vw; rect = {x: st.crop.x * k, y: st.crop.y * k, w: st.crop.w * k, h: st.crop.h * k}; }
+    // frame the member's own 3D body (the replay crop follows the tracker box, which can sit on someone behind them)
+    if (J && body.group.visible) {
+      const Mr = R.map(r => [r[0], r[1], r[2] * fl]); let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const v of J) { const d = [v.x - cam.C[0], v.z - cam.C[1], v.y - cam.C[2]], q = Mr.map(r => r[0] * d[0] + r[1] * d[1] + r[2] * d[2]); if (q[2] < 0.3) continue;
+        const u = cam.f * q[0] / q[2] + (cam.cx ?? W0 / 2), w = cam.f * q[1] / q[2] + (cam.cy ?? H0 / 2); x0 = Math.min(x0, u); x1 = Math.max(x1, u); y0 = Math.min(y0, w); y1 = Math.max(y1, w); }
+      if (x1 > x0) { const h = Math.min(H0, Math.max((y1 - y0) * 1.7, H0 * 0.35)), w = Math.max(h * A, (x1 - x0) * 1.5), hh = w / A;
+        const cl = (v, lo, hi) => hi < lo ? (lo + hi) / 2 : Math.max(lo, Math.min(hi, v)), tgt = {x: cl((x0 + x1) / 2 - w / 2, 0, W0 - w), y: cl((y0 + y1) / 2 - hh / 2, 0, H0 - hh), w, h: hh};
+        camRect = camRect ? {x: camRect.x + (tgt.x - camRect.x) * 0.15, y: camRect.y + (tgt.y - camRect.y) * 0.15, w: camRect.w + (tgt.w - camRect.w) * 0.15, h: camRect.h + (tgt.h - camRect.h) * 0.15} : tgt;
+        rect = {...camRect}; }
+    }
     const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2; if (rect.w / rect.h > A) rect.h = rect.w / A; else rect.w = rect.h * A; rect.x = cx - rect.w / 2; rect.y = cy - rect.h / 2;
     camera.setViewOffset(W0, H0, rect.x, rect.y, rect.w, rect.h);
     if (vtex && vidOn) { vtex.repeat.set(rect.w / W0, rect.h / H0); vtex.offset.set(rect.x / W0, 1 - (rect.y + rect.h) / H0); scene.background = vtex; floorG.visible = false; }

@@ -2,6 +2,7 @@
    Shared by the dashboard in demo mode (everything runs in the browser) and server mode
    (the Python server does the tracking; ServerSource talks to its API). */
 "use strict";
+const CORE_SRC = document.currentScript?.src || location.href;
 /* ================================================================
    Shared helpers
    ================================================================ */
@@ -831,10 +832,26 @@ class ReplaySource {
     const ct = this.ct(c), tl = c.data.timeline, i = tl.indexOf(this.at(c, ct)), a = tl[i], b = tl[i + 1];
     const now = this.peopleAt(c, a);
     const setNow = new Map(c.data.sets.filter(s => s.t0 <= ct && ct <= s.t1).map(s => [s.pid, s.m])); // pid -> machine of the set under way
-    if (!b || b.t - a.t > 2) return now.map(q => ({...q, inSet: setNow.has(q.pid), setM: setNow.get(q.pid) || null, pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}));
+    if (!b || b.t - a.t > 2) return this.gate3d(c, ct, now.map(q => ({...q, inSet: setNow.has(q.pid), setM: setNow.get(q.pid) || null, pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null})));
     const k = Math.max(0, Math.min(1, (ct - a.t) / (b.t - a.t))), next = Object.fromEntries(this.peopleAt(c, b).map(q => [q.pid, q]));
     const mix = (a, b) => a == null || b == null ? a : a + (b - a) * k;
-    return now.map(q => { const n = next[q.pid]; return {inSet: setNow.has(q.pid), setM: setNow.get(q.pid) || null, ...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k), x: mix(q.x, n.x), y: mix(q.y, n.y)} : q), pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}; });
+    return this.gate3d(c, ct, now.map(q => { const n = next[q.pid]; return {inSet: setNow.has(q.pid), setM: setNow.get(q.pid) || null, ...(n ? {...q, box: q.box.map((v, j) => v + (n.box[j] - v) * k), x: mix(q.x, n.x), y: mix(q.y, n.y)} : q), pose: this.poseAt(c, q.pid, ct), pose3d: c.p3 ? this.pose3dAt(c, q.pid, ct) : null}; }));
+  }
+  /* drop 3D bodies nobody should see: low confidence, or not believable against the person in the video (drawn huge
+     near the camera / at the frame edge, impossible stature). Once dropped, a body needs 1 s of good frames to return
+     (no flicker). Those people fall back to the 2D skeleton (Live) or a neutral body (map). */
+  gate3d(c, ct, list) {
+    const bad = c._p3bad ||= new Map(), cam = list.some(q => q.pose3d) ? this.camera3dAt(c.id, ct) : null;
+    if (c._p3t != null && (ct < c._p3t - 0.5 || ct > c._p3t + 3)) bad.clear(); c._p3t = ct;
+    for (const q of list) {
+      const p = q.pose3d; if (!p) continue;
+      let ok = true;
+      if (p.c) { let s = 0; for (let j = 0; j < 13; j++) s += p.c[j]; ok = s / 13 >= 0.45; }
+      if (ok && this.mp) ok = this.mp.body3dOk(p.J, cam, q.box, q.pose);
+      if (!ok) bad.set(q.pid, ct + 1);
+      if ((bad.get(q.pid) ?? -1) > ct) { q.pose3d = null; q.pose3dHidden = true; }
+    }
+    return list;
   }
   poseIdx(c) { // pid -> {t: [], k: [decoded pose]} from the 5-per-second pose log
     if (c._pi) return c._pi;
@@ -853,6 +870,7 @@ class ReplaySource {
   }
   /* ---- monocular 3D body pose (bench/add_pose3d.py): "<data>.pose3d.json" sidecar, or merged into the data file ---- */
   async loadPose3d() { // background: the app works (2D only) until this resolves; a missing sidecar is not an error
+    try { this.mp = await import(new URL("mapplace.js", CORE_SRC).href); } catch (e) { console.warn("mapplace", e); }
     // a manifest that names "pose3d_file" for any camera is authoritative (null = none); otherwise probe "<data>.pose3d.json"
     const listed = this.cams.some(c => "pose3d_file" in c);
     await Promise.all(this.cams.map(async c => {

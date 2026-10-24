@@ -14,7 +14,9 @@ Per camera framing (segment):
      reflections) -> the wall, above the ceiling -> ceiling; near-floor points are snapped flat;
   5. a grid mesh over the image (every STEP px), cut at depth discontinuities, is written as a compact
      JSON (uint16 depths, base64) + the plate as JPEG texture, plus measured equipment footprints for
-     the config's zones (points inside each zone polygon standing above the floor).
+     the config's zones (points inside each zone polygon standing above the floor), grown by the zone's
+     optional "station" (metres added on each side: where a lifter stands or sits to use it, e.g. inside a
+     rack's cage in front of its measured uprights, or on a plate-loaded machine's seat).
 The frontend (assets/twin3d.js) rebuilds vertex = C + depth * (D @ [u, v, 1]) in plan coordinates.
 """
 from __future__ import annotations
@@ -27,6 +29,8 @@ W, H = 1280, 720          # texture / plate size
 GW, GH = 321, 181         # mesh grid (vertices); 4 px spacing at 1280x720
 CEIL = 3.6                # ceiling height cap (m)
 FAR = 40.0
+EQ_GROW = float(os.environ.get("EQ_GROW", "1.0"))   # search window around the configured footprint (m) for equipment contacts
+EQ_PCT = float(os.environ.get("EQ_PCT", "4"))       # footprint extent: this percentile .. 100 - it of the contacts
 
 
 def camera(cfg_cam):
@@ -159,15 +163,20 @@ def build(segs_dir, frames_dir, seg, base=None):
         e = None
         if len(pp) >= 3 and sel.sum() >= 15:
             cpt, pts = contact[sel], P[sel]
-            ctr = pp.mean(0); grow = np.abs(pp - ctr).max(0) + 1.0
+            ctr = pp.mean(0); grow = np.abs(pp - ctr).max(0) + EQ_GROW
             near = (np.abs(cpt - ctr) < grow).all(1)
             if near.sum() >= 15:
-                lo, hi = np.percentile(cpt[near], 4, 0), np.percentile(cpt[near], 96, 0)
+                lo, hi = np.percentile(cpt[near], EQ_PCT, 0), np.percentile(cpt[near], 100 - EQ_PCT, 0)
                 hgt = float(np.percentile(pts[near][:, 2], 96))
                 e = {"machine": zc_["machine"], "x": (lo[0] + hi[0]) / 2, "y": (lo[1] + hi[1]) / 2, "w": max(0.4, hi[0] - lo[0]), "d": max(0.4, hi[1] - lo[1]), "h": hgt, "n": int(near.sum()), "measured": True}
         if e is None and len(pp) >= 3:
             lo, hi = pp.min(0), pp.max(0)
             e = {"machine": zc_["machine"], "x": (lo[0] + hi[0]) / 2, "y": (lo[1] + hi[1]) / 2, "w": hi[0] - lo[0], "d": hi[1] - lo[1], "h": 1.2, "n": 1, "measured": False}
+        st = zc_.get("station")  # where the lifter stands / sits to use it, beyond what the contacts measure (m, outward)
+        if e and st and e["measured"]:
+            ex0, ey0 = e["x"] - e["w"] / 2 - st.get("x0", 0), e["y"] - e["d"] / 2 - st.get("y0", 0)
+            ex1, ey1 = e["x"] + e["w"] / 2 + st.get("x1", 0), e["y"] + e["d"] / 2 + st.get("y1", 0)
+            e.update(x=(ex0 + ex1) / 2, y=(ey0 + ey1) / 2, w=ex1 - ex0, d=ey1 - ey0)
         if e: equip.append({k: round(float(v), 2) if isinstance(v, (float, np.floating)) else v for k, v in e.items()})
     # views for the frontend (three.js axes: x = plan x, y = up, z = plan y)
     t3 = lambda p: [round(float(p[0]), 3), round(float(p[2]), 3), round(float(p[1]), 3)]

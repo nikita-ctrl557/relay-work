@@ -62,6 +62,7 @@ THRESH = {
     "A1_teleports_map_members": ("<=", 0, "count", "Floor-map position jumps > max(1.5 m, 2.5 m/s*dt), tracked members"),
     "A2_duplicate_person_s": ("<=", 1.0, "% person-time", "two pids on one person (2D boxes IoU > 0.6)"),
     "A3_appearance_switch_pids": ("<=", 0, "pids", "pids whose torso colour changes abruptly (suspected swap)"),
+    "A3_gt_swaps": ("<=", 0, "pairs", "hand-labelled different people (verify3d_identity_gt.json) that share one pid [round 2]"),
     "A4_coverage_all": (">=", 90.0, "%", "on-screen person-time with a 3D body"),
     "A4_coverage_members": (">=", 98.0, "%", "tracked-member on-screen time with a 3D body"),
     "A5_flicker_per_min": ("<=", 0.5, "/person-min", "3D body off for < 1 s or on for < 1 s while on screen"),
@@ -77,6 +78,13 @@ THRESH = {
     "B6_arm_through_torso": ("<=", 1.0, "% frames", "elbow/wrist inside the torso (< 6 cm from the spine axis)"),
     "B6_legs_through": ("<=", 1.0, "% frames", "thighs < 8 cm or shanks < 5 cm apart (meshes interpenetrate)"),
     "B_any_violation": ("<=", 2.0, "% frames", "any of B2/B3/B5/B6 in a frame"),
+    # B on the body as drawn on the Floor map (mapped, scaled, placed) [round 2; same limits as the data checks]
+    "B_map_bone_cv_p95": ("<=", 2.0, "%", "drawn map body: bone-length CV within a person (scale removed)"),
+    "B_map_below_floor": ("<=", 0.5, "% frames", "drawn map body: lower ankle > 5 cm under the room floor"),
+    "B_map_floating_standing": ("<=", 2.0, "% standing frames", "drawn map body: both ankles > 5 cm above the room floor while standing"),
+    "B_map_legs_through": ("<=", 1.0, "% frames", "drawn map body: thighs < 8 cm or shanks < 5 cm apart"),
+    "B_map_arm_through_torso": ("<=", 1.0, "% frames", "drawn map body: elbow/wrist inside the torso"),
+    "B_map_any_violation": ("<=", 2.0, "% frames", "drawn map body: any of the above"),
     # C temporal
     "C1_accel_median": ("<=", 1.0, "m/s^2", "median joint acceleration (0.3 s stencil, robust to the 1 cm export quantum)"),
     "C1_hf_jitter_p95": ("<=", 1.5, "cm", "p95 high-frequency jitter: distance of a joint from the midpoint of its neighbours in time"),
@@ -97,8 +105,14 @@ THRESH = {
     "D3_cam_vs_plan_px": ("<=", 10.0, "px", "floor-plan calibration points through the solved 3D camera"),
     "D3_cam_vs_room_m": ("<=", 0.5, "m", "solved 3D camera position vs the realistic room's camera"),
     "D3_cam_yaw_deg": ("<=", 5.0, "deg", "heading difference solved 3D camera vs room camera (bodies turned in the map)"),
-    "D4_set_off_machine": ("<=", 10.0, "% set-time", "lifter's Floor-map position > 1.0 m from the set's machine"),
-    "D5_inside_equipment": ("<=", 1.0, "% person-time", "Floor-map feet inside tall equipment (not their set machine)"),
+    "D4_set_off_machine": ("<=", 10.0, "% set-time", "lifter's measured position (mapped 3D feet, else tracker) > 1.0 m from the set's machine (not the placer's snapped one) [round 2]"),
+    "D4_set_off_machine_tracker": ("<=", 10.0, "% set-time", "same, on the tracker's room-feet point [round 2]"),
+    "D5_inside_equipment": ("<=", 1.0, "% person-time", "measured feet inside tall equipment (not their set machine / planted zone) [round 2: measured, not the pushed-out placer]"),
+    "D6_drawn_off_episodes": ("<=", 0, "count", "episodes >= 0.5 s where the drawn map body is > 0.75 m from the person's measured position [round 2]"),
+    "D6_drawn_off_time": ("<=", 0.2, "% person-time", "drawn map body > 0.75 m from the measured position (any duration) [round 2]"),
+    "D7_garbage_body": ("<=", 0.5, "% shown samples", "Live 3D body is not the person: > 1.5x the person box, behind the camera, or keypoint error > 30 % [round 2]"),
+    "D8_feet_in_room_objects": ("<=", 1.0, "% person-time", "measured feet where the realistic room shows an object > 0.5 m tall and no floor (off-set) [round 2]"),
+    "D9_detection_recall": (">=", 95.0, "%", "clearly visible people (independent detector) that the app tracks [round 2]"),
 }
 
 
@@ -207,7 +221,7 @@ class Session:
         self.rooms = []
         for s in ridx.get("segments", []):
             d = json.load(open(ASSETS / "room" / s["file"]))
-            self.rooms.append((s["t0"], s["t1"], {k: d[k] for k in ("W", "H", "C", "D", "f", "R", "equipment") if k in d}))
+            self.rooms.append((s["t0"], s["t1"], {k: d[k] for k in ("W", "H", "C", "D", "f", "R", "equipment", "depth", "gw", "gh", "far", "seg") if k in d}))
         self.equip = ridx.get("equipment", [])
         self.cams3d = []
         for c in (self.meta or {}).get("cams", []):
@@ -566,6 +580,260 @@ def map_track(S, pid, g, warm=3.0, step=1 / 30):
     return pos, Js
 
 
+def sweep_map(S, step=0.1):
+    """The whole session through the app's Floor-map placement (mapplace.js placer) at `step` s plus the tracker
+    timeline's times, cached on S. Per pid arrays: t, tl (tick is a timeline time), pos (drawn feet), A (mapped 3D
+    feet or NaN), rf (tracker room-feet point or NaN), meas (A, else rf: the person's measured position),
+    J (drawn body joints (13, 3) or NaN), s (body scale), setm (machine of the set under way or ''),
+    free (planted zone or ''), shown (drawn inside the room bounds +- 2 m, as twin3d.js culls)."""
+    if getattr(S, "_sweep", None) is not None:
+        return S._sweep
+    obst = [e for e in S.equip if mp_obstacle(e)]
+    tlt = np.array([e["t"] for e in S.tl])
+    ticks = np.union1d(np.round(np.arange(tlt[0], tlt[-1] + 1e-9, step), 3), np.round(tlt, 3))
+    tl_set = set(np.round(tlt, 3).tolist())
+    b = S.room_idx.get("bounds") or {"x0": -1e9, "x1": 1e9, "y0": -1e9, "y1": 1e9}
+    pls, acc = {}, {}
+    nan2 = np.full(2, np.nan)
+    for ct in ticks:
+        ct = float(ct)
+        rec = round(ct, 3) in tl_set
+        room = S.room_at(ct)
+        mf = map_floor(S.cam3d_at(ct), room)
+        for q in S.people_at(ct):
+            pid = q["pid"]
+            J, A, rf, sete, free, _ = map_inputs(S, pid, ct, q)
+            p = pls.setdefault(pid, Placer()).step(ct, A, rf, sete, obst, free)
+            if p is None:
+                continue
+            a = acc.setdefault(pid, {k: [] for k in ("t", "tl", "pos", "A", "rf", "J", "s", "setm", "free")})
+            a["t"].append(ct)
+            a["tl"].append(rec)
+            a["pos"].append(np.array(p, float))
+            a["A"].append(nan2 if A is None else np.asarray(A, float))
+            a["rf"].append(nan2 if rf is None else np.asarray(rf, float))
+            Jd = np.full((13, 3), np.nan)
+            if J is not None and A is not None:
+                Jd = J.copy()
+                Jd[:, :2] += np.asarray(p) - A
+            a["J"].append(Jd)
+            a["s"].append(mf[1] if mf else 1.0)
+            a["setm"].append(sete["machine"] if sete else "")
+            a["free"].append(free[0] if free else "")
+    out = {}
+    for pid, a in acc.items():
+        d = {k: np.array(v) for k, v in a.items()}
+        d["meas"] = np.where(np.isfinite(d["A"][:, :1]), d["A"], d["rf"])
+        P = d["pos"]
+        d["shown"] = (P[:, 0] >= b["x0"] - 2) & (P[:, 0] <= b["x1"] + 2) & (P[:, 1] >= b["y0"] - 2) & (P[:, 1] <= b["y1"] + 2)
+        out[pid] = d
+    S._sweep = out
+    return out
+
+
+def _runs(mask, t, gap=0.25):
+    """Runs of True in mask (t sorted): [(i0, i1)] inclusive index ranges, split where t jumps > gap."""
+    idx = np.flatnonzero(mask)
+    if not len(idx):
+        return []
+    br = np.flatnonzero((np.diff(idx) > 1) | (np.diff(t[idx]) > gap)) + 1
+    return [(int(r[0]), int(r[-1])) for r in np.split(idx, br)]
+
+
+def room_points(room):
+    """Realistic room vertices (make_room.py depth grid): plan points (n, 3) = C + depth * D [u, v, 1]."""
+    if room is None or "depth" not in room:
+        return None
+    key = room.get("seg", id(room))
+    if key in _RP_CACHE:
+        return _RP_CACHE[key]
+    gw, gh, far = room["gw"], room["gh"], room["far"]
+    z = np.frombuffer(base64.b64decode(room["depth"]), "<u2")[:gw * gh].astype(float) / 65535 * far
+    u, v = np.meshgrid(np.arange(gw) * room["W"] / (gw - 1), np.arange(gh) * room["H"] / (gh - 1))
+    dirs = np.stack([u.ravel(), v.ravel(), np.ones(gw * gh)], 1) @ np.array(room["D"]).T
+    P = np.array(room["C"]) + z[:, None] * dirs
+    P = P[(z > 0.05) & (z < far * 0.99)]
+    _RP_CACHE[key] = P
+    return P
+
+
+_RP_CACHE = {}
+
+
+def room_object_grid(room, cell=0.1):
+    """Plan grid of what the realistic room reconstruction shows standing on the floor: per 10 cm cell, the highest
+    reconstructed point (objects) and whether floor was seen there. Returns (lookup(x, y) -> (max_h, floor_seen))."""
+    P = room_points(room)
+    if P is None:
+        return None
+    key = ("grid", room.get("seg", id(room)))
+    if key in _RP_CACHE:
+        return _RP_CACHE[key]
+    x0, y0 = P[:, 0].min(), P[:, 1].min()
+    ij = np.floor((P[:, :2] - [x0, y0]) / cell).astype(int)
+    nx, ny = ij[:, 0].max() + 1, ij[:, 1].max() + 1
+    hmax = np.full((nx, ny), -np.inf)
+    np.maximum.at(hmax, (ij[:, 0], ij[:, 1]), np.minimum(P[:, 2], 2.6))
+    fl = np.zeros((nx, ny), bool)
+    f = P[:, 2] < 0.10
+    fl[ij[f, 0], ij[f, 1]] = True
+
+    def look(x, y, r=2):
+        i, j = int(np.floor((x - x0) / cell)), int(np.floor((y - y0) / cell))
+        if i < -r or j < -r or i >= nx + r or j >= ny + r:
+            return -np.inf, False
+        a, b_ = max(i - r, 0), max(j - r, 0)
+        hm = hmax[a:i + r + 1, b_:j + r + 1]
+        fs = fl[a:i + r + 1, b_:j + r + 1]
+        return (float(hm.max()) if hm.size else -np.inf), bool(fs.any()) if fs.size else False
+    _RP_CACHE[key] = look
+    return look
+
+
+def _set_dist(p, e):
+    return float(np.hypot(max(abs(p[0] - e["x"]) - e["w"] / 2, 0), max(abs(p[1] - e["y"]) - e["d"] / 2, 0)))
+
+
+def check_placement(S, ex):
+    """Floor-map placement judged on what was measured, not on the placer's output (which is built to look right):
+    D4 set machine distance on the measured position and on the tracker point, D5 inside tall equipment on the
+    measured feet, D6 drawn body far from the measured position, D8 feet inside the reconstructed room's objects,
+    and the B body checks on the drawn (mapped) body."""
+    keys = ("D4_set_off_machine", "D4_set_off_machine_tracker", "D5_inside_equipment", "D6_drawn_off_episodes", "D6_drawn_off_time",
+            "D8_feet_in_room_objects", "B_map_bone_cv_p95", "B_map_below_floor", "B_map_floating_standing", "B_map_legs_through",
+            "B_map_arm_through_torso", "B_map_any_violation")
+    if not S.p3:
+        return {k: None for k in keys}
+    sw = sweep_map(S)
+    eq = {e["machine"]: e for e in S.equip}
+    res = {}
+    # D4 -------------------------------------------------------------------------------------------------
+    n = offm = offt = offd = 0
+    per = {}
+    for pid, d in sw.items():
+        for i in np.flatnonzero(d["setm"] != ""):
+            e = eq.get(d["setm"][i])
+            if e is None:
+                continue
+            m, rf = d["meas"][i], d["rf"][i]
+            if not np.isfinite(m[0]):
+                continue
+            n += 1
+            dm = _set_dist(m, e)
+            offm += dm > 1.0
+            offt += (_set_dist(rf, e) > 1.0) if np.isfinite(rf[0]) else (dm > 1.0)
+            offd += _set_dist(d["pos"][i], e) > 1.0
+            k = (pid, d["setm"][i])
+            per.setdefault(k, [0, 0, d["t"][i], 0.0])
+            per[k][0] += dm > 1.0
+            per[k][1] += 1
+            per[k][3] = max(per[k][3], dm)
+    res["D4_set_off_machine"] = 100 * offm / n if n else None
+    res["D4_set_off_machine_tracker"] = 100 * offt / n if n else None
+    res["D4_set_off_machine_drawn"] = 100 * offd / n if n else None
+    res["D4_sets"] = [{"pid": int(p), "machine": m, "t": round(float(v[2]), 1), "off_%": round(100 * v[0] / v[1]), "max_m": round(v[3], 2)}
+                      for (p, m), v in sorted(per.items(), key=lambda kv: -kv[1][0] / kv[1][1]) if v[0]]
+    for (p, m), v in per.items():
+        if v[0] / v[1] > 0.3:
+            ex.append({"kind": "D4 off machine", "pid": int(p), "t": float(v[2]), "sev": v[3],
+                       "desc": f"set on {m}: the person is measured > 1 m from it for {100 * v[0] / v[1]:.0f} % of the set (max {v[3]:.1f} m); the map drags the body there"})
+    # D5 / D8 / D6 -------------------------------------------------------------------------------------------
+    tot = ins = insd = objn = objt = 0
+    off_t = 0
+    eps = []
+    for pid, d in sw.items():
+        T = d["t"]
+        for i in range(0, len(T), 3):      # 0.3 s
+            m = d["meas"][i]
+            if not (np.isfinite(m[0]) and d["shown"][i]):
+                continue
+            tot += 1
+            for e in S.equip:
+                if not mp_obstacle(e) or e["machine"] in (d["setm"][i], d["free"][i]):
+                    continue
+                if abs(m[0] - e["x"]) < e["w"] / 2 - 0.15 and abs(m[1] - e["y"]) < e["d"] / 2 - 0.15:
+                    ins += 1
+                    if ins % 15 == 1:
+                        ex.append({"kind": "D5 inside equipment", "pid": pid, "t": float(T[i]), "sev": 1.0, "desc": f"measured feet inside {e['machine']}"})
+                    break
+            p = d["pos"][i]
+            for e in S.equip:
+                if mp_obstacle(e) and e["machine"] not in (d["setm"][i], d["free"][i]) and abs(p[0] - e["x"]) < e["w"] / 2 - 0.15 and abs(p[1] - e["y"]) < e["d"] / 2 - 0.15:
+                    insd += 1
+                    break
+            look = room_object_grid(S.room_at(T[i]))
+            if look is not None and d["setm"][i] == "" and d["free"][i] == "":
+                objt += 1
+                hm, fs = look(m[0], m[1])
+                if hm > 0.5 and not fs:
+                    objn += 1
+                    if objn % 15 == 1:
+                        ex.append({"kind": "D8 feet in room object", "pid": pid, "t": float(T[i]), "sev": hm,
+                                   "desc": f"feet where the room reconstruction has an object {hm:.1f} m tall and no floor"})
+        dist = np.linalg.norm(d["pos"] - d["meas"], axis=1)
+        bad = np.isfinite(dist) & (dist > 0.75) & d["shown"]
+        for i0, i1 in _runs(bad, T):
+            dur = T[i1] - T[i0] + 0.1
+            off_t += dur
+            if dur >= 0.5:
+                mx = float(np.nanmax(dist[i0:i1 + 1]))
+                eps.append((mx, pid, float(T[i0]), float(dur)))
+    ptime = sum(float(d["shown"].sum()) * 0.1 for d in sw.values())
+    res["D5_inside_equipment"] = 100 * ins / max(tot, 1)
+    res["D5_inside_equipment_drawn"] = 100 * insd / max(tot, 1)
+    res["D8_feet_in_room_objects"] = 100 * objn / objt if objt else None
+    res["D6_drawn_off_episodes"] = len(eps)
+    res["D6_drawn_off_time"] = 100 * off_t / max(ptime, 1e-9)
+    res["D6_drawn_off_max_m"] = max((e[0] for e in eps), default=0.0)
+    res["D6_episodes"] = [{"pid": int(p), "t": round(t, 1), "dur_s": round(du, 1), "max_m": round(mx, 2)} for mx, p, t, du in sorted(eps, reverse=True)[:25]]
+    for mx, p, t, du in sorted(eps, reverse=True)[:12]:
+        ex.append({"kind": "D6 drawn off", "pid": int(p), "t": t + du / 2, "sev": mx,
+                   "desc": f"map body drawn up to {mx:.1f} m from where the person is measured, for {du:.1f} s"})
+    # B on the drawn body ------------------------------------------------------------------------------------
+    a_, b_ = np.array(P3.BONES).T
+    cvs, nfr = [], 0
+    cnt = dict(below=0, float_=0, stand=0, legs=0, arm=0, any=0)
+    for pid, d in sw.items():
+        ok = np.isfinite(d["J"][:, 0, 0]) & d["shown"]
+        if ok.sum() < 20:
+            continue
+        X, sc = d["J"][ok], d["s"][ok]
+        nfr += len(X)
+        bl = np.linalg.norm(X[:, a_] - X[:, b_], axis=-1) / sc[:, None]
+        cvs += list(100 * bl.std(0) / np.maximum(bl.mean(0), 1e-6))
+        za = np.minimum(X[:, LAN, 2], X[:, RAN, 2])
+        below = za < sc * ANKLE_Z - 0.05
+        kfl = np.max([np.degrees(np.arccos(np.clip((_unit(X[:, kn] - X[:, hp]) * _unit(X[:, an] - X[:, kn])).sum(-1), -1, 1)))
+                      for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN))], 0)
+        midh, mids = (X[:, LHIP] + X[:, RHIP]) / 2, (X[:, LSH] + X[:, RSH]) / 2
+        standing = (kfl < 25) & (midh[:, 2] > 0.6 * sc)
+        floating = standing & (za > sc * ANKLE_Z + 0.05)
+        legs = (seg_dist(X[:, LHIP], X[:, LKN], X[:, RHIP], X[:, RKN]) < 0.08) | (seg_dist(X[:, LKN], X[:, LAN], X[:, RKN], X[:, RAN]) < 0.05)
+        arm = np.zeros(len(X), bool)
+        for j in (LEL, REL, LWR, RWR):
+            dd, ss = point_seg(X[:, j], midh, mids)
+            arm |= (dd < 0.06) & (ss > 0.1) & (ss < 0.9)
+        cnt["below"] += int(below.sum())
+        cnt["float_"] += int(floating.sum())
+        cnt["stand"] += int(standing.sum())
+        cnt["legs"] += int(legs.sum())
+        cnt["arm"] += int(arm.sum())
+        cnt["any"] += int((below | floating | legs | arm).sum())
+        for nm, mk in (("legs", legs), ("floating", floating), ("below", below)):
+            if mk.sum() >= 5:
+                r0 = _runs(mk, d["t"][ok])
+                i0, i1 = max(r0, key=lambda r: r[1] - r[0])
+                ex.append({"kind": f"B map {nm}", "pid": pid, "t": float(d["t"][ok][(i0 + i1) // 2]), "sev": float(i1 - i0 + 1) / 10,
+                           "desc": f"drawn map body: {nm} for {(i1 - i0 + 1) / 10:.1f} s"})
+    res["B_map_bone_cv_p95"] = float(np.percentile(cvs, 95)) if cvs else None
+    res["B_map_below_floor"] = 100 * cnt["below"] / max(nfr, 1) if nfr else None
+    res["B_map_floating_standing"] = 100 * cnt["float_"] / max(cnt["stand"], 1) if nfr else None
+    res["B_map_legs_through"] = 100 * cnt["legs"] / max(nfr, 1) if nfr else None
+    res["B_map_arm_through_torso"] = 100 * cnt["arm"] / max(nfr, 1) if nfr else None
+    res["B_map_any_violation"] = 100 * cnt["any"] / max(nfr, 1) if nfr else None
+    return res
+
+
 # ---------------------------------------------------------------------------------------------------------
 # A identity
 # ---------------------------------------------------------------------------------------------------------
@@ -585,19 +853,29 @@ def check_identity(S, ex):
                        "desc": f"3D root jumps {dd[i]:.2f} m in {dt[i]:.2f} s"})
     res["A1_teleports_3d_all"] = tele_all
     res["A1_teleports_3d_members"] = tele_mem
-    # Floor-map positions as twin3d.js places them (mapplace.js placer), at the tracker timeline's times
-    tm, ta = 0, 0
-    for pid, seq in map_positions_at_timeline(S).items():
-        for (t0, p0), (t1, p1) in zip(seq, seq[1:]):
-            dt = t1 - t0
-            d = float(np.linalg.norm(p1 - p0))
-            if dt <= 2.0 and d > max(1.5, 2.5 * dt):
+    # Floor-map position jumps. Judged on what the placer is fed (the person's measured position: mapped 3D feet,
+    # else the tracker's room-feet point): the drawn position itself is speed-capped by mapplace.js and can never
+    # jump, so measuring it would pass by construction (it is kept as information, A1_teleports_map_drawn).
+    sw = sweep_map(S)
+    tm, ta, td = 0, 0, 0
+    for pid, d in sw.items():
+        on = d["tl"]
+        for key in ("meas", "pos"):
+            P, T = d[key][on], d["t"][on]
+            ok = np.isfinite(P[:, 0])
+            P, T = P[ok], T[ok]
+            dt, dd = np.diff(T), np.linalg.norm(np.diff(P, axis=0), axis=1)
+            for i in np.flatnonzero((dt <= 2.0) & (dd > np.maximum(1.5, 2.5 * dt))):
+                if key == "pos":
+                    td += 1
+                    continue
                 ta += 1
                 tm += pid in S.members
-                ex.append({"kind": "A1 map teleport", "pid": pid, "t": t1, "sev": d,
-                           "desc": f"Floor-map position jumps {d:.2f} m in {dt:.1f} s (member={pid in S.members})"})
+                ex.append({"kind": "A1 map teleport", "pid": pid, "t": float(T[i + 1]), "sev": float(dd[i]),
+                           "desc": f"Floor-map (measured) position jumps {dd[i]:.2f} m in {dt[i]:.1f} s (member={pid in S.members})"})
     res["A1_teleports_map_members"] = tm
     res["A1_teleports_map_all"] = ta
+    res["A1_teleports_map_drawn"] = td
     # duplicates: two pids on one person (2D keypoint boxes at the same pose sample)
     dup, tot, dup_ep = 0.0, 0.0, {}
     for e in S.rp["poses"]:
@@ -883,7 +1161,7 @@ def check_map(S, ex, rng, n_people=12, secs=40):
     """C2 map slide, D2 map body vs 2D through the room camera, D4 set machine, D5 inside equipment."""
     res = {}
     if not S.p3:
-        return {k: None for k in ("C2_foot_slide_map", "C2_foot_slide_map_p90", "D2_map_body_reproj", "D4_set_off_machine", "D5_inside_equipment")}
+        return {k: None for k in ("C2_foot_slide_map", "C2_foot_slide_map_p90", "D2_map_body_reproj")}
     # windows: every set (lifters) + longest-tracked members, up to `secs` each
     wins = []
     for s in S.rp.get("sets", []):
@@ -944,24 +1222,19 @@ def check_map(S, ex, rng, n_people=12, secs=40):
                     set_n += 1
                     if d > 1.0:
                         off_n += 1
-                        if off_n % 20 == 1:
-                            ex.append({"kind": "D4 off machine", "pid": pid, "t": float(g[k]), "sev": d,
-                                       "desc": f"during the {sset.get('ex')} set on {sset['m']} the map body is {d:.1f} m from it"})
             for e in S.equip:
                 if e["h"] < 1.0 or "rack" in e["machine"] or (sset is not None and e["machine"] == sset["m"]):
                     continue
                 if abs(p[0] - e["x"]) < e["w"] / 2 - 0.15 and abs(p[1] - e["y"]) < e["d"] / 2 - 0.15:
                     inside_n += 1
-                    if inside_n % 15 == 1:
-                        ex.append({"kind": "D5 inside equipment", "pid": pid, "t": float(g[k]), "sev": 1.0,
-                                   "desc": f"map body stands inside {e['machine']}"})
     slide = np.concatenate(slide) if slide else np.array([np.nan])
     res["C2_foot_slide_map"] = float(np.nanmedian(slide))
     res["C2_foot_slide_map_p90"] = float(np.nanpercentile(slide, 90))
     res["D2_map_body_reproj"] = float(np.median(rep)) if rep else None
     res["D2_map_body_reproj_p90"] = float(np.percentile(rep, 90)) if rep else None
-    res["D4_set_off_machine"] = 100 * off_n / max(set_n, 1) if set_n else None
-    res["D5_inside_equipment"] = 100 * inside_n / max(tot_n, 1)
+    # (D4 / D5 are judged in check_placement on the measured position; these window values are the drawn ones)
+    res["_D4_windows_drawn"] = 100 * off_n / max(set_n, 1) if set_n else None
+    res["_D5_windows_drawn"] = 100 * inside_n / max(tot_n, 1)
     res["_map_windows"] = len(wins)
     return res
 
@@ -1036,6 +1309,172 @@ def check_reproj(S, ex):
     return {"D1_reproj_median": float(np.median(errs)) if len(errs) else None,
             "D1_reproj_p90": float(np.percentile(errs, 90)) if len(errs) else None,
             "D1_reproj_bad_frames": float(100 * (errs > 15).mean()) if len(errs) else None, "_reproj_frames": int(len(errs))}
+
+
+def check_garbage(S, ex):
+    """D7: 3D bodies that are not the person, as the Live overlay draws them (3D joints through the solved camera):
+    every 2D pose sample with a 3D body shown, including people only partly in the frame or right under the camera
+    (D1 skips samples with < 6 visible keypoints). Garbage when the drawn body, clipped to the frame, is > 1.5x the
+    person's tracker box (+ 15 px) in height or width, any joint lands behind the camera, or the median error of the
+    visible keypoints is > 30 % of the person's height."""
+    if not S.p3 or not S.cams3d:
+        return {"D7_garbage_body": None}
+    n = bad = 0
+    eps = []
+    for pid, (T2, UV, OK) in S.p2.items():
+        r = S.p3.get(pid)
+        if r is None:
+            continue
+        Xg, _ = p3_at_vec(r, T2)
+        flag = np.zeros(len(T2), bool)
+        shown = np.isfinite(Xg[:, 0, 0])
+        why = [""] * len(T2)
+        for i in np.flatnonzero(shown):
+            q = next((q for q in S.people_at(T2[i]) if q["pid"] == pid), None)
+            cam = S.cam3d_at(T2[i])
+            M = cam._M()
+            zc = (Xg[i] - cam.C) @ M.T
+            n += 1
+            if (zc[:, 2] <= 0.05).any():
+                flag[i], why[i] = True, "joint behind the camera"
+                continue
+            uv = cam.project(Xg[i])
+            cu = np.clip(uv, [0, 0], [W, H])
+            ph, pw = np.ptp(cu[:, 1]), np.ptp(cu[:, 0])
+            if q is not None:
+                bw, bh = q["box"][2] * W, q["box"][3] * H
+            else:
+                bx = box_of(UV[i], OK[i])
+                if bx is None:
+                    continue
+                bw, bh = bx[2] - bx[0], bx[3] - bx[1]
+            if ph > 1.5 * bh + 15 or pw > 1.5 * bw + 15:
+                flag[i], why[i] = True, f"drawn body {pw:.0f}x{ph:.0f} px vs person box {bw:.0f}x{bh:.0f} px"
+                continue
+            if OK[i].sum() >= 4:
+                hp = max(np.ptp(UV[i][OK[i], 1]), bh, 10.0)
+                e = float(np.median(np.linalg.norm(uv - UV[i], axis=1)[OK[i]]))
+                if e > 0.30 * hp:
+                    flag[i], why[i] = True, f"median keypoint error {100 * e / hp:.0f} % of height"
+        bad += int(flag.sum())
+        for i0, i1 in _runs(flag, T2, gap=0.35):
+            eps.append((float(T2[i1] - T2[i0]) + 0.1, pid, float(T2[(i0 + i1) // 2]), why[i0]))
+    eps.sort(reverse=True)
+    for du, pid, t, w in eps[:10]:
+        ex.append({"kind": "D7 garbage body", "pid": pid, "t": t, "sev": du, "desc": f"3D body drawn is not the person for {du:.1f} s ({w})"})
+    return {"D7_garbage_body": 100 * bad / n if n else None, "D7_garbage_episodes": len(eps),
+            "D7_episodes_ge_1s": sum(1 for e in eps if e[0] >= 1.0),
+            "D7_worst": [{"pid": int(p), "t": round(t, 1), "dur_s": round(du, 1), "why": w} for du, p, t, w in eps[:20]]}
+
+
+DET_MODEL = Path("/tmp/claude-0/-home-user-relay-work/851771c1-781b-56fa-9dda-a42b6ec0afa3/scratchpad/research/dl_models/dfine_s_coco.onnx")
+
+
+def _point_in_poly(x, y, poly):
+    poly = np.asarray(poly, float)
+    inside = False
+    for (x0, y0), (x1, y1) in zip(poly, np.roll(poly, -1, 0)):
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
+def check_recall(S, F, out, times, rng, n_extra=30):
+    """D9: clearly visible people the app shows nobody for. An independent detector (D-FINE-S, COCO, Apache-2.0;
+    not the product's YOLOX) on sampled frames: people with score >= 0.6, box >= 70 px tall, not touching the frame
+    edge, feet outside the segment's mirror polygon. Matched when a tracked person's box (timeline, as the app draws
+    it) or 2D pose box overlaps it with IoU >= 0.3. Misses go to a contact sheet."""
+    if not DET_MODEL.exists():
+        return {"D9_detection_recall": None}
+    import onnxruntime as ort
+    cv2 = F.cv2
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = 1
+    net = ort.InferenceSession(str(DET_MODEL), so, providers=["CPUExecutionProvider"])
+    T = np.array([e["t"] for e in S.tl])
+    extra = rng.uniform(T[0] + 1, T[-1] - 1, n_extra)
+    tot = hit = 0
+    misses = []
+    for t in sorted(list(times) + list(extra)):
+        im = F.get(float(t))
+        if im is None:
+            continue
+        x = cv2.resize(im, (640, 640))[:, :, ::-1].astype(np.float32).transpose(2, 0, 1)[None] / 255.0
+        lg, bx = net.run(None, {"pixel_values": x})
+        sc = 1 / (1 + np.exp(-lg[0, :, 0]))
+        seg = next((sg["name"] for sg in S.segs if sg["start"] <= t < sg["end"]), None)
+        cfgp = SEG_CONFIGS / f"{seg}-config.json"
+        mirrors = (json.load(open(cfgp))["cameras"][0].get("mirrors") if cfgp.exists() else None) or S.cam.get("mirrors") or []
+        tb = [np.array([q["box"][0] * W, q["box"][1] * H, (q["box"][0] + q["box"][2]) * W, (q["box"][1] + q["box"][3]) * H]) for q in S.people_at(t)]
+        for pid, (T2, UV, OK) in S.p2.items():
+            j = int(np.argmin(np.abs(T2 - t)))
+            if abs(T2[j] - t) <= 0.15:
+                b2 = box_of(UV[j], OK[j])
+                if b2 is not None:
+                    tb.append(b2)
+        for k in np.flatnonzero(sc >= 0.6):
+            cx, cy, w, h = bx[0, k] * [W, H, W, H]
+            b = np.array([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2])
+            if h < 70 or b[0] < 4 or b[1] < 4 or b[2] > W - 4 or b[3] > H - 4:
+                continue
+            if any(_point_in_poly(cx, b[3], m) for m in mirrors):
+                continue
+            tot += 1
+            if any(iou(b, c) >= 0.3 for c in tb):
+                hit += 1
+            else:
+                misses.append((float(t), b, im))
+    paths = []
+    if misses:
+        tiles = []
+        for t, b, im in misses[:24]:
+            v = im.copy()
+            cv2.rectangle(v, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (0, 0, 255), 2)
+            cv2.putText(v, f"{S.sid} t={t:.1f}s: visible person, nobody tracked", (4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+            tiles.append(cv2.resize(v, (480, 270)))
+        while len(tiles) % 3:
+            tiles.append(np.zeros_like(tiles[0]))
+        p = out / "recall_misses.jpg"
+        cv2.imwrite(str(p), np.vstack([np.hstack(tiles[i:i + 3]) for i in range(0, len(tiles), 3)]), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        paths.append(str(p))
+    return {"D9_detection_recall": 100 * hit / tot if tot else None, "D9_people_checked": tot, "D9_missed": tot - hit,
+            "D9_frames": len(times) + n_extra, "recall_sheets": paths}
+
+
+def check_identity_gt(S):
+    """A3 ground truth: hand-labelled observations of real people (bench/verify3d_identity_gt.json, positions in the
+    video, so they survive re-tracking). Two observations of different people on one pid = a swap."""
+    f = Path(__file__).with_name("verify3d_identity_gt.json")
+    if not f.exists():
+        return {"A3_gt_swaps": None}
+    obs = json.load(open(f))["sessions"].get(S.sid, [])
+    assign = []
+    for o in obs:
+        best, bp = 0.0, None
+        for pid, (T2, UV, OK) in S.p2.items():
+            j = int(np.argmin(np.abs(T2 - o["t"])))
+            if abs(T2[j] - o["t"]) > 0.25:
+                continue
+            bx = box_of(UV[j], OK[j])
+            if bx is None:
+                continue
+            v = iou(bx, o["box"])
+            if v > best:
+                best, bp = v, pid
+        assign.append(bp if best >= 0.5 else None)
+    swaps, frag = [], []
+    for i in range(len(obs)):
+        for j in range(i + 1, len(obs)):
+            if assign[i] is None or assign[j] is None:
+                continue
+            same_p = obs[i]["person"] == obs[j]["person"]
+            if assign[i] == assign[j] and not same_p:
+                swaps.append({"pid": int(assign[i]), "a": f"{obs[i]['person']} @ {obs[i]['t']:.0f}s", "b": f"{obs[j]['person']} @ {obs[j]['t']:.0f}s"})
+            if same_p and assign[i] != assign[j]:
+                frag.append({"person": obs[i]["person"], "pids": [int(assign[i]), int(assign[j])]})
+    pairs = {(a["pid"],) + tuple(sorted((a["a"].split(" @ ")[0], a["b"].split(" @ ")[0]))) for a in swaps}
+    return {"A3_gt_swaps": len(pairs), "A3_gt_swap_list": swaps, "A3_gt_observations": len(obs),
+            "A3_gt_untracked": sum(a is None for a in assign), "A3_gt_fragmented": frag}
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -1327,6 +1766,11 @@ def run(sid, p3path, out, n_rand, n_busy, video, seed):
     res.update(check_cameras(S))
     print(sid, "map...", flush=True)
     res.update(check_map(S, ex, rng))
+    print(sid, "placement...", flush=True)
+    res.update(check_placement(S, ex))
+    print(sid, "garbage bodies...", flush=True)
+    res.update(check_garbage(S, ex))
+    res.update(check_identity_gt(S))
     if video:
         F = Frames(S)
         print(sid, "frames...", flush=True)
@@ -1334,6 +1778,8 @@ def run(sid, p3path, out, n_rand, n_busy, video, seed):
         res["D1_reproj_sampled_median"] = res["video"]["D1_reproj_sampled_median"]
         print(sid, "appearance...", flush=True)
         res.update(appearance(S, F, od, ex))
+        print(sid, "recall...", flush=True)
+        res.update(check_recall(S, F, od, [fr["t"] for fr in res["video"]["frames"]], rng))
     exs = rank_examples(ex)
     if video:
         example_images(S, F, od, exs, 12)

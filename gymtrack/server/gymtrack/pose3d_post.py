@@ -450,11 +450,15 @@ def extra_terms(X, hand, bend_ok, cam=None):
 class RefineProblem(P3._Problem):
     """_Problem on the playback grid + extra plausibility terms + stance-foot pins."""
 
-    def __init__(self, cam, uv, w, t, L, hand, prior, bend_ok, pins, prior_sigma=0.04):
+    def __init__(self, cam, uv, w, t, L, hand, prior, bend_ok, pins, prior_sigma=0.04, anchor=None):
         super().__init__(cam, uv, w, t, L, hand, prior=prior, prior_sigma=prior_sigma, acc_sigma=1.5)
         self.bend_ok = np.asarray(bend_ok, float)
         self.pins = pins            # (T, 2, 3) target ankle positions, NaN = free
         self.pin_sig = 0.012
+        # tracker floor position of the feet (box bottom through the same camera), (T, 2) with NaN = none:
+        # keeps a distant person's depth from drifting where the 2D is ambiguous
+        self.anchor = np.full((self.T, 2), np.nan) if anchor is None else np.asarray(anchor, float)
+        self.anc_sig = 0.35
 
     def robust_mask(self, x):
         """soft-L1 on the 2D observations and the prior (they can be wrong); constraints stay quadratic."""
@@ -462,6 +466,7 @@ class RefineProblem(P3._Problem):
         m = np.zeros(len(self.residuals(x)), bool)
         m[:self.T * 26] = True
         m[n - self.T * 39:n] = True
+        # tracker anchors stay quadratic: firm against slow depth drift (they are smooth 1 Hz floor positions)
         return m
 
     def _more(self, X):
@@ -472,6 +477,9 @@ class RefineProblem(P3._Problem):
         # bones much stiffer than in the fit: rigid skeleton
         a, b = np.array(P3.BONES).T
         r.append(((np.linalg.norm(X[:, a] - X[:, b], axis=-1) - self.L) / 0.004).ravel())
+        A = self.anchor
+        feet = (X[:, LAN, :2] + X[:, RAN, :2]) / 2
+        r.append(np.where(np.isfinite(A), feet - np.nan_to_num(A), 0.0).ravel() / self.anc_sig)
         return np.concatenate(r)
 
     def residuals(self, x):
@@ -514,6 +522,13 @@ class RefineProblem(P3._Problem):
             C += [(base[:, a] + c).ravel(), (base[:, b] + c).ravel()]
             V += [u[..., c].ravel(), -u[..., c].ravel()]
         r0 += T * len(a)
+        okA = np.isfinite(self.anchor)
+        rows = r0 + np.arange(T * 2).reshape(T, 2)
+        for c in range(2):
+            m = okA[:, c]
+            for an in (LAN, RAN):
+                R.append(rows[m, c]); C.append(base[m, an] + c); V.append(np.full(m.sum(), 0.5 / self.anc_sig))
+        r0 += T * 2
         J1 = coo_matrix((np.concatenate(V), (np.concatenate(R), np.concatenate(C))), shape=(r0, T * 39)).tocsr()
         return vstack([J0, J1]).tocsr()
 
@@ -561,7 +576,7 @@ def grid_2d(t, uv, w, g, max_dt=0.4):
     return UV, W
 
 
-def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=None):
+def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=None, anchor=None):
     import os
     iters = iters or int(os.environ.get("REFINE_ITERS", 20))
     """Robust windowed solve on the grid. Xs: smoothed fitted track (G, 13, 3) used as prior + start."""
@@ -591,7 +606,8 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         if e - s < min(win, G) and s > 0:
             s = max(0, e - win)
         sl = slice(s, e)
-        pr = RefineProblem(cam, UV[sl], W[sl], g[sl], L, hand, (prior[0][sl], prior[1][sl]), bend_ok[sl], pins[sl])
+        pr = RefineProblem(cam, UV[sl], W[sl], g[sl], L, hand, (prior[0][sl], prior[1][sl]), bend_ok[sl], pins[sl],
+                           anchor=None if anchor is None else anchor[sl])
         x0 = X0[sl].copy()
         if prev is not None and s < prev:
             # continuity: the overlap starts from, and is held near, the previous window's answer

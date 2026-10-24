@@ -314,7 +314,9 @@ function personReplay(host, tr, bd) { // video that follows one person, with ske
     if (playing && V.paused) V.play().catch(() => {}); if (!playing && !V.paused) V.pause();
     V.playbackRate = speed;
     const dpr = devicePixelRatio || 1, cw = cv.clientWidth, chh = cv.clientHeight; if (!cw || !chh) return;
-    const W = v.videoWidth, H = v.videoHeight, [bx, by, bw, bh] = boxAt(tr, t), A = cw / chh; // crop has the canvas's aspect, so nothing stretches
+    const W = v.videoWidth, H = v.videoHeight, A = cw / chh; // crop has the canvas's aspect, so nothing stretches
+    // frame the member by their own keypoints when known (the 1 Hz box can drift onto someone behind them)
+    let [bx, by, bw, bh] = boxAt(tr, t); { const kp = tr.pose(t)?.filter(Boolean); if (kp?.length >= 5) { const xs = kp.map(p => p[0]), ys = kp.map(p => p[1]), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys), px = (x1 - x0) * 0.15 + 0.005, py = (y1 - y0) * 0.12 + 0.01; [bx, by, bw, bh] = [x0 - px, y0 - py, x1 - x0 + 2 * px, y1 - y0 + 2 * py]; } }
     let h = Math.max(bh * H * 1.9, H * 0.6), w = h * A; if (w < bw * W * 1.8) { w = bw * W * 1.8; h = w / A; }
     h = Math.min(h, H); w = Math.min(w, W, h * A); h = w / A;
     const tgt = {x: Math.max(0, Math.min(W - w, (bx + bw / 2) * W - w / 2)), y: Math.max(0, Math.min(H - h, (by + bh / 2) * H - h / 2)), w, h};

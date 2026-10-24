@@ -22,6 +22,8 @@ FORMAT v2 (core.js indexPose3d reads both v1 "poses3d" rows and v2 "tracks"):
        last one cm); without it the app computes them from P (core.js anglesOf = pose3d.joint_angles)
     F: base64 of int16 per frame = body facing (yaw) in 0.01 rad, plan frame: forward = (cos, sin)
     U: 13 ints = median 1-sigma joint uncertainty of the track, cm
+    Q: base64 of uint8 per frame = confidence 0..100 (2D agreement, joints seen, frame-edge cut, distance to the
+       lens); frames below Q_MIN are not exported at all, the app may fade bodies with low Q
 """
 from __future__ import annotations
 
@@ -205,6 +207,7 @@ def deswap(uv, w):
 
 
 HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), 1.95)
+Q_MIN = 35          # frames below this confidence are not exported
 EXPORT_ANGLES = os.environ.get("EXPORT_ANGLES", "0") == "1"
 FIT_MIRROR = os.environ.get("FIT_MIRROR", "0") == "1"   # orientation is resolved later (pose3d_post.fix_flips)
 
@@ -227,7 +230,8 @@ def person_groups(cam, pieces, prior_w):
     return groups * target / h, target
 
 
-def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, try_mirror=True, sets=(), present=()):
+def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, try_mirror=True, sets=(), present=(),
+               anchors=None):
     """pieces: [(t, uv, w)] of one person in one segment; sets: [(t0, t1)] of their sets (bending allowed);
     present: [(t0, t1)] when the tracker shows them on screen (tracks are extended to cover it).
     Returns list of dict per piece."""
@@ -264,12 +268,43 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, t
         item = {"t": t_all, "uv": uv_all, "w": w_all, "X": res["X"], "unc": res["unc"], "groups": groups,
                 "height": height, "hand": res["hand"], "n_prior": 0 if prior is None else int((prior[1] == 1).all(1).sum())}
         if refine:
-            item["R"] = refine_v3(cam, t, res["X"], res["unc"], t_all, uv_all, w_all, groups, res["hand"], hz, sets, present)
+            item["R"] = refine_v3(cam, t, res["X"], res["unc"], t_all, uv_all, w_all, groups, res["hand"], hz, sets, present,
+                                  anchors=anchors)
         out.append(item)
     return out
 
 
-def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_hold=1.0):
+def frame_quality(cam, g, X, UV, Wg):
+    """Per grid frame confidence 0..100 from what the 2D shows: reprojection error relative to the person's image
+    height, number of joints seen, body cut by the frame edge, body unreasonably close to the camera. Frames
+    without a 2D sample take the nearest sampled frames' value."""
+    G = len(g)
+    q = np.full(G, np.nan)
+    for i in range(G):
+        m = Wg[i] > 0
+        if m.sum() < 3:
+            continue
+        uv = UV[i][m]
+        ph = max(np.ptp(uv[:, 1]), 0.5 * np.ptp(uv[:, 0]), 12.0)
+        e = np.linalg.norm(cam.project(X[i])[m] - uv, axis=-1)
+        rel = float(np.nanmedian(e)) / ph if np.isfinite(e).any() else 9.0
+        qi = np.clip(1.0 - (rel - 0.08) / 0.22, 0, 1)                  # 8 % of height: full, 30 %: none
+        qi *= np.clip((m.sum() - 3) / 5.0, 0.2, 1)                       # < 8 joints seen: less sure
+        edge = (uv[:, 0] < 3).any() or (uv[:, 0] > 637).any() or (uv[:, 1] > 357).any() or (uv[:, 1] < 3).any()
+        if edge and m.sum() < 9:
+            qi *= 0.6
+        q[i] = qi
+    z = cam.depth(X).min(1)
+    ok = np.isfinite(q)
+    if ok.any():
+        q = np.interp(np.arange(G), np.flatnonzero(ok), q[ok])
+    else:
+        q = np.full(G, 0.5)
+    q *= np.clip((z - 0.8) / 0.7, 0, 1)                                  # within 1.5 m of the lens: suspicious
+    return np.round(q * 100)
+
+
+def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_hold=1.0, anchors=None):
     """Fitted samples -> steady grid: smooth, then the constrained solve (2D, rigid bones, floor, pinned stance
     feet, plausibility), facing with a capped turn rate; ends held to cover the time the person is on screen."""
     X = PP.fix_flips(cam, t, X, hand)
@@ -278,7 +313,20 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
     bend = np.zeros(len(g))
     for a, b in sets:
         bend[(g >= a - 1) & (g <= b + 1)] = 1.0
-    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend)
+    anc = None
+    if anchors is not None and len(anchors) >= 1:
+        ta = anchors[:, 0]
+        k = np.clip(np.searchsorted(ta, g), 1, len(ta) - 1) if len(ta) > 1 else np.zeros(len(g), int)
+        anc = np.full((len(g), 2), np.nan)
+        for i, gi in enumerate(g):
+            a, b = (k[i] - 1, k[i]) if len(ta) > 1 else (0, 0)
+            if ta[a] <= gi <= ta[b] and ta[b] - ta[a] <= 1.1 and b != a:
+                f = (gi - ta[a]) / (ta[b] - ta[a])
+                anc[i] = anchors[a, 1:] * (1 - f) + anchors[b, 1:] * f
+            elif abs(gi - ta[a]) < 0.06 or abs(gi - ta[b]) < 0.06:
+                anc[i] = anchors[a if abs(gi - ta[a]) < 0.06 else b, 1:]
+    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc)
+    Q = frame_quality(cam, g, Xr, UV, Wg)
     # hold the end poses while the tracker still shows the person (<= max_hold s each side)
     pre = post = 0
     for a, b in present:
@@ -289,9 +337,10 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
     if pre or post:
         g = np.r_[g[0] - np.arange(pre, 0, -1) / hz, g, g[-1] + np.arange(1, post + 1) / hz]
         Xr = np.concatenate([np.repeat(Xr[:1], pre, 0), Xr, np.repeat(Xr[-1:], post, 0)])
+        Q = np.r_[np.repeat(Q[:1], pre), Q, np.repeat(Q[-1:], post)]
     fwd = PP.cap_yaw_rate(PP._hfwd(Xr, hand), hz)
     Ug = np.stack([np.interp(g, t, np.nan_to_num(U[:, j], nan=0.3)) for j in range(13)], 1)
-    return {"t": np.round(g, 3), "X": Xr, "fwd": fwd, "U": Ug, "pins": pins}
+    return {"t": np.round(g, 3), "X": Xr, "fwd": fwd, "U": Ug, "pins": pins, "Q": Q}
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -341,7 +390,7 @@ def encode_track(pid, t, X, A, fwd, U, hz):
 # ---------------------------------------------------------------------------------------------------------
 
 def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0, people=None, window=None,
-         log=print, min_frames=5, member_s=45, phases="ABC", extra2d=None, results_path=None):
+         log=print, min_frames=5, member_s=45, phases="ABC", extra2d=None, results_path=None, override2d=None):
     W, Hh = 640, 360
     t_start = time.time()
     if extra2d:     # 2D poses filled in for on-screen people the replay had none for (bench.fill_poses2d)
@@ -360,6 +409,33 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
             n_add += len(add)
         replay = dict(replay, poses=[byt[k] for k in sorted(byt)])
         log(f"{cam_id}: + {n_add} filled-in 2D poses")
+    if override2d:  # whole-body 2D from SAM 3D Body for people cut by the frame / badly detected: replaces theirs
+        ov = [e for f_ in str(override2d).split(",") for e in json.load(open(f_))["poses"]]
+        byt = {round(e["t"], 2): e for e in replay["poses"]}
+        n_ov = 0
+        for e in ov:
+            k = round(e["t"], 2)
+            new_ids = {r[0] for r in e["k"]}
+            old_k = byt[k]["k"] if k in byt else []
+            byt[k] = {"t": e["t"], "k": [r for r in old_k if r[0] not in new_ids] + e["k"]}
+            n_ov += len(e["k"])
+        # the detector's own samples of that person around an override are the ones that failed: drop them
+        ovt = {}
+        for e in ov:
+            for r in e["k"]:
+                ovt.setdefault(r[0], []).append(e["t"])
+        ovt = {k: np.array(v) for k, v in ovt.items()}
+        okeys = {(r[0], round(e["t"], 2)) for e in ov for r in e["k"]}
+        for k, e in byt.items():
+            keep = []
+            for r in e["k"]:
+                T_ = ovt.get(r[0])
+                if T_ is not None and (r[0], k) not in okeys and np.abs(T_ - e["t"]).min() < 0.5:
+                    continue
+                keep.append(r)
+            e["k"] = keep
+        replay = dict(replay, poses=[byt[k] for k in sorted(byt) if byt[k]["k"]])
+        log(f"{cam_id}: {n_ov} 2D poses replaced by SAM 3D Body whole-body keypoints")
     sets_by = {}
     for st in replay.get("sets", []):
         if st.get("pid") is not None:
@@ -369,6 +445,12 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
     for e in tl:
         for q in e["p"]:
             pres.setdefault(q[0], []).append(e["t"])
+    anchors = {}      # tracker floor positions (feet seen: box bottom inside the frame)
+    for e in tl:
+        for q in e["p"]:
+            if len(q) > 10 and q[9] is not None and q[5] + q[7] < 0.97:
+                anchors.setdefault(q[0], []).append((e["t"], q[9], q[10]))
+    anchors = {k: np.array(v, float) for k, v in anchors.items()}
     present = {}
     for pid, ts in pres.items():
         runs, s0 = [], ts[0]
@@ -418,7 +500,7 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
             # A (lifters): every pose sample, B (regulars): every 2nd, C (passers-by): every 2nd, no mirror search
             step = 1 if ph == "A" else 2
             futs[ex.submit(fit_person, cam, pieces, s_, W, Hh, hz, step, True, True, ph != "C",
-                           sets_by.get(pid, []), present.get(pid, []))] = (ph, si, pid)
+                           sets_by.get(pid, []), present.get(pid, []), anchors.get(pid))] = (ph, si, pid)
         done = 0
         for f in as_completed(futs):
             ph, si, pid = futs[f]
@@ -454,6 +536,38 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             k3 = 3
             turn = np.degrees(np.abs((hy[k3:] - hy[:-k3] + np.pi) % (2 * np.pi) - np.pi)) if len(hy) > k3 else np.zeros(0)
             skip = np.zeros(len(R["t"]), bool)
+            # low confidence (2D far off, few joints seen, cut by the frame, at the lens): not shown. Short dips
+            # that are only mildly low stay; real failures are hidden for >= 1 s (no flicker)
+            if "Q" not in R:
+                UVg, Wg_ = PP.grid_2d(it["t"], it["uv"], it["w"], R["t"])
+                R["Q"] = frame_quality(cam, R["t"], R["X"], UVg, Wg_)
+            Q = R["Q"]
+            bad = Q < Q_MIN
+            i = 0
+            while i < len(bad):
+                if bad[i]:
+                    j = i
+                    while j < len(bad) and bad[j]:
+                        j += 1
+                    if j - i < 10 and Q[i:j].min() >= 15 and i > 0 and j < len(bad):
+                        pass                                    # brief, mild dip: keep showing
+                    elif j - i <= 15 and i > 0 and j < len(bad):
+                        # short failure between good frames: bridge it (the app would otherwise hold a frozen
+                        # pose across the hole); bones kept rigid
+                        f = ((np.arange(i, j) - (i - 1)) / (j - (i - 1)))[:, None, None]
+                        R["X"][i:j] = PP.rebuild(R["X"][i - 1] * (1 - f) + R["X"][j] * f, it["groups"], it["hand"])
+                        R["fwd"][i:j] = PP._unit(R["fwd"][i - 1] * (1 - f[:, 0]) + R["fwd"][j] * f[:, 0])
+                        Q[i:j] = Q_MIN
+                    else:
+                        a2, b2 = i, j
+                        if b2 - a2 < 10:                        # hide at least 1 s
+                            a2 = max(0, a2 - (10 - (b2 - a2)) // 2)
+                            b2 = min(len(bad), a2 + 10)
+                        skip[a2:b2] = True
+                        jump += [a2, b2]
+                    i = j
+                else:
+                    i += 1
             i = 0
             while i < len(turn):
                 if turn[i] > 140:
@@ -463,11 +577,15 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                 else:
                     i += 1
             jump = sorted(set(jump))
+            jump = sorted(set(j_ for j_ in jump if 0 < j_ < len(R["t"])))
             for a_, b_ in zip([0] + jump, jump + [len(R["t"])]):
                 while a_ < b_ and skip[a_]:
                     a_ += 1
-                if b_ - a_ >= 5:
+                while b_ > a_ and skip[b_ - 1]:
+                    b_ -= 1
+                if b_ - a_ >= 10:
                     tr_ = encode_track(pid, R["t"][a_:b_], R["X"][a_:b_], A[a_:b_], R["fwd"][a_:b_], R["U"][a_:b_], hz)
+                    tr_["Q"] = _b64(np.clip(Q[a_:b_], 0, 100).astype(np.uint8))
                     if not EXPORT_ANGLES:      # the app recomputes them from the joints (core.js anglesOf): -20 % size
                         tr_.pop("A")
                     tracks.append((ph, tr_))
@@ -512,9 +630,12 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                     fw = np.stack([np.cos(F / 100), np.sin(F / 100)], 1)
                     U = np.repeat(np.array(tr["U"], float)[None] / 100, tr["n"], 0)
                     had_a = "A" in tr
+                    Qd = np.frombuffer(base64.b64decode(tr["Q"]), np.uint8) if "Q" in tr else None
                     tracks[k] = (tracks[k][0], encode_track(pid, ts[i0:], X[i0:], A[i0:], fw[i0:], U[i0:], tr["hz"]))
                     if not had_a:
                         tracks[k][1].pop("A")
+                    if Qd is not None:
+                        tracks[k][1]["Q"] = _b64(Qd[i0:])
                     tr = tracks[k][1]
                     X = X[i0:]
             last = (tr["t0"] + (tr["n"] - 1) / tr["hz"], (X[-1, P3.LAN, :2] + X[-1, P3.RAN, :2]) / 2)
@@ -578,6 +699,7 @@ def main(argv=None):
     ap.add_argument("--phases", default="ABC", help="only these priority groups (to run them separately / merge)")
     ap.add_argument("--extra2d", help="filled-in 2D poses (bench.fill_poses2d output; comma-separated list)")
     ap.add_argument("--results", help="pickle the per-person results here (for --reassemble)")
+    ap.add_argument("--override2d", help="2D poses that replace the replay's for that person and time (SAM whole-body)")
     ap.add_argument("--reassemble", help="skip the fits: re-export from a --results pickle")
     a = ap.parse_args(argv)
     replay = json.load(open(a.replay))
@@ -591,7 +713,7 @@ def main(argv=None):
         out = assemble(replay, segcams, rr["results"], cam_id, a.hz, a.max_mb, time.time(), rr["n_rec"], rr["n_match"])
     else:
         out = make(replay, segcams, a.sam, cam_id, a.hz, a.jobs, a.max_mb, people, window, phases=a.phases,
-                   extra2d=a.extra2d, results_path=a.results)
+                   extra2d=a.extra2d, results_path=a.results, override2d=a.override2d)
     path = a.out or a.replay.replace(".json", ".pose3d.json")
     json.dump(out, open(path + ".tmp", "w"), separators=(",", ":"))
     os.replace(path + ".tmp", path)

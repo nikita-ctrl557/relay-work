@@ -52,6 +52,11 @@ EXC_ONE = 0.45        # ... a single second, this unlike
 EXC_CTX = 0.26        # ... when before and after agree at least this well
 HEIGHT_CUT = 0.09     # m of shoulder height change across a moderate appearance change: another person
 HEIGHT_SAME = 0.03    # m: at most this, the same body (posture or light changed, not the person)
+GAP_NN = 0.36         # gap check: views after a gap this far from every view before it are someone else ...
+GAP_NN_ONE = 0.48     # ... (a single view after the gap must be further off)
+GAP_MARGIN = 0.08     # ... and clearly further than the ID's own views are from each other
+GAP_BASE = 0.2        # ... (that self-distance when there are too few views to measure it)
+GAP_BEFORE_S, GAP_AFTER_S = 60.0, 40.0
 PIECE_GAP_S = 30.0    # longest gap a cut-off piece may be re-linked across
 
 
@@ -442,6 +447,45 @@ def identity_cuts(tl, sigs: dict, min_bins: int = 4, heights=None, excursions: l
                     DIAG.append({"pid": pid, "t": ts[r0], "t1": ts[r1 - 1], "kind": "exc", "md": d_r, "L": r1 - r0, "dh": None, "ev": None})
         if cuts:
             out[pid] = sorted(set(_cut_time(tl_by_id[pid], ts[k - 1], ts[k]) for k in cuts))
+    # where an ID was missing for a moment (a re-identification or a stitched link) is where most slides onto
+    # someone else happen: judge every such gap on its own, also for IDs too short for the change-point test
+    for pid, seq in sigs.items():
+        if pid not in tl_by_id:
+            continue
+        g = _gap_cuts(tl_by_id[pid], seq)
+        if g:
+            have = out.get(pid, [])
+            out[pid] = sorted(have + [c for c in g if all(abs(c - h) > 3.0 for h in have)])
+            if DIAG is not None:
+                DIAG.extend({"pid": pid, "t": c, "kind": "gap"} for c in g)
+    return out
+
+
+def _gap_cuts(boxes, seq, min_gap: float = 1.5) -> list[float]:
+    """Gaps in an ID's boxes across which its appearance changes: the views after the gap have no close match
+    among the views before it (set-to-set nearest-neighbour distance, robust to turning around or sitting down,
+    which a mean signature is not), clearly more than the ID's own views differ among themselves."""
+    from .reid import distance_matrix
+    if len(seq) < 4:
+        return []
+    T = np.array([t for t, _ in seq])
+    V = np.array([v for _, v in seq], np.float32)
+    out = []
+    for (a, _), (b, _) in zip(boxes, boxes[1:]):
+        if b - a < min_gap:
+            continue
+        ia = np.where((T >= a - GAP_BEFORE_S) & (T <= a + 0.5))[0][-40:]
+        ib = np.where((T >= b - 0.5) & (T <= b + GAP_AFTER_S))[0][:20]
+        if len(ia) < 3 or len(ib) < 1:
+            continue
+        nn = float(np.nanmedian(np.nanmin(distance_matrix(V[ib], V[ia]), 1)))
+        rest, last = ia[:-10], ia[-10:]
+        base = float(np.nanmedian(np.nanmin(distance_matrix(V[last], V[rest]), 1))) if len(rest) >= 3 else GAP_BASE
+        if nn != nn:
+            continue
+        need = GAP_NN if len(ib) >= 2 else GAP_NN_ONE
+        if nn >= need and nn >= (base if base == base else GAP_BASE) + GAP_MARGIN:
+            out.append((a + b) / 2)
     return out
 
 

@@ -1,5 +1,4 @@
-/* Floor-map placement of people: pure maths (no DOM, no three.js), used by twin3d.js. A faithful Python port
-   lives in server/bench/verify3d.py (map_place*) so the verifier measures what the app draws; keep them in step.
+/* Floor-map placement of people: pure maths (no DOM, no three.js), used by twin3d.js and core.js.
 
    The 3D bodies (pose3d sidecar) live in the frame of the camera they were solved with; the Floor map's room
    (realistic room: assets/room/*.json, or the floor plan's calibration) has its own floor frame. Both see the
@@ -8,12 +7,8 @@
    by the mapping's local rotation, scaled by the room's height scale) and the ankles map exactly, so a
    planted foot stays planted on the map.
 
-   Placer: one per person. Position = mapped 3D feet (10 Hz track, interpolated) when there is 3D; otherwise the
-   tracker's 1 Hz room-feet point, smoothed and limited to walking speed. Switching source blends (also at
-   walking speed). During a set the body is kept next to the set's machine; nobody stands inside equipment. */
+   Placer: see below. */
 
-export const WALK = 2.0;          // m/s: fastest the placer itself ever moves a body
-const TAU_FALL = 0.5, TAU_OFF = 0.5, TAU_SNAP = 0.4, SET_MARGIN = 0.6, EQ_CLEAR = 0.12, RESET_GAP = 2.0;
 
 /* ---------- 3x3 homographies (row-major nested arrays) ---------- */
 const mul = (A, B) => A.map(r => [0, 1, 2].map(j => r[0] * B[0][j] + r[1] * B[1][j] + r[2] * B[2][j]));
@@ -104,45 +99,85 @@ export function mapBody(P, map, out = null) {
 }
 
 /* ---------- placer ---------- */
+/* One per person. The 3D feet win whenever there is 3D (followed exactly: no lag, planted feet stay planted);
+   the 1 Hz tracker point is only a fallback, smoothed at walking pace. Never a long glide: when the source the
+   body follows is > 1 m from where it is drawn (3D appears far from the tracker point, a 3D track jumps, or the
+   tracker disagrees > 1 m for > 1 s), the placer reports a cut and the view fades the body out and back in at
+   the new spot. During a set, a body already within 1 m of the set's machine gets a gentle (<= 0.3 m) nudge
+   towards it; nothing more (the set's machine may be wrongly attributed; dragging bodies would hide that).
+   A body whose feet are inside tall equipment is flagged (the view hides it) rather than pushed around. */
+export const WALK = 2.0;                 // m/s: the fallback never moves a body faster
+const TAU_FALL = 0.5, TAU_BLEND = 0.3, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 1.0, CUT_HOLD = 1.0, RESET_GAP = 2.0, EQ_IN = 0.15;
 const capStep = (dx, dy, max) => { const l = Math.hypot(dx, dy); return l > max && l > 0 ? [dx * max / l, dy * max / l] : [dx, dy]; };
-const toward = (p, q, dt, tau) => { const k = 1 - Math.exp(-dt / tau), [dx, dy] = capStep((q[0] - p[0]) * k, (q[1] - p[1]) * k, WALK * dt); return [p[0] + dx, p[1] + dy]; };
-const clampRect = (p, r, m) => [Math.max(r.x - r.w / 2 - m, Math.min(r.x + r.w / 2 + m, p[0])), Math.max(r.y - r.d / 2 - m, Math.min(r.y + r.d / 2 + m, p[1]))];
-/* a point inside an equipment footprint -> just outside its nearest side */
-function pushOut(p, r) {
-  const ex = r.w / 2 + EQ_CLEAR, ey = r.d / 2 + EQ_CLEAR, dx = p[0] - r.x, dy = p[1] - r.y;
-  if (Math.abs(dx) >= r.w / 2 || Math.abs(dy) >= r.d / 2) return p;
-  return ex - Math.abs(dx) < ey - Math.abs(dy) ? [r.x + (dx >= 0 ? ex : -ex), p[1]] : [p[0], r.y + (dy >= 0 ? ey : -ey)];
-}
+const rectDist = (p, r) => { const dx = Math.max(Math.abs(p[0] - r.x) - r.w / 2, 0), dy = Math.max(Math.abs(p[1] - r.y) - r.d / 2, 0); return Math.hypot(dx, dy); };
+const clampRect = (p, r) => [Math.max(r.x - r.w / 2, Math.min(r.x + r.w / 2, p[0])), Math.max(r.y - r.d / 2, Math.min(r.y + r.d / 2, p[1]))];
 /* equipment a body may not stand in: tall pieces, not cages one steps into */
 export const isObstacle = e => e && e.h >= 1.0 && !/rack/i.test(e.machine) && e.w > 0 && e.d > 0;
+export const insideEq = (p, r) => Math.abs(p[0] - r.x) < r.w / 2 - EQ_IN && Math.abs(p[1] - r.y) < r.d / 2 - EQ_IN;
 
-export function newPlacer() { return {t: null, base: null, off: [0, 0], c: [0, 0], src: null, pos: null}; }
+export function newPlacer() { return {t: null, base: null, off: [0, 0], c: [0, 0], src: null, lastA: null, far: 0, pos: null, cut: false, inside: false}; }
 /* st: placer state; t: replay seconds; A: mapped 3D feet or null; rf: tracker room-feet point or null;
-   ctx: {set: equipment rect of the machine of the set under way (or null), obstacles: [rect], free: [machine ids not to push out of]}.
-   Returns the map position of the person's feet ([x, y]) or null when nothing is known yet. */
+   ctx: {set: equipment rect of the machine of the set under way (or null), obstacles: [rect], free: [machine ids]}.
+   Returns the map position of the person's feet ([x, y]) or null; st.cut is true on the step where the body
+   jumped to a new spot (fade it), st.inside when the feet are inside tall equipment. */
 export function stepPlacer(st, t, A, rf, ctx = {}) {
   const dt = st.t == null ? Infinity : t - st.t;
+  st.cut = false;
   if (!(dt >= 0 && dt <= RESET_GAP) || !st.base) { // first sight, a seek, or back after a long gap: place directly
     const p = A || rf; if (!p) { st.t = t; return st.pos; }
-    st.base = p.slice(); st.off = [0, 0]; st.c = [0, 0]; st.src = A ? "3d" : "trk"; st.t = t;
-  } else {
-    st.t = t;
-    if (A) {
-      if (st.src !== "3d") { st.off = [st.base[0] - A[0], st.base[1] - A[1]]; st.src = "3d"; }
-      const l = Math.hypot(st.off[0], st.off[1]);
-      if (l > 1e-4) { let nl = Math.max(l * Math.exp(-dt / TAU_OFF), l - WALK * dt); if (nl < 0.005) nl = 0; st.off = [st.off[0] * nl / l, st.off[1] * nl / l]; }
-      // never faster than a walk, even when the 3D track itself hurries (the excess is kept as an offset that eases out)
-      const [mx, my] = capStep(A[0] + st.off[0] - st.base[0], A[1] + st.off[1] - st.base[1], WALK * dt);
-      st.base = [st.base[0] + mx, st.base[1] + my]; st.off = [st.base[0] - A[0], st.base[1] - A[1]];
-    } else if (rf) { st.src = "trk"; st.base = toward(st.base, rf, dt, TAU_FALL); }
+    Object.assign(st, {base: p.slice(), off: [0, 0], c: [0, 0], src: A ? "3d" : "trk", lastA: A, far: 0, cut: st.pos != null});
+  } else if (A) {
+    const jump = st.lastA && Math.hypot(A[0] - st.lastA[0], A[1] - st.lastA[1]) > CUT_DIST;
+    if (st.src !== "3d" || jump) {
+      const d = Math.hypot(st.base[0] - A[0], st.base[1] - A[1]);
+      if (d > CUT_DIST || jump) { st.off = [0, 0]; st.cut = true; } else st.off = [st.base[0] - A[0], st.base[1] - A[1]]; // near: short blend
+      st.src = "3d";
+    }
+    const k = Math.exp(-dt / TAU_BLEND); st.off = Math.hypot(...st.off) < 0.005 ? [0, 0] : [st.off[0] * k, st.off[1] * k];
+    st.base = [A[0] + st.off[0], A[1] + st.off[1]]; st.lastA = A; st.far = 0;
+  } else if (rf) {
+    st.lastA = null;
+    const d = Math.hypot(rf[0] - st.base[0], rf[1] - st.base[1]);
+    st.far = d > CUT_DIST ? st.far + dt : 0;
+    if (st.far > CUT_HOLD) { st.base = rf.slice(); st.far = 0; st.cut = true; }      // disagrees for > 1 s: cut, no glide
+    else if (d <= CUT_DIST) { const kk = 1 - Math.exp(-dt / TAU_FALL), [dx, dy] = capStep((rf[0] - st.base[0]) * kk, (rf[1] - st.base[1]) * kk, WALK * dt); st.base = [st.base[0] + dx, st.base[1] + dy]; }
+    st.src = "trk";
   }
-  // a lifter stays at their machine; correction eased in and out at walking speed
-  const b = st.base, tgt = ctx.set ? clampRect(b, ctx.set, SET_MARGIN) : b;
-  st.c = Number.isFinite(dt) && dt <= RESET_GAP ? toward(st.c, [tgt[0] - b[0], tgt[1] - b[1]], dt, TAU_SNAP) : [tgt[0] - b[0], tgt[1] - b[1]];
-  const out = q => { for (const r of ctx.obstacles || []) if (r.machine !== ctx.set?.machine && !(ctx.free || []).includes(r.machine)) q = pushOut(q, r); return q; };
-  let p = out([b[0] + st.c[0], b[1] + st.c[1]]);
-  // what is drawn never moves faster than a walk, whatever combination of the above moved it
-  if (st.pos && Number.isFinite(dt) && dt <= RESET_GAP) { const [dx, dy] = capStep(p[0] - st.pos[0], p[1] - st.pos[1], WALK * dt); p = out([st.pos[0] + dx, st.pos[1] + dy]); }
+  st.t = t;
+  // set: a gentle nudge towards the machine, only when already close to it
+  const b = st.base, r = ctx.set, dr = r ? rectDist(b, r) : Infinity;
+  let tgt = [0, 0];
+  if (dr > 1e-3 && dr <= NUDGE_RANGE) { const q = clampRect(b, r), m = Math.min(NUDGE_MAX, dr) / dr; tgt = [(q[0] - b[0]) * m, (q[1] - b[1]) * m]; }
+  if (st.cut || !Number.isFinite(dt)) st.c = tgt; else { const kk = 1 - Math.exp(-dt / TAU_NUDGE); st.c = [st.c[0] + (tgt[0] - st.c[0]) * kk, st.c[1] + (tgt[1] - st.c[1]) * kk]; }
+  const p = [b[0] + st.c[0], b[1] + st.c[1]];
+  st.inside = (ctx.obstacles || []).some(e => e.machine !== r?.machine && !(ctx.free || []).includes(e.machine) && insideEq(p, e));
   st.pos = p;
   return p;
+}
+
+/* Is a 3D body believable where it is drawn? P: pose3d J (plan metres); cam: the camera it was solved with;
+   box: the tracker's box (0..1 of the frame) or null; kp: 2D keypoints (0..1) or null. False for bodies that
+   would be drawn far bigger than the person in the video (fits gone wrong near the camera or at the frame edge),
+   bodies right in front of the lens, and impossible statures. */
+export function body3dOk(P, cam, box, kp = null) {
+  const leg = (i, j) => Math.hypot(P[i * 3] - P[j * 3], P[i * 3 + 1] - P[j * 3 + 1], P[i * 3 + 2] - P[j * 3 + 2]);
+  const stature = (leg(7, 9) + leg(9, 11) + leg(8, 10) + leg(10, 12)) / 2 + Math.hypot((P[3] + P[6] - P[21] - P[24]) / 2, (P[4] + P[7] - P[22] - P[25]) / 2, (P[5] + P[8] - P[23] - P[26]) / 2) + 0.33;
+  if (!(stature > 1.35 && stature < 2.1)) return false;
+  if (!cam) return true;
+  const W0 = cam.width || 640, H0 = cam.height || 360;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < 13; i++) {
+    const X = [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]], M = cam.R, fl = cam.flip ?? 1, d = [X[0] - cam.C[0], X[1] - cam.C[1], X[2] - cam.C[2]];
+    const z = M[2][0] * d[0] + M[2][1] * d[1] + M[2][2] * fl * d[2]; if (z < 1.2) return false;   // in front of the lens
+    const uv = camProject(cam, X); if (!uv) return false;
+    x0 = Math.min(x0, uv[0]); x1 = Math.max(x1, uv[0]); y0 = Math.min(y0, uv[1]); y1 = Math.max(y1, uv[1]);
+  }
+  let ref = null;
+  if (kp) { let a = Infinity, b = -Infinity, c = Infinity, e = -Infinity, n = 0; for (const q of kp) if (q) { n++; a = Math.min(a, q[0] * W0); b = Math.max(b, q[0] * W0); c = Math.min(c, q[1] * H0); e = Math.max(e, q[1] * H0); } if (n >= 5) ref = [a, c, b, e]; }
+  if (!ref && box) ref = [box[0] * W0, box[1] * H0, (box[0] + box[2]) * W0, (box[1] + box[3]) * H0];
+  if (!ref) return true;
+  const rh = Math.max(ref[3] - ref[1], 12), rw = Math.max(ref[2] - ref[0], 8);
+  if (y1 - y0 > 1.6 * rh + 15 || x1 - x0 > 2.2 * Math.max(rw, rh * 0.6) + 15) return false;          // drawn far bigger than the person
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  return Math.abs(cx - (ref[0] + ref[2]) / 2) < 0.6 * rw + 0.3 * rh + 10 && Math.abs(cy - (ref[1] + ref[3]) / 2) < 0.6 * rh + 10; // and where they are
 }

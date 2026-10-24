@@ -31,7 +31,9 @@ await ctx.addInitScript(s => { try { localStorage.setItem('gymtrack:session2', s
 const p = await ctx.newPage(); const errs = [], info = [];
 p.on('pageerror', e => errs.push(e.message)); p.on('console', m => { if (m.type() === 'error') errs.push(m.text().slice(0, 200)); });
 const settle = ms => p.waitForTimeout(ms);
-const seekPause = async t => { await p.evaluate(t => { const id = src.act?.id || src.session; src.seek(id, t); src.setPaused(id, true); }, t); await settle(2500); };
+// PLAY=1: continuous playback (seek a few seconds early, keep playing, shoot without pausing) instead of seek + pause
+const PLAY = !!process.env.PLAY;
+const seekPause = async t => { await p.evaluate(([t, play]) => { const id = src.act?.id || src.session; src.seek(id, play ? Math.max(0, t - 4) : t); src.setPaused(id, !play); }, [t, PLAY]); await settle(PLAY ? 4000 : 2500); };
 const state = () => p.evaluate(() => { const id = src.act?.id || src.session; const q = src.peopleNow(id); return {t: +src.timeOf(id).toFixed(2), people: q.length, with3d: q.filter(x => x.pose3d).length, pids: q.map(x => x.pid + (x.pose3d ? '' : '(no3d)'))}; });
 
 // 1. Floor map: realistic room, overview + camera view

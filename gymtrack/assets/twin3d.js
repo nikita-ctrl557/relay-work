@@ -458,30 +458,45 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       if (!pos || pos[0] < x0 - 2 || pos[0] > x1 + 2 || pos[1] < z0 - 2 || pos[1] > z1 + 2) continue;
       const p = person(key); seen.add(key);
       p.q = q; p.want = 1; p.Jm = Jm; p.A = Jm ? (A || [(Jm[33] + Jm[36]) / 2, (Jm[34] + Jm[37]) / 2]) : null; p.conf = q.pose3d?.c || null; p.s = fm?.s || 1;
-      const np = new THREE.Vector3(pos[0], 0, pos[1]);
-      const dtp = p.t == null ? 0 : t - p.t;
-      if (p.pos && dtp > 1e-3 && dtp < 1) p.vel = (p.vel || new THREE.Vector3()).lerp(np.clone().sub(p.pos).multiplyScalar(1 / dtp), Math.min(1, dtp / 0.4));
-      p.pos = np; p.t = t;
+      p.inside = pl.st.inside; // feet inside tall equipment: not drawn
       const lift = q.inSet || q.activity && q.activity !== "standing";
       p.mat.color.setHex(lift ? COL.lift : q.planted && q.zone ? COL.station : COL.move);
       p.jmat.color.copy(p.mat.color).lerp(WHITE, 0.55); p.faint.color.copy(p.mat.color);
       p.full = labelOf(q); p.short = (q.label.match(/#\d+/) || [q.label])[0] + (lift ? " · " + (typeof actName === "function" && q.activity ? actName(q.activity) : "lifting") : ""); p.tag.classList.toggle("link", !!q.member);
+      const np = new THREE.Vector3(pos[0], 0, pos[1]);
+      if (pl.st.cut && p.pos && p.alpha > 0.08) { p.swapTo = np; continue; } // jumped: fade out here, back in there (no glide)
+      if (p.swapTo) { p.swapTo = np; continue; }
+      const dtp = p.t == null ? 0 : t - p.t;
+      if (p.pos && dtp > 1e-3 && dtp < 1) p.vel = (p.vel || new THREE.Vector3()).lerp(np.clone().sub(p.pos).multiplyScalar(1 / dtp), Math.min(1, dtp / 0.4));
+      p.pos = np; p.t = t;
     }
     for (const [k, p] of ppl) if (!seen.has(k)) p.want = 0;
+    // two bodies on one spot: the same person seen twice (boxes overlap) -> keep the better one; else step apart to 0.4 m
+    const shown = [...ppl.values()].filter(p => p.want && p.pos && !p.inside && !p.swapTo);
+    for (const p of shown) { p.dup = false; p.sepT = p.sepT || new THREE.Vector3(); p.sepT.set(0, 0, 0); }
+    const iou = (a, b) => { if (!a || !b) return 0; const x = Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])), y = Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1])), i = x * y; return i / (a[2] * a[3] + b[2] * b[3] - i || 1); };
+    const score = p => (p.Jm ? 2 : 0) + (p.q.member ? 1 : 0) + (p.q.box ? p.q.box[3] : 0);
+    for (let i = 0; i < shown.length; i++) for (let j = i + 1; j < shown.length; j++) {
+      const a = shown[i], b = shown[j]; if (a.dup || b.dup) continue;
+      const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z, d = Math.hypot(dx, dz); if (d >= 0.4) continue;
+      if (iou(a.q.box, b.q.box) > 0.35) { (score(a) >= score(b) ? b : a).dup = true; continue; }
+      const ux = d > 1e-3 ? dx / d : 1, uz = d > 1e-3 ? dz / d : 0, h = (0.4 - d) / 2;
+      a.sepT.x -= ux * h; a.sepT.z -= uz * h; b.sepT.x += ux * h; b.sepT.z += uz * h;
+    }
     for (const [k, pl] of placers) if (t - pl.seen > 4 || pl.seen > t + 1) placers.delete(k);
   }
   // neutral standing body (people without a measured 3D pose): 1.72 m, arms relaxed, facing where they walk or the camera
   const NEUTRAL = [[0.09, 0, 1.6], [0, 0.19, 1.43], [0, -0.19, 1.43], [0.02, 0.22, 1.13], [0.02, -0.22, 1.13], [0.05, 0.22, 0.87], [0.05, -0.22, 0.87],
     [0, 0.1, 0.93], [0, -0.1, 0.93], [0.03, 0.1, 0.5], [0.03, -0.1, 0.5], [-0.01, 0.11, 0.08], [-0.01, -0.11, 0.08]];
   const neutralP = new Float32Array(41);
-  function neutralAt(p) {
+  function neutralAt(p, sx = 0, sz = 0) {
     let want = null;
     if (p.vel && p.vel.lengthSq() > 0.25 * 0.25) want = Math.atan2(p.vel.z, p.vel.x);
     else { const c = roomCur ? {x: roomCur.d.C[0], y: roomCur.d.C[1]} : cams.find(c => c.pose)?.pose; if (c) want = Math.atan2(c.y - p.pos.z, c.x - p.pos.x); }
     if (want == null) want = p.yaw ?? 0;
     if (p.yaw == null) p.yaw = want; else { let d = want - p.yaw; d -= 2 * Math.PI * Math.round(d / (2 * Math.PI)); p.yaw += d * 0.08; }
     const fx = Math.cos(p.yaw), fy = Math.sin(p.yaw), lx = fy, ly = -fx, s = p.s || 1;
-    NEUTRAL.forEach(([f, l, z], i) => { neutralP[i * 3] = p.pos.x + s * (f * fx + l * lx); neutralP[i * 3 + 1] = p.pos.z + s * (f * fy + l * ly); neutralP[i * 3 + 2] = s * z; });
+    NEUTRAL.forEach(([f, l, z], i) => { neutralP[i * 3] = p.pos.x + sx + s * (f * fx + l * lx); neutralP[i * 3 + 1] = p.pos.z + sz + s * (f * fy + l * ly); neutralP[i * 3 + 2] = s * z; });
     neutralP[39] = fx; neutralP[40] = fy;
     return neutralP;
   }
@@ -579,19 +594,25 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const bodyR = []; // screen rects of the drawn bodies: no label may cover one
     const fadeK = 1 - Math.exp(-Math.min(0.5, (ts - (lastFrame ?? ts - 16)) / 1000) / 0.13); lastFrame = ts; // time-based: slow devices fade as fast
     for (const [k, p] of [...ppl]) {
-      p.alpha += ((showP ? p.want : 0) - p.alpha) * fadeK;
+      const vis = showP && p.want && !p.inside && !p.dup && !p.swapTo ? 1 : 0;
+      p.alpha += (vis - p.alpha) * fadeK;
+      if (p.swapTo && p.alpha < 0.04) { p.pos = p.swapTo; p.swapTo = null; p.vel = null; p.sep?.set(0, 0, 0); } // faded out: reappear at the new spot
+      if (p.sepT) { (p.sep ||= new THREE.Vector3()).lerp(p.sepT, fadeK * 0.5); }
       if (p.want === 0 && p.alpha < 0.02) { scene.remove(p.shadow, p.halo, p.b3.group); p.mat.dispose(); p.jmat.dispose(); p.faint.dispose(); p.tag.remove(); ppl.delete(k); continue; }
       const hl = hoverPid === k, a = Math.max(0, Math.min(1, p.alpha));
       // measured 3D body (already on this map's floor) moved to the placer's feet point; or the neutral body there
       const use3d = showP && peopleMode === "skel" && !!p.Jm;
       p.neutral = !use3d;
-      const J = p.J3 = use3d ? jointsFrom(p.Jm, [p.pos.x - p.A[0], p.pos.z - p.A[1]], p.J3 || undefined) : jointsFrom(neutralAt(p), null, p.J3 || undefined);
+      const sx = p.sep?.x || 0, sz = p.sep?.z || 0;
+      const J = p.J3 = use3d ? jointsFrom(p.Jm, [p.pos.x + sx - p.A[0], p.pos.z + sz - p.A[1]], p.J3 || undefined) : jointsFrom(neutralAt(p, sx, sz), null, p.J3 || undefined);
+      if (use3d) { const dz = Math.min(J[11].y, J[12].y) - 0.075; if (Math.abs(dz) > 0.005) for (const v of J) v.y -= dz; } // feet on the floor: no floating, no sinking
+      const fx = (J[11].x + J[12].x) / 2, fz = (J[11].z + J[12].z) / 2; // the shadow sits under the drawn feet
       const op = a * (use3d ? 1 : 0.7);
       p.mat.opacity = op; p.jmat.opacity = op; p.faint.opacity = op * 0.3; p.mat.transparent = p.jmat.transparent = true;
       p.b3.group.visible = showP && a > 0.02;
       if (p.b3.group.visible) p.b3.set(J, use3d ? p.conf : null);
-      p.shadow.position.set(p.pos.x, 0.015, p.pos.z); p.shadow.material.opacity = 0.16 * a; p.shadow.visible = showP && a > 0.02;
-      p.halo.position.set(p.pos.x, 0.025, p.pos.z); p.halo.material.opacity = hl ? 0.85 * a : 0; p.halo.visible = hl;
+      p.shadow.position.set(fx, 0.015, fz); p.shadow.material.opacity = 0.16 * a; p.shadow.visible = showP && a > 0.02;
+      p.halo.position.set(fx, 0.025, fz); p.halo.material.opacity = hl ? 0.85 * a : 0; p.halo.visible = hl;
       p.tag.classList.toggle("hl", hl); const txt = hl ? p.full : p.short; if (p.tag.textContent !== txt) p.tag.textContent = txt;
       p.tag.style.opacity = (use3d ? a : a * 0.8).toFixed(2);
       if (!showP || a <= 0.05) { p.tag.style.display = "none"; continue; }
@@ -603,6 +624,8 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       if (s) placeTag(p.tag, s); else p.tag.style.display = "none";
     }
     // machine labels: de-overlapped in screen space (busy/in-use win; idle ones give way); never over a body or a person tag
+    { const lr = legend.getBoundingClientRect(), L = {l: lr.left - rect.left, r: lr.right - rect.left, t: lr.top - rect.top, b: lr.bottom - rect.top};
+      legend.classList.toggle("under", lr.width > 0 && taken.some(q => q.l < L.r && q.r > L.l && q.t < L.b && q.b > L.t)); }
     const placed = [...taken, ...bodyR];
     for (const el of [legend, wrap.querySelector(".tw-bar")]) { const r = el?.getBoundingClientRect(); if (r?.width) placed.push({l: r.left - rect.left, r: r.right - rect.left, t: r.top - rect.top, b: r.bottom - rect.top}); } // overlays on the canvas
     const order = machineObjs.map(mo => ({mo, s: sp(mo.top), s2: sp(tmp2.set(mo.top.x, 0.15, mo.top.z))})).filter(x => { if (!x.s && !x.s2) x.mo.tag.style.display = "none"; return x.s || x.s2; })
