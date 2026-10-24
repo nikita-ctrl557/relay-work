@@ -274,7 +274,7 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, t
     return out
 
 
-def frame_quality(cam, g, X, UV, Wg):
+def frame_quality(cam, g, X, UV, Wg, boxes=None):
     """Per grid frame confidence 0..100 from what the 2D shows: reprojection error relative to the person's image
     height, number of joints seen, body cut by the frame edge, body unreasonably close to the camera. Frames
     without a 2D sample take the nearest sampled frames' value."""
@@ -304,6 +304,14 @@ def frame_quality(cam, g, X, UV, Wg):
     else:
         q = np.full(G, 0.5)
     q *= np.clip((z - 1.2) / 0.5, 0, 1)                                  # within 1.7 m of the lens: suspicious (app hides < 1.2 m)
+    if boxes is not None:   # the drawn body (clipped to the frame) must not be far bigger than the tracker's person box
+        uv = cam.project(X)
+        cu = np.clip(np.nan_to_num(uv, nan=-1e4), [0, 0], [640, 360])
+        ph, pw = np.ptp(cu[..., 1], axis=1), np.ptp(cu[..., 0], axis=1)
+        bw, bh = boxes[:, 2] * 640, boxes[:, 3] * 360
+        ratio = np.maximum((ph - 15) / np.maximum(bh, 1), (pw - 15) / np.maximum(bw, 1))
+        okb = np.isfinite(ratio)
+        q[okb] *= np.clip((1.45 - ratio[okb]) / 0.2, 0, 1)
     return np.round(q * 100)
 
 
@@ -316,20 +324,23 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
     bend = np.zeros(len(g))
     for a, b in sets:
         bend[(g >= a - 1) & (g <= b + 1)] = 1.0
-    anc = None
+    anc, boxes = None, None
     if anchors is not None and len(anchors) >= 1:
         ta = anchors[:, 0]
         k = np.clip(np.searchsorted(ta, g), 1, len(ta) - 1) if len(ta) > 1 else np.zeros(len(g), int)
-        anc = np.full((len(g), 2), np.nan)
+        vals = np.full((len(g), anchors.shape[1] - 1), np.nan)
         for i, gi in enumerate(g):
             a, b = (k[i] - 1, k[i]) if len(ta) > 1 else (0, 0)
-            if ta[a] <= gi <= ta[b] and ta[b] - ta[a] <= 1.1 and b != a:
+            if ta[a] <= gi <= ta[b] and ta[b] - ta[a] <= 2.1 and b != a:
                 f = (gi - ta[a]) / (ta[b] - ta[a])
-                anc[i] = anchors[a, 1:] * (1 - f) + anchors[b, 1:] * f
-            elif abs(gi - ta[a]) < 0.06 or abs(gi - ta[b]) < 0.06:
-                anc[i] = anchors[a if abs(gi - ta[a]) < 0.06 else b, 1:]
+                vals[i] = anchors[a, 1:] * (1 - f) + anchors[b, 1:] * f
+            elif abs(gi - ta[a]) < 1.05 or abs(gi - ta[b]) < 1.05:
+                vals[i] = anchors[a if abs(gi - ta[a]) <= abs(gi - ta[b]) else b, 1:]
+        anc, boxes = vals[:, :2].copy(), vals[:, 2:6]
+        far = np.array([np.abs(ta - gi).min() > 1.1 for gi in g])
+        anc[far] = np.nan
     Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc)
-    Q = frame_quality(cam, g, Xr, UV, Wg)
+    Q = frame_quality(cam, g, Xr, UV, Wg, boxes)
     # hold the end poses while the tracker still shows the person (<= max_hold s each side)
     pre = post = 0
     for a, b in present:
@@ -448,11 +459,11 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
     for e in tl:
         for q in e["p"]:
             pres.setdefault(q[0], []).append(e["t"])
-    anchors = {}      # tracker floor positions (feet seen: box bottom inside the frame)
+    anchors = {}      # tracker floor positions (feet seen: box bottom inside the frame) + person boxes
     for e in tl:
         for q in e["p"]:
-            if len(q) > 10 and q[9] is not None and q[5] + q[7] < 0.97:
-                anchors.setdefault(q[0], []).append((e["t"], q[9], q[10]))
+            feet = len(q) > 10 and q[9] is not None and q[5] + q[7] < 0.97
+            anchors.setdefault(q[0], []).append((e["t"], q[9] if feet else np.nan, q[10] if feet else np.nan) + tuple(q[4:8]))
     anchors = {k: np.array(v, float) for k, v in anchors.items()}
     present = {}
     for pid, ts in pres.items():

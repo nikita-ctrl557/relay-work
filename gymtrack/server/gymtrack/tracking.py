@@ -516,7 +516,7 @@ class PeopleTracker:
             if kp is None:
                 continue
             tr.pose_hits += 1
-            if not cut and bh >= self.APP_KEEP_MIN_H * 4 / 3:
+            if bh >= self.APP_KEEP_MIN_H * 4 / 3 and (not cut or torso_seen(kp)):  # near-camera people too, torso in view
                 occl = max([cover(tr.box, o.box) for o in now if o is not tr] or [0.0])
                 if occl < 0.15:
                     light = light or reid.frame_light(src)
