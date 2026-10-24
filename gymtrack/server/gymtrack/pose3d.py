@@ -502,7 +502,11 @@ def _init_standing(cam, uv, w, L, hand, feet_xy=None):
     if feet_xy is not None:      # standing on a known floor point (the tracker's)
         mh = np.array([feet_xy[0], feet_xy[1], hip_h])
     elif not (w[[LHIP, RHIP]].any() or w[[LSH, RSH]].any()):
-        mh = cam.backproject_to_height(uv[w].mean(0) if w.any() else np.array([cam.cx, cam.cy]), hip_h + 0.25) - np.array([0, 0, 0.25])
+        if w[NOSE]:     # only the head inside the frame: the body stands below it
+            nose_h = hip_h + Lg(LSH, LHIP) * 0.97 + 0.8 * np.sqrt(max(Lg(NOSE, LSH) ** 2 - (Lg(LSH, RSH) / 2) ** 2, 0.004))
+            mh = cam.backproject_to_height(uv[NOSE], nose_h) - np.array([0, 0, nose_h - hip_h])
+        else:
+            mh = cam.backproject_to_height(uv[w].mean(0) if w.any() else np.array([cam.cx, cam.cy]), hip_h + 0.25) - np.array([0, 0, 0.25])
     elif w[[LHIP, RHIP]].any():
         hv = uv[[LHIP, RHIP]][w[[LHIP, RHIP]]].mean(0)
         mh = cam.backproject_to_height(hv, Lg(LHIP, LKN) + Lg(LKN, LAN) + ANKLE_Z - 0.02)

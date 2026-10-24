@@ -208,6 +208,23 @@ def deswap(uv, w):
     return out_u, out_w
 
 
+def collapse_unseen(uv, w):
+    """Limbs the detector piled onto one spot (an occluder hides them: knees and ankles on one point) are not
+    observations: mark them unseen so the fit's standing/seated prior fills them in."""
+    w = w.copy()
+    sh = np.where((w[:, [1, 2]] > 0).all(1), np.linalg.norm(uv[:, 1] - uv[:, 2], axis=-1), np.nan)
+    mh_ = (uv[:, 7] + uv[:, 8]) / 2
+    ms_ = (uv[:, 1] + uv[:, 2]) / 2
+    torso = np.where((w[:, [1, 2, 7, 8]] > 0).all(1), np.linalg.norm(ms_ - mh_, axis=-1), np.nan)
+    ref = np.nanmax(np.stack([torso, sh * 1.2]), 0) if np.isfinite(np.stack([torso, sh])).any() else np.full(len(uv), np.nan)
+    for a, b, c in ((7, 9, 11), (8, 10, 12)):
+        leg = np.linalg.norm(uv[:, b] - uv[:, a], axis=-1) + np.linalg.norm(uv[:, c] - uv[:, b], axis=-1)
+        bad = np.isfinite(ref) & (leg < 0.35 * ref) & (w[:, [a, b, c]] > 0).all(1)
+        w[bad, b] = 0
+        w[bad, c] = 0
+    return w
+
+
 HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), 1.95)
 Q_MIN = 35          # frames below this confidence are not exported
 EXPORT_ANGLES = os.environ.get("EXPORT_ANGLES", "0") == "1"
@@ -242,7 +259,7 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, t
         tk, Xc, fk = sam
         Xw, sc = sam_to_world(cam, Xc, fk, W, Hh)
         prior_w = (tk, Xw)
-    pieces = [(t,) + deswap(uv, w) for t, uv, w in pieces]
+    pieces = [(t,) + deswap(uv, collapse_unseen(uv, w)) for t, uv, w in pieces]
     try:
         groups, height = person_groups(cam, pieces, prior_w)
     except Exception as ex:  # noqa

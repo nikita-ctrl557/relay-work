@@ -461,6 +461,12 @@ class RefineProblem(P3._Problem):
         self.anchor = np.full((self.T, 2), np.nan) if anchor is None else np.asarray(anchor, float)
         self.anc_sig = 0.35
         self.neutral = None          # (T, 13, 3) rest targets for limbs nobody saw (set_neutral)
+        # lying in the image (torso closer to horizontal than vertical over a long torso): a lying 3D trunk
+        uvv = np.asarray(uv, float)
+        ww = np.asarray(w, float) > 0
+        d = (uvv[:, LSH] + uvv[:, RSH]) / 2 - (uvv[:, LHIP] + uvv[:, RHIP]) / 2
+        okl = ww[:, [LSH, RSH, LHIP, RHIP]].all(1)
+        self.lying = okl & (np.abs(d[:, 0]) > 1.6 * np.abs(d[:, 1])) & (np.linalg.norm(d, axis=-1) > 15)
 
     def set_neutral(self, X0, groups):
         """Unseen limb joints get a weak pull to a relaxed pose hanging from their visible parents (legs straight
@@ -511,6 +517,9 @@ class RefineProblem(P3._Problem):
         if self.neutral is not None:
             N = self.neutral
             r.append(np.where(np.isfinite(N), X - np.nan_to_num(N), 0.0).ravel() / self.neu_sig)
+        tr_ = (X[:, LSH] + X[:, RSH]) / 2 - (X[:, LHIP] + X[:, RHIP]) / 2
+        cz = tr_[:, 2] / np.maximum(np.linalg.norm(tr_, axis=-1), 1e-6)
+        r.append(np.where(self.lying, _relu(np.abs(cz) - 0.45) / 0.05, 0.0))
         return np.concatenate(r)
 
     def residuals(self, x):
@@ -565,6 +574,18 @@ class RefineProblem(P3._Problem):
             rows = r0 + np.arange(T * 39)
             R.append(rows[okn]); C.append(np.arange(T * 39)[okn]); V.append(np.full(okn.sum(), 1 / self.neu_sig))
             r0 += T * 39
+        def _lyt(Xa):
+            tr_ = (Xa[:, LSH] + Xa[:, RSH]) / 2 - (Xa[:, LHIP] + Xa[:, RHIP]) / 2
+            cz = tr_[:, 2] / np.maximum(np.linalg.norm(tr_, axis=-1), 1e-6)
+            return np.where(self.lying, _relu(np.abs(cz) - 0.45) / 0.05, 0.0)
+        L0_ = _lyt(X)
+        for jn in (LSH, RSH, LHIP, RHIP):
+            for c in range(3):
+                Xp = X.copy(); Xp[:, jn, c] += 1e-5
+                dd = (_lyt(Xp) - L0_) / 1e-5
+                nz = dd != 0
+                R.append(r0 + np.flatnonzero(nz)); C.append(base[nz, jn] + c); V.append(dd[nz])
+        r0 += T
         J1 = coo_matrix((np.concatenate(V), (np.concatenate(R), np.concatenate(C))), shape=(r0, T * 39)).tocsr()
         return vstack([J0, J1]).tocsr()
 
