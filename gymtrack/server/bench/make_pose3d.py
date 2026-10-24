@@ -87,6 +87,10 @@ def load_sam(sam_dir, cam_id, replay, W, Hh, min_iou=0.35):
     T = np.array([e["t"] for e in replay["poses"]])
     n_match = 0
     for r in recs:
+        if "pid" in r:              # crop run on a known person's tracker box
+            out.setdefault(int(r["pid"]), []).append((float(r["t"]), np.asarray(r["kp3d"], float)[SAM_MAP], float(r["f"])))
+            n_match += 1
+            continue
         i = int(np.argmin(np.abs(T - r["t"])))
         if abs(T[i] - r["t"]) > 0.051:
             continue
