@@ -18,7 +18,8 @@ FORMAT v2 (core.js indexPose3d reads both v1 "poses3d" rows and v2 "tracks"):
   tracks: [{pid, t0 (s), hz, n, u, P, A, F, U}]
     P: base64 of int16[39] (frame 0, in units of u cm (default 1): x, y floor plan, z height; pose3d_meta.joints
        order) followed by int8[39] per later frame = closed-loop deltas (so quantisation never drifts)
-    A: base64, same scheme for the 12 joint angles (pose3d_meta.angles, degrees; last one cm)
+    A: base64, same scheme for the 12 joint angles (pose3d_meta.angles, degrees; last one cm); omitted for
+       passers-by (group C)
     F: base64 of int16 per frame = body facing (yaw) in 0.01 rad, plan frame: forward = (cos, sin)
     U: 13 ints = median 1-sigma joint uncertainty of the track, cm
 """
@@ -74,14 +75,15 @@ def iou(a, b):
     return i / max(u, 1e-9)
 
 
-def load_sam(sam_dir, cam_id, replay, W, Hh, min_iou=0.5):
+def load_sam(sam_dir, cam_id, replay, W, Hh, min_iou=0.35):
     """{pid: (t (K,), Xc (K, 13, 3) camera frame, f (K,))} by matching SAM crops to replay people."""
     out = {}
     if not sam_dir:
         return out, 0, 0
     recs = []
-    for f in sorted(glob.glob(f"{sam_dir}/{cam_id}_*.npy")):
-        recs += list(np.load(f, allow_pickle=True))
+    for d_ in str(sam_dir).split(","):
+        for f in sorted(glob.glob(f"{d_}/{cam_id}_*.npy")):
+            recs += list(np.load(f, allow_pickle=True))
     T = np.array([e["t"] for e in replay["poses"]])
     n_match = 0
     for r in recs:
@@ -334,11 +336,11 @@ def encode_track(pid, t, X, A, fwd, U, hz):
 # ---------------------------------------------------------------------------------------------------------
 
 def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0, people=None, window=None,
-         log=print, min_frames=5, member_s=45, phases="ABC", extra2d=None):
+         log=print, min_frames=5, member_s=45, phases="ABC", extra2d=None, results_path=None):
     W, Hh = 640, 360
     t_start = time.time()
     if extra2d:     # 2D poses filled in for on-screen people the replay had none for (bench.fill_poses2d)
-        ex2 = json.load(open(extra2d))["poses"]
+        ex2 = [e for f_ in str(extra2d).split(",") for e in json.load(open(f_))["poses"]]
         byt = {round(e["t"], 2): e for e in replay["poses"]}
         n_add = 0
         for e in ex2:
@@ -422,6 +424,9 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
             done += 1
             if done % 25 == 0 or done == len(futs):
                 log(f"  {done}/{len(futs)} person-segments, {time.time() - t_start:.0f}s")
+    if results_path:
+        import pickle
+        pickle.dump({"results": results, "n_rec": n_rec, "n_match": n_match}, open(results_path, "wb"))
     return assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec, n_match, log)
 
 
@@ -438,7 +443,10 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             jump = np.flatnonzero(np.linalg.norm(np.diff(R["X"], axis=0), axis=-1).max(1) > 0.6) + 1
             for a_, b_ in zip(np.r_[0, jump], np.r_[jump, len(R["t"])]):
                 if b_ - a_ >= 5:
-                    tracks.append((ph, encode_track(pid, R["t"][a_:b_], R["X"][a_:b_], A[a_:b_], R["fwd"][a_:b_], R["U"][a_:b_], hz)))
+                    tr_ = encode_track(pid, R["t"][a_:b_], R["X"][a_:b_], A[a_:b_], R["fwd"][a_:b_], R["U"][a_:b_], hz)
+                    if ph == "C":          # passers-by: no joint angles (not shown for them), saves ~20 %
+                        tr_.pop("A")
+                    tracks.append((ph, tr_))
             angles_by_pid.setdefault(pid, []).append((R["t"], A))
             q = P3.quality(cam, it["t"], it["uv"], it["w"], interp_track(R["t"], R["X"], it["t"]), it["hand"])
             q["jitter_mps2"] = PP.jitter(R["t"], R["X"])
@@ -475,11 +483,14 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
                     drop.add(k)
                     continue
                 if i0 > 0:
-                    A = delta_decode(tr["A"], 12)
+                    A = delta_decode(tr["A"], 12) if "A" in tr else np.zeros((tr["n"], 12))
                     F = np.frombuffer(base64.b64decode(tr["F"]), "<i2")
                     fw = np.stack([np.cos(F / 100), np.sin(F / 100)], 1)
                     U = np.repeat(np.array(tr["U"], float)[None] / 100, tr["n"], 0)
+                    had_a = "A" in tr
                     tracks[k] = (tracks[k][0], encode_track(pid, ts[i0:], X[i0:], A[i0:], fw[i0:], U[i0:], tr["hz"]))
+                    if not had_a:
+                        tracks[k][1].pop("A")
                     tr = tracks[k][1]
                     X = X[i0:]
             last = (tr["t0"] + (tr["n"] - 1) / tr["hz"], (X[-1, P3.LAN, :2] + X[-1, P3.RAN, :2]) / 2)
@@ -541,14 +552,22 @@ def main(argv=None):
     ap.add_argument("--window")
     ap.add_argument("--cams-cache")
     ap.add_argument("--phases", default="ABC", help="only these priority groups (to run them separately / merge)")
-    ap.add_argument("--extra2d", help="filled-in 2D poses (bench.fill_poses2d output)")
+    ap.add_argument("--extra2d", help="filled-in 2D poses (bench.fill_poses2d output; comma-separated list)")
+    ap.add_argument("--results", help="pickle the per-person results here (for --reassemble)")
+    ap.add_argument("--reassemble", help="skip the fits: re-export from a --results pickle")
     a = ap.parse_args(argv)
     replay = json.load(open(a.replay))
     cam_id = a.cam_id or Path(a.replay).stem
     segcams = segment_cams(replay, a.configs, a.cams_cache)
     people = {int(p) for p in a.people.split(",")} if a.people else None
     window = tuple(float(v) for v in a.window.split(",")) if a.window else None
-    out = make(replay, segcams, a.sam, cam_id, a.hz, a.jobs, a.max_mb, people, window, phases=a.phases, extra2d=a.extra2d)
+    if a.reassemble:
+        import pickle
+        rr = pickle.load(open(a.reassemble, "rb"))
+        out = assemble(replay, segcams, rr["results"], cam_id, a.hz, a.max_mb, time.time(), rr["n_rec"], rr["n_match"])
+    else:
+        out = make(replay, segcams, a.sam, cam_id, a.hz, a.jobs, a.max_mb, people, window, phases=a.phases,
+                   extra2d=a.extra2d, results_path=a.results)
     path = a.out or a.replay.replace(".json", ".pose3d.json")
     json.dump(out, open(path + ".tmp", "w"), separators=(",", ":"))
     os.replace(path + ".tmp", path)

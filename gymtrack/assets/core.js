@@ -882,7 +882,7 @@ class ReplaySource {
         const n = trs.reduce((s, tr) => s + tr.n, 0), t = new Float64Array(n), P = new Float32Array(n * 39), A = new Float32Array(n * 12), U = new Float32Array(n * 13), F = new Float32Array(n), Cf = new Float32Array(n * 13).fill(NaN);
         let o = 0;
         for (const tr of trs) {
-          const p = dec(tr.P, 39, tr.n), a = dec(tr.A, 12, tr.n), fb = bytes(tr.F), fv = new DataView(fb.buffer), pu = (tr.u || 1) / 100;
+          const p = dec(tr.P, 39, tr.n), a = tr.A ? dec(tr.A, 12, tr.n) : new Float32Array(tr.n * 12).fill(NaN), fb = bytes(tr.F), fv = new DataView(fb.buffer), pu = (tr.u || 1) / 100;
           // per-joint confidence if the sidecar has one ("C": 13 values, or per frame "|"-encoded like P; 0..1 or 0..100)
           const cr = tr.C ?? tr.conf, cs = typeof cr === "string" ? dec(cr, 13, tr.n) : null, cmax = Array.isArray(cr) ? Math.max(...cr) : cs ? Math.max(...cs) : 1, ck = cmax > 1.5 ? 1 / 100 : 1;
           for (let i = 0; i < tr.n; i++, o++) {
