@@ -6,8 +6,11 @@ stay put on the screen while the equipment moves: motion is read from the wrong 
 wrong zone (a squat in one rack counted on the next one). With a reference picture of the framing the zones were
 drawn on (camera config "reference": an image file, e.g. a clean background plate, any size), every `every_s`
 the analysed frame is matched to it (ORB features + RANSAC homography, people don't matter); when the picture has
-moved by more than `min_px` (corner displacement, analysis pixels) on two checks in a row, everything drawn on the
-reference is carried into the current picture through the inverse homography.
+moved by more than `min_px` (corner displacement, analysis pixels) on two checks in a row, the new homography is
+taken. offline.analyse then reads zone motion and thumbnails on the frame warped back onto the reference (so a
+zone keeps looking at the same equipment and its thumbnail series stays comparable for reps and crediting), and
+the ignore areas, mirrors, floor calibration and the zones people are placed in are carried into the current
+picture through the inverse homography (`geometry`).
 """
 from __future__ import annotations
 
@@ -45,6 +48,7 @@ class CameraFollower:
                      "ignore": [list(p) for p in cam.ignore], "mirrors": [list(p) for p in cam.mirrors],
                      "calib": dict(cam.calib) if cam.calib else None}
         self.H = np.eye(3)          # current frame -> reference, as applied
+        self.moved = False          # H is not the identity (the picture is off the reference framing)
         self.pending = None
         self.next_t = -1e9
         self.epochs: list[dict] = []  # [{"t": first time, "H": frame->reference}] each time the geometry changed
@@ -77,6 +81,7 @@ class CameraFollower:
             self.pending = H                    # confirm on the next check (a passer-by filling the frame, a blur)
             return None
         self.H, self.pending = H, None
+        self.moved = _dev(H, np.eye(3), self.w, self.h) > self.min_px
         self.epochs.append({"t": round(float(t), 2), "H": [[round(float(v), 6) for v in r] for r in H]})
         return self.geometry()
 

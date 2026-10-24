@@ -8,7 +8,6 @@ show up in members' history like live sessions do.
 from __future__ import annotations
 
 import base64
-import dataclasses
 import time
 from dataclasses import dataclass, field
 
@@ -152,8 +151,9 @@ class _DeferredSets:
 
 
 def _apply_geometry(geo: dict, cam_id: str, analyser, tracker, guard, engine) -> None:
-    """The camera moved (follow.py): zones, ignore areas, mirrors and floor calibration as they now are in the picture."""
-    analyser.set_zones(geo["zones"])
+    """The camera moved (follow.py): ignore areas, mirrors, floor calibration and the zones people are placed in, as
+    they now are in the picture. The analyser keeps the drawn zones: it reads the frame warped onto the reference."""
+    analyser.prev = None  # the warp changed: no frame difference across it (it would light up every zone at once)
     if tracker is not None:
         tracker.set_zones(geo["zones"])
         tracker.ignore = [np.array(p, np.float32) for p in geo["ignore"] + geo["mirrors"]]
@@ -266,8 +266,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
     sink = _DeferredSets(store) if store is not None else None  # sets reach the store only after post-processing
     engine = Engine(cfg, sink, keep_all=True)
     follow = bool(getattr(cam, "reference", None))
-    # following a moving camera re-draws the analyser's zones: on a copy, the config's camera keeps the drawn ones
-    analyser = FrameAnalyzer(dataclasses.replace(cam) if follow else cam)
+    analyser = FrameAnalyzer(cam)
     follower, zone_epochs = None, []
     if people is None:
         people = DEFAULT_MODEL.exists()
@@ -313,7 +312,19 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
                 zone_epochs.append({"t": round(t, 2), "zones": {z.machine: z.polygon for z in geo["zones"]}})
         if guard is not None and guard.mirrors and cam.mirror_motion:  # mirror glass: motion only counts on real people
             analyser.exclude = guard.motion_exclusion(frame.shape, kept_tracks)
-        reading = analyser.analyze(frame, start_ts + t)
+        if follower is not None and follower.moved:
+            # zone motion and thumbnails are read on the picture warped back onto the reference framing: the zones
+            # stay on the same piece of equipment and their thumbnail series stay comparable across camera moves
+            Hf = follower.H
+            if analyser.exclude is not None:
+                analyser.exclude = cv2.warpPerspective(analyser.exclude.astype(np.uint8), Hf, (frame.shape[1], frame.shape[0]),
+                                                       flags=cv2.INTER_NEAREST) > 0
+            reading = analyser.analyze(cv2.warpPerspective(frame, Hf, (frame.shape[1], frame.shape[0])), start_ts + t)
+            if reading.tags:
+                Hi = np.linalg.inv(Hf)
+                reading.tags = {k: tuple(float(v) for v in cv2.perspectiveTransform(np.float32([[xy]]), Hi)[0, 0]) for k, xy in reading.tags.items()}
+        else:
+            reading = analyser.analyze(frame, start_ts + t)
         tracks = []
         if tracker:
             tracks = tracker.update(frame, start_ts + t, reading.tags, cfg.member_by_tag, full=full)
