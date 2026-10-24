@@ -106,9 +106,12 @@ export function mapBody(P, map, out = null) {
    the new spot. During a set, a body already within 1 m of the set's machine gets a gentle (<= 0.3 m) nudge
    towards it; nothing more (the set's machine may be wrongly attributed; dragging bodies would hide that).
    Drawn = measured: the body is never held or dragged away from where it was measured. st.inside flags feet deep
-   inside a solid piece of equipment (not for anyone planted at a zone); the view hides those. */
+   inside a solid piece of equipment (not for anyone planted at a zone); the view hides those.
+   Glides: a 3D track that slides faster than anyone walks in a gym (> 3 m/s over 0.3 s; the fit carried across an
+   identity change or an occlusion, e.g. a box whose bottom is hidden) is not a person moving: st.glide is set while
+   it lasts (the view fades the body out) and the end of the slide is a cut (the body comes back at the new spot). */
 export const WALK = 2.0;                 // m/s: the fallback never moves a body faster
-const TAU_FALL = 0.15, TAU_BLEND = 0.2, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 0.7, CUT_HOLD = 0.15, RESET_GAP = 2.0, EQ_IN = 0.35;
+const GLIDE_V = 3.0, GLIDE_WIN = 0.3, TAU_FALL = 0.15, TAU_BLEND = 0.2, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 0.7, CUT_HOLD = 0.15, RESET_GAP = 2.0, EQ_IN = 0.35;
 const capStep = (dx, dy, max) => { const l = Math.hypot(dx, dy); return l > max && l > 0 ? [dx * max / l, dy * max / l] : [dx, dy]; };
 const rectDist = (p, r) => { const dx = Math.max(Math.abs(p[0] - r.x) - r.w / 2, 0), dy = Math.max(Math.abs(p[1] - r.y) - r.d / 2, 0); return Math.hypot(dx, dy); };
 const clampRect = (p, r) => [Math.max(r.x - r.w / 2, Math.min(r.x + r.w / 2, p[0])), Math.max(r.y - r.d / 2, Math.min(r.y + r.d / 2, p[1]))];
@@ -117,7 +120,7 @@ export const isObstacle = e => e && e.h >= 1.0 && !/rack/i.test(e.machine) && e.
 // deep inside a solid piece (>= 0.35 m from every side): not someone seated on it or standing at its edge
 export const insideEq = (p, r) => Math.abs(p[0] - r.x) < r.w / 2 - EQ_IN && Math.abs(p[1] - r.y) < r.d / 2 - EQ_IN;
 
-export function newPlacer() { return {t: null, base: null, off: [0, 0], c: [0, 0], src: null, lastA: null, far: 0, pos: null, cut: false, inside: false}; }
+export function newPlacer() { return {t: null, base: null, off: [0, 0], c: [0, 0], src: null, lastA: null, far: 0, pos: null, cut: false, inside: false, hist: [], glide: false}; }
 /* st: placer state; t: replay seconds; A: mapped 3D feet or null; rf: tracker room-feet point or null;
    ctx: {set: equipment rect of the machine of the set under way (or null), obstacles: [rect], free: [machine ids]}.
    Returns the map position of the person's feet ([x, y]) or null; st.cut is true on the step where the body
@@ -127,7 +130,7 @@ export function stepPlacer(st, t, A, rf, ctx = {}) {
   st.cut = false;
   if (!(dt >= 0 && dt <= RESET_GAP) || !st.base) { // first sight, a seek, or back after a long gap: place directly
     const p = A || rf; if (!p) { st.t = t; return st.pos; }
-    Object.assign(st, {base: p.slice(), off: [0, 0], c: [0, 0], src: A ? "3d" : "trk", lastA: A, far: 0, cut: st.pos != null});
+    Object.assign(st, {base: p.slice(), off: [0, 0], c: [0, 0], src: A ? "3d" : "trk", lastA: A, far: 0, cut: st.pos != null, hist: A ? [[t, A[0], A[1]]] : [], glide: false});
   } else if (A) {
     const jump = st.lastA && Math.hypot(A[0] - st.lastA[0], A[1] - st.lastA[1]) > CUT_DIST;
     if (st.src !== "3d" || jump) {
@@ -137,8 +140,15 @@ export function stepPlacer(st, t, A, rf, ctx = {}) {
     }
     const k = Math.exp(-dt / TAU_BLEND); st.off = Math.hypot(...st.off) < 0.005 ? [0, 0] : [st.off[0] * k, st.off[1] * k];
     st.base = [A[0] + st.off[0], A[1] + st.off[1]]; st.lastA = A; st.far = 0;
+    // glide: the measured 3D feet's speed over the last 0.3 s
+    if (st.cut) st.hist = [];
+    st.hist.push([t, A[0], A[1]]);
+    while (st.hist.length > 2 && t - st.hist[1][0] >= GLIDE_WIN) st.hist.shift();
+    const h0 = st.hist[0], span = t - h0[0], fast = span >= 0.05 && Math.hypot(A[0] - h0[1], A[1] - h0[2]) > GLIDE_V * Math.max(span, GLIDE_WIN * 0.5);
+    if (st.glide && !fast) st.cut = true;                                          // the slide is over: show it at the new spot
+    st.glide = fast;
   } else if (rf) {
-    st.lastA = null;
+    st.lastA = null; st.hist = []; if (st.glide) { st.glide = false; st.cut = true; }
     const d = Math.hypot(rf[0] - st.base[0], rf[1] - st.base[1]);
     st.far = d > CUT_DIST ? st.far + dt : 0;
     if (st.far > CUT_HOLD) { st.base = rf.slice(); st.far = 0; st.cut = true; }      // disagrees for > 1 s: cut, no glide
@@ -160,39 +170,48 @@ export function stepPlacer(st, t, A, rf, ctx = {}) {
 /* Is a 3D body believable where it is drawn? P: pose3d J (plan metres); cam: the camera it was solved with;
    box: the tracker's box (0..1 of the frame) or null; kp: 2D keypoints (0..1) or null. False for bodies that
    would be drawn far bigger than the person in the video (fits gone wrong near the camera or at the frame edge),
-   bodies right in front of the lens, and impossible statures. */
+   bodies right in front of the lens, impossible statures, and bodies whose joints the camera saw elsewhere.
+   Judged on what the camera actually saw: a person cut off by the frame edge is shown when the joints that are in
+   the frame sit tightly on the person (legs at the edge fitted right are fine; too little seen, or seen joints off,
+   is a guess); an unusual pose (sitting low, feet up) is shown when every part of it was seen and matches. */
+const EDGE_TOL = 0.15, KP_TOL = 0.29, SEEN_TOL = 0.08;
 export function body3dWhy(P, cam, box, kp = null) {
   const leg = (i, j) => Math.hypot(P[i * 3] - P[j * 3], P[i * 3 + 1] - P[j * 3 + 1], P[i * 3 + 2] - P[j * 3 + 2]);
   const stature = (leg(7, 9) + leg(9, 11) + leg(8, 10) + leg(10, 12)) / 2 + Math.hypot((P[3] + P[6] - P[21] - P[24]) / 2, (P[4] + P[7] - P[22] - P[25]) / 2, (P[5] + P[8] - P[23] - P[26]) / 2) + 0.33;
   if (!(stature > 1.35 && stature < 2.1)) return "stature";
   // sitting on nothing: hips a hand above the floor with both feet in the air (fits gone wrong behind equipment)
-  if ((P[23] + P[26]) / 2 < 0.38 && Math.min(P[35], P[38]) > 0.12) return "contorted";
-  if (!cam) return "";
+  const low = (P[23] + P[26]) / 2 < 0.38 && Math.min(P[35], P[38]) > 0.12;
+  if (!cam) return low ? "contorted" : "";
   const W0 = cam.width || 640, H0 = cam.height || 360, M = camM(cam), uv = [];
   for (let i = 0; i < 13; i++) {
     const d = [P[i * 3] - cam.C[0], P[i * 3 + 1] - cam.C[1], P[i * 3 + 2] - cam.C[2]], q = M.map(r => r[0] * d[0] + r[1] * d[1] + r[2] * d[2]);
     if (q[2] < 1.2) return "lens";                                                              // right in front of the lens
     uv.push([cam.f * q[0] / q[2] + cam.cx, cam.f * q[1] / q[2] + cam.cy]);
   }
+  // the joints the camera saw (2D keypoints): median distance of the 3D joints from them, against the person's height
+  const vis = kp ? kp.map((q, i) => q ? i : -1).filter(i => i >= 0) : [];
+  let med = Infinity, hp = 10;
+  if (vis.length >= 4) {
+    const ys = vis.map(i => kp[i][1] * H0); hp = Math.max(Math.max(...ys) - Math.min(...ys), box ? box[3] * H0 : 0, 10);
+    const e = vis.map(i => Math.hypot(uv[i][0] - kp[i][0] * W0, uv[i][1] - kp[i][1] * H0)).sort((a, b) => a - b);
+    med = e.length % 2 ? e[e.length >> 1] : (e[e.length / 2 - 1] + e[e.length / 2]) / 2;
+  }
+  // the low pose stands only when the camera saw all of it (both hips, a foot, >= 8 joints) and every bit matches
+  if (low && !(vis.length >= 8 && kp[7] && kp[8] && (kp[11] || kp[12]) && med <= Math.max(SEEN_TOL * hp, 6))) return "contorted";
   // drawn size (clipped to the frame, as people see it) against the person's tracker box
   const cx = uv.map(v => Math.max(0, Math.min(W0, v[0]))), cy = uv.map(v => Math.max(0, Math.min(H0, v[1])));
   const pw = Math.max(...cx) - Math.min(...cx), ph = Math.max(...cy) - Math.min(...cy);
-  const vis = kp ? kp.map((q, i) => q ? i : -1).filter(i => i >= 0) : [];
   if (box) {
     const bw = box[2] * W0, bh = box[3] * H0;
     if (ph > 1.4 * bh + 12 || pw > 1.4 * bw + 12) return "size";
-    // cut off by the frame edge: the 3D is only as good as what was seen; with no shoulder or hip seen it is a guess
-    // (fine when enough of them was seen; a head swelling out of the frame over unseen shoulders and hips is not)
+    // cut off by the frame edge: the 3D is only as good as what was seen. Too little seen (< 4 joints) is a guess;
+    // with the head out of the frame and no shoulder or hip seen, what was seen (e.g. the legs) must fit tightly
     const headOut = uv[0][0] < 0 || uv[0][0] > W0 || uv[0][1] < 0 || uv[0][1] > H0;
-    if ((box[0] < 0.015 || box[0] + box[2] > 0.985 || box[1] + box[3] > 0.985) && (vis.length < 4 || headOut && ![1, 2, 7, 8].some(i => kp[i]))) return "edge";
+    if ((box[0] < 0.015 || box[0] + box[2] > 0.985 || box[1] + box[3] > 0.985) &&
+        (vis.length < 4 || headOut && ![1, 2, 7, 8].some(i => kp[i]) && !(med <= Math.max(EDGE_TOL * hp, 9)))) return "edge";
   }
   // joint by joint against what the camera saw: a body fitted to someone else (or gone wrong)
-  if (vis.length >= 4) {
-    const ys = vis.map(i => kp[i][1] * H0), hp = Math.max(Math.max(...ys) - Math.min(...ys), box ? box[3] * H0 : 0, 10);
-    const e = vis.map(i => Math.hypot(uv[i][0] - kp[i][0] * W0, uv[i][1] - kp[i][1] * H0)).sort((a, b) => a - b);
-    const med = e.length % 2 ? e[e.length >> 1] : (e[e.length / 2 - 1] + e[e.length / 2]) / 2;
-    if (med > Math.max(0.29 * hp, 9)) return "kp";
-  }
+  if (vis.length >= 4 && med > Math.max(KP_TOL * hp, 9)) return "kp";
   return "";
 }
 export const body3dOk = (P, cam, box, kp = null) => !body3dWhy(P, cam, box, kp);

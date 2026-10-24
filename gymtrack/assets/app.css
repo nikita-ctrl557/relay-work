@@ -899,6 +899,37 @@ td.who small { color: var(--muted); font-size: 12px; }
 .b3v-set.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .b3v-set:hover { background: var(--surface-2); }
 .b3v-best { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--ink-2); }
+/* muscles on the 3D body (pose3dview.js + muscle3d.js) */
+.b3v-mus { position: absolute; left: 8px; top: 46px; max-width: min(300px, calc(100% - 16px)); display: flex; flex-direction: column; gap: 4px; padding: 7px 10px 8px; border-radius: 6px; background: color-mix(in srgb, var(--surface) 92%, transparent); box-shadow: var(--shadow-1); font-size: 12px; color: var(--ink-2); pointer-events: none; }
+.b3v-mus[hidden] { display: none; }
+.b3v-mus-h { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; } .b3v-mus-h b { font-size: 13px; font-weight: 600; color: var(--ink); } .b3v-mus-h span { color: var(--muted); }
+.b3v-mus-r { display: grid; grid-template-columns: 10px auto minmax(0, 1fr); align-items: baseline; gap: 0 6px; line-height: 1.35; }
+.b3v-mus-r > i { width: 10px; height: 10px; border-radius: 3px; align-self: center; }
+.b3v-mus-r > small { font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.b3v-mus-r > span:only-child { grid-column: 1 / -1; } .b3v-mus-r b { font-weight: 600; color: var(--ink); }
+.b3v-mus-r.b3v-ramp { grid-template-columns: auto minmax(40px, 120px) auto; justify-content: start; } .b3v-ramp > i { width: auto; height: 8px; border-radius: 4px; }
+.b3v-stage:has(.b3v-mus:not([hidden])) .b3v-hint { display: none; }
+.b3v-mode { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12.5px; }
+.b3v-mode > span { color: var(--muted); margin-right: 4px; }
+.b3v-mode button { height: 28px; padding: 0 10px; border-radius: var(--pill); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2); font: 600 12.5px var(--f-sans, inherit); cursor: pointer; }
+.b3v-mode button[aria-pressed="true"] { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--line-2)); color: var(--accent); }
+.b3v-load { display: flex; flex-direction: column; gap: 4px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r); font-size: 13px; color: var(--ink-2); }
+.b3v-load[hidden] { display: none; } .b3v-load .b3v-h { margin-bottom: 0; }
+.b3v-lv { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; } .b3v-lv > b { font-size: 20px; font-weight: 600; color: var(--ink); }
+.b3v-lf { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding-top: 4px; border-top: 1px solid var(--line); }
+.b3v-lf > b { color: var(--ink); font-weight: 600; } .b3v-lf b { font-weight: 600; }
+/* per-muscle load list (body.js bmLoadListHTML) */
+.bm-ll { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r); }
+.bm-ll-h, .bm-ll-r { display: grid; grid-template-columns: minmax(0, 1fr) 44px 64px; gap: 2px 10px; align-items: baseline; padding: 7px 10px; }
+.bm-ll-h { font-size: 11.5px; color: var(--muted); padding-bottom: 4px; } .bm-ll-h .n, .bm-ll-r .n { text-align: right; }
+.bm-ll-r { border-top: 1px solid var(--line); font-size: 13.5px; }
+.bm-ll-r .nm { font-weight: 600; } .bm-ll-r .n b { font-weight: 600; } .bm-ll-r .n small { color: var(--muted); font-size: 11.5px; }
+.bm-ll-r .bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; margin: 3px 0 1px; } .bm-ll-r .bar i { display: block; height: 100%; background: var(--lift); border-radius: 2px; }
+.bm-ll-r .why { grid-column: 1 / -1; font-size: 12.5px; color: var(--muted); }
+.bm-est { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px dashed var(--line-2); border-radius: 10px; font-style: normal; font-size: 11px; line-height: 17px; color: var(--muted); white-space: nowrap; }
+.bm-ll-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+.bm-ll-empty { font-size: 13px; color: var(--muted); }
+.tp-load { display: flex; flex-direction: column; gap: 6px; } .tp-lh { font-size: 13px; font-weight: 600; color: var(--ink-2); }
 @media (max-width: 1280px) {
   .prp.with3d { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .prp.with3d .prp-side { grid-column: 1 / -1; max-height: none; }

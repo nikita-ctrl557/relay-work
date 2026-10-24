@@ -111,7 +111,7 @@ function bodyView() {
   if (!prog) return `<div class="mcard2 empty">Loading…</div>`;
   return `${src.poseClip ? `<div class="sec-h"><h2>Form</h2><span class="r">${esc(poseFor().clip?.title || "")}</span></div><div class="mcard2" id="mpose-slot"></div>` : ""}
     <div class="sec-h"><h2>Muscles</h2><span class="r">Last 7 days</span></div>
-    <div class="mcard2">${trainingProfileHTML(prog, {compact: false})}</div>`;
+    <div class="mcard2">${trainingProfileHTML(prog, {compact: false, member: me})}</div>`;
 }
 // the posture player lives in one node that survives re-renders, so the animation doesn't restart
 let poseState = {id: null, clip: null, host: null, player: null};
@@ -181,6 +181,7 @@ addEventListener("hashchange", () => { renderTabs(); render(); scrollTo(0, 0); }
   if (!cfg.members.some(m => m.id === me)) me = cfg.members[0]?.id;
   live = await src.live().catch(() => null);
   renderTabs(); render(); loadProg();
+  Promise.resolve(src.pose3dReady).then(ok => { if (ok && route() === "body") render(); }).catch(() => {}); // muscle load uses the 3D once it's in
   setInterval(async () => {
     live = await src.live().catch(() => live);
     if (Date.now() - progAt > 15000) loadProg(); else if (route() === "today" || route() === "time") render();

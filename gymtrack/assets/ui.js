@@ -177,18 +177,28 @@ function trainingHistory(prog) {
   return {sets, sessions, now: Date.now() / 1000};
 }
 
-function trainingProfileHTML(prog, {compact = false} = {}) {
+/* a member's per-set 3D mobility (replay with a 3D sidecar, once loaded), or null */
+function measuredSetsFor(memberId) {
+  const m = memberId && cfg?.members?.find(x => x.id === memberId);
+  try { return m && typeof src !== "undefined" && src?.mobility3d ? src.mobility3d(m.cam, m.pid)?.sets || null : null; } catch { return null; }
+}
+
+function trainingProfileHTML(prog, {compact = false, member = null} = {}) {
   if (typeof bmBodyMap === "undefined") return "";
   const h = trainingHistory(prog), opts = {machines: cfg.machines};
-  const load = bmWeekLoad(h, opts), gaps = bmGaps(load), arch = bmArchetype(h, opts);
+  // weight each set by what was measured in 3D (range of motion, reps, time under load); label-only + "estimated" without it
+  h.sets = bmAttachMeasured(h.sets, measuredSetsFor(member), opts);
+  const ml = bmWeekLoadMeasured(h, opts), load = ml.load, gaps = bmGaps(load), arch = bmArchetype(h, opts);
+  const notes = Object.fromEntries(Object.entries(ml.detail).map(([id, d]) => [id, `${bmNum(d.sets)} sets${d.est === d.n ? " · estimated" : ""}\n${d.why}`]));
   const recs = bmRecommendations(h, load, opts).slice(0, compact ? 3 : 6), next = bmNextSession(h, load, opts);
   const icon = l => l === "warn" ? `<span class="lvl warn" title="Needs attention"></span>` : l === "good" ? `<span class="lvl good" title="Good"></span>` : `<span class="lvl" title="Tip"></span>`;
   const acts = Object.entries(prog?.activities || {}).filter(([a]) => a !== "standing").sort((a, b) => b[1] - a[1]).slice(0, 5);
   return `<div class="tprof">
-    <div class="tp-map">${bmBodyMap(load, {highlight: gaps})}</div>
+    <div class="tp-map">${bmBodyMap(load, {highlight: gaps, unit: "effective sets this week", notes})}</div>
     <div class="tp-side">
       <dl class="kv"><dt>Training style</dt><dd><b>${esc(arch.name)}</b>${(arch.traits || []).length ? `<span class="muted"> · ${(arch.traits || []).slice(0, 3).map(esc).join(", ")}</span>` : ""}</dd>
       ${acts.length ? `<dt>Exercises seen</dt><dd>${acts.map(([a, s]) => `${esc(actName(a))} <span class="muted">${fmtDur(s)}</span>`).join(", ")}</dd>` : ""}</dl>
+      <div class="tp-load"><div class="tp-lh">Muscle load <span class="muted">· last 7 days</span></div>${bmLoadListHTML(ml)}</div>
       <div class="tp-recs">${recs.map(r => `<div class="tp-rec">${icon(r.level)}<div><b>${esc(r.title)}</b><span>${esc(r.detail)}</span></div></div>`).join("")}</div>
       ${next?.exercises?.length ? `<div class="tp-next"><span class="lbl">Suggested next session</span><b>${esc(next.focus)}</b><span>${next.exercises.map(e => esc(exName(e))).join(" · ")}</span></div>` : ""}
     </div></div>`;

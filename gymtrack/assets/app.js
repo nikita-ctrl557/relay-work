@@ -395,6 +395,7 @@ function MemberPage(id) {
     unmount() { this.player?.destroy(); this.replay?.destroy(); },
     async load() {
       prog = await src.progress(id).catch(() => null); built = false; this.update();
+      if (!this.p3wait) this.p3wait = Promise.resolve(src.pose3dReady).then(ok => { if (ok && prog) { built = false; this.update(); } }).catch(() => {}); // 3D-measured muscle load
     },
     build(m) {
       if (!prog) return;
@@ -403,7 +404,7 @@ function MemberPage(id) {
       const pts = (prog.machines[trendM]?.history || []).map(h => ({day: h.day, sets: h.sets, v: metric === "kg" ? h.top_kg : h.reps / h.sets})).filter(x => x.v != null);
       const weeks = weeksFrom(prog, m);
       $("#phist").innerHTML = `<div class="stack-v">
-        <section class="card"><div class="card-h"><h2>Training profile</h2><span class="hint">Last 7 days</span></div><div class="card-b">${trainingProfileHTML(prog)}</div></section>
+        <section class="card"><div class="card-h"><h2>Training profile</h2><span class="hint">Last 7 days</span></div><div class="card-b">${trainingProfileHTML(prog, {member: id})}</div></section>
         <div class="grid2">
           <section class="card"><div class="card-h"><h2>Weekly training time</h2><span class="hint">min</span><span class="right legend"><span><i style="background:var(--lift)"></i>Lifting</span><span><i style="background:var(--rest)"></i>Resting</span></span></div><div class="card-b">${weeklyChart(weeks)}</div></section>
           <section class="card"><div class="card-h"><h2>Progress</h2><span class="right"><select class="input sm" id="tm" aria-label="Machine">${machines.map(x => `<option value="${esc(x)}" ${x === trendM ? "selected" : ""}>${esc(machineName(x))}</option>`).join("")}</select><select class="input sm" id="tk" aria-label="Measure"><option value="reps" ${metric === "reps" ? "selected" : ""}>Reps per set</option><option value="kg" ${metric === "kg" ? "selected" : ""}>Top weight</option></select></span></div><div class="card-b">${trendChart(pts, metric === "kg" ? "Top weight" : "Reps per set", metric === "kg" ? " kg" : "")}</div></section>

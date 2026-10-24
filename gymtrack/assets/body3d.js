@@ -11,7 +11,7 @@ const UP = new THREE.Vector3(0, 1, 0);
 const G = {};
 // limb profiles (radius relative to the proximal end, along the bone from proximal y=-0.5 to distal y=+0.5):
 // muscle bellies near the top, slim at the wrist / ankle
-const PROFILES = {
+export const PROFILES = {
   upper: [[0.96, -0.5], [1, -0.32], [0.96, -0.05], [0.84, 0.3], [0.8, 0.5]],
   fore: [[0.94, -0.5], [1, -0.3], [0.86, 0.05], [0.68, 0.35], [0.64, 0.5]],
   thigh: [[1, -0.5], [1.02, -0.3], [0.92, 0], [0.74, 0.35], [0.66, 0.5]],
@@ -23,9 +23,11 @@ function geos() {
   G.sph = new THREE.SphereGeometry(1, 20, 14);
   for (const [k, pr] of Object.entries(PROFILES)) G[k] = new THREE.LatheGeometry(pr.map(([r, y]) => new THREE.Vector2(r, y)), 18);
   // torso: lathe profile (waist -> rib cage -> rounded shoulders), unit height, unit radius at the chest
-  G.torso = new THREE.LatheGeometry([[0, -0.5], [0.74, -0.5], [0.8, -0.4], [0.78, -0.2], [0.86, 0.02], [0.97, 0.2], [1, 0.32], [0.92, 0.42], [0.7, 0.49], [0.32, 0.53], [0, 0.53]].map(([r, y]) => new THREE.Vector2(r, y)), 28);
+  G.torso = new THREE.LatheGeometry(TORSO_PROFILE.map(([r, y]) => new THREE.Vector2(r, y)), 28);
   return G;
 }
+
+export const TORSO_PROFILE = [[0, -0.5], [0.74, -0.5], [0.8, -0.4], [0.78, -0.2], [0.86, 0.02], [0.97, 0.2], [1, 0.32], [0.92, 0.42], [0.7, 0.49], [0.32, 0.53], [0, 0.53]];
 
 // [from, to, proximal radius m, side, profile] ; side: 0 centre, 1 left, 2 right
 // (an adult's build: upper arm ~11 cm across, thigh ~19 cm; thin limbs read as a stick figure from across the room)
@@ -60,7 +62,10 @@ export function facing(J, out = new THREE.Vector3()) {
 }
 
 /* mats: {body, left, right, joint, head, faint} (any may repeat; faint = see-through, for joints the 3D is unsure of).
-   Returns {group, set(J, conf), meshes}; conf: optional 13 per-joint confidences 0..1 (core.js pose3dAt .c) */
+   Returns {group, set(J, conf), meshes, parts}; conf: optional 13 per-joint confidences 0..1 (core.js pose3dAt .c).
+   Every limb, cap, the torso and the pelvis are oriented with local +z = the body's front (limbs: the side facing
+   forward when the limb hangs, rotating with it), so a painter can colour regions (muscle3d.js). The shapes are
+   rotationally symmetric, so this changes nothing visible. parts = {limbs (LIMBS order), caps (CAPS order), torso, pelvis, neck, head, hands, feet}. */
 export function makeBody(mats) {
   const g = geos(), group = new THREE.Group(), meshes = [];
   const add = (geo, m) => { const o = new THREE.Mesh(geo, m); o.castShadow = true; o.matrixAutoUpdate = false; group.add(o); meshes.push(o); return o; };
@@ -71,8 +76,12 @@ export function makeBody(mats) {
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), v = new THREE.Vector3();
   const X = new THREE.Vector3(), Yv = new THREE.Vector3(), Z = new THREE.Vector3(), f = new THREE.Vector3(), sm = new THREE.Vector3(), hm = new THREE.Vector3(), hc = new THREE.Vector3();
   const top = new THREE.Vector3(), bot = new THREE.Vector3(), spine = new THREE.Vector3(), nb = new THREE.Vector3(), d = new THREE.Vector3(), tq = new THREE.Quaternion();
+  const hint = new THREE.Vector3(), cq = new THREE.Quaternion();
   const seg = (o, A, B, r) => { v.subVectors(B, A); const L = v.length(); if (L < 1e-4) { o.visible = false; return; } o.visible = true; q.setFromUnitVectors(UP, v.multiplyScalar(1 / L)); p.addVectors(A, B).multiplyScalar(0.5); o.matrix.compose(p, q, s.set(r, L, r)); };
   const ball = (o, c, rx, ry = rx, rz = rx, quat = null) => { o.visible = true; o.matrix.compose(c, quat || q.identity(), s.set(rx, ry, rz)); };
+  // a limb from A to B, its local +z = its front: the facing when it hangs, swinging up / down with it in the sagittal plane
+  const segF = (o, A, B, r) => { v.subVectors(B, A); const L = v.length(); if (L < 1e-4) { o.visible = false; return; } o.visible = true; v.multiplyScalar(1 / L);
+    hint.copy(f).addScaledVector(UP, 3 * v.dot(f)); basis(v, hint, q); p.addVectors(A, B).multiplyScalar(0.5); o.matrix.compose(p, q, s.set(r, L, r)); };
   const basis = (y, zHint, out = new THREE.Quaternion()) => { Yv.copy(y).normalize(); Z.copy(zHint).addScaledVector(Yv, -zHint.dot(Yv)); if (Z.lengthSq() < 1e-8) Z.set(0, 0, 1); Z.normalize(); X.crossVectors(Yv, Z); m4.makeBasis(X, Yv, Z); return out.setFromRotationMatrix(m4); };
   const base = new Map(meshes.map(o => [o, o.material])); let faded = false;
   // see-through bodies (fading, neutral stand-ins): a depth-only twin of every mesh drawn just before the body (after
@@ -83,9 +92,9 @@ export function makeBody(mats) {
     // overall build from the leg length (bones are rigid in pose3d v2, so this is steady per person)
     const legL = (J[7].distanceTo(J[9]) + J[9].distanceTo(J[11]) + J[8].distanceTo(J[10]) + J[10].distanceTo(J[12])) / 2;
     const k = Math.max(0.85, Math.min(1.15, legL / 0.84));
-    LIMBS.forEach(([a, b, r], i) => seg(limbs[i], J[a], J[b], r * k));
-    CAPS.forEach(([j, r], i) => ball(caps[i], J[j], r * k));
-    facing(J, f);
+    facing(J, f); basis(UP, f, cq);
+    LIMBS.forEach(([a, b, r], i) => segF(limbs[i], J[a], J[b], r * k));
+    CAPS.forEach(([j, r], i) => ball(caps[i], J[j], r * k, r * k, r * k, cq));
     sm.addVectors(J[1], J[2]).multiplyScalar(0.5); hm.addVectors(J[7], J[8]).multiplyScalar(0.5);
     const shW = J[1].distanceTo(J[2]), hpW = J[7].distanceTo(J[8]);
     // torso: from just above the hip line to the shoulder line, oriented by the spine and facing
@@ -115,5 +124,5 @@ export function makeBody(mats) {
     for (const o of meshes) o.matrixWorldNeedsUpdate = true;
     if (twins) meshes.forEach((o, i) => { const d = twins[i]; d.matrix.copy(o.matrix); d.visible = o.visible && o.material !== mats.faint; d.matrixWorldNeedsUpdate = true; });
   }
-  return {group, set, meshes};
+  return {group, set, meshes, parts: {limbs, caps, torso, pelvis, neck, head, hands, feet}};
 }

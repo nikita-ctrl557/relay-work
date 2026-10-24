@@ -2,10 +2,15 @@
 
    Orbit (drag), zoom (scroll / pinch), quick views (Front / Side / Top / Camera). "Camera" is the real CCTV
    camera the 3D was solved with, framed exactly like the cropped replay video, with that video behind the
-   body and the 2D detections on top, so the fit can be judged at a glance. */
+   body and the 2D detections on top, so the fit can be judged at a glance.
+
+   Colour modes (body.js + muscle3d.js): "set" paints the muscles the current set's exercise works (primary strong,
+   secondary light) and says how much the set counts from what the 3D measured; "session" paints this person's
+   effective sets over the whole recording as heat; "sides" keeps the left / right colours. */
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 import {makeBody, jointsFrom, facing} from "./body3d.js";
+import {musclePainter} from "./muscle3d.js";
 
 const dark = () => matchMedia("(prefers-color-scheme: dark)").matches && document.documentElement.dataset.theme !== "light" || document.documentElement.dataset.theme === "dark";
 const EX = {overhead_press: "Overhead press", deadlift: "Deadlift", squat: "Squat", row: "Row", bench_press: "Bench press", curl: "Curl", lunge: "Lunge", raise: "Raise", pull_up: "Pull-up", hinge: "Hinge", press: "Press"};
@@ -18,12 +23,15 @@ export function mountBody3D(host, {tr, state, seek}) {
   const D = dark();
   host.innerHTML = `<div class="b3v"><div class="b3v-stage"><canvas class="b3v-gl"></canvas><canvas class="b3v-ov"></canvas>
       <div class="b3v-views" role="group" aria-label="View">${[["front", "Front"], ["side", "Side"], ["top", "Top"], ["cam", "Camera"]].map(([k, l]) => `<button data-v="${k}" aria-pressed="false">${l}</button>`).join("")}</div>
-      <div class="b3v-key"><span><i class="l"></i>Left</span><span><i class="r"></i>Right</span><span class="b3v-k2" hidden><i class="d"></i>2D detection</span></div>
+      <div class="b3v-key"><span class="b3v-lr"><i class="l"></i>Left</span><span class="b3v-lr"><i class="r"></i>Right</span><span class="b3v-k2" hidden><i class="d"></i>2D detection</span></div>
+      <div class="b3v-mus" hidden aria-live="polite"></div>
       <button class="b3v-vid" hidden aria-pressed="true">Video</button>
       <div class="b3v-msg" hidden></div><span class="b3v-hint">${matchMedia("(pointer: coarse)").matches ? "Drag to rotate · pinch to zoom" : "Drag to rotate · scroll to zoom"}</span></div>
-    <div class="b3v-read"><div class="b3v-ang"></div><div class="b3v-mob"></div></div></div>`;
+    <div class="b3v-mode" role="group" aria-label="Colour the body by"><span>Colour</span>${[["set", "Muscles in set"], ["session", "Session load"], ["sides", "Left / right"]].map(([k, l]) => `<button data-mode="${k}" aria-pressed="false">${l}</button>`).join("")}</div>
+    <div class="b3v-read"><div class="b3v-load" hidden></div><div class="b3v-ang"></div><div class="b3v-mob"></div></div></div>`;
   const stage = host.querySelector(".b3v-stage"), cv = host.querySelector(".b3v-gl"), ov = host.querySelector(".b3v-ov"), og = ov.getContext("2d"), msg = host.querySelector(".b3v-msg");
   const angEl = host.querySelector(".b3v-ang"), mobEl = host.querySelector(".b3v-mob"), vidBtn = host.querySelector(".b3v-vid"), k2 = host.querySelector(".b3v-k2");
+  const musEl = host.querySelector(".b3v-mus"), loadEl = host.querySelector(".b3v-load"), keyEl = host.querySelector(".b3v-key"), lrEls = host.querySelectorAll(".b3v-lr");
 
   const renderer = new THREE.WebGLRenderer({canvas: cv, antialias: true}); renderer.setPixelRatio(Math.min(2, devicePixelRatio));
   renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -44,6 +52,12 @@ export function mountBody3D(host, {tr, state, seek}) {
   const std = (c, o = {}) => new THREE.MeshStandardMaterial({color: c, roughness: 0.55, metalness: 0.05, ...o});
   const mats = {body: std(D ? 0x9aa6b2 : 0x6f7d8a), left: std(0x0a8ccc), right: std(0xe2574c), joint: std(D ? 0xd5dce2 : 0xe9edf1, {roughness: 0.45}), head: std(D ? 0xb3bdc7 : 0x7f8c99)};
   const body = makeBody(mats); scene.add(body.group);
+  const MC = {base: D ? 0x9aa6b2 : 0x6f7d8a, strong: D ? 0xff7846 : 0xf0622d, light: D ? 0xffc6a8 : 0xf7b294};
+  const painter = musclePainter(body, MC), hex = n => "#" + n.toString(16).padStart(6, "0");
+  let mode = "set"; try { const m = localStorage.getItem("gymtrack:b3vmode"); if (["set", "session", "sides"].includes(m)) mode = m; } catch {}
+  const modeBtns = host.querySelectorAll("[data-mode]"), modePressed = () => modeBtns.forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === mode));
+  host.querySelector(".b3v-mode").onclick = e => { const b = e.target.closest("[data-mode]"); if (!b) return; mode = b.dataset.mode; modePressed(); musKey = null; try { localStorage.setItem("gymtrack:b3vmode", mode); } catch {} };
+  modePressed();
   let J = null, pelvis = new THREE.Vector3(GX, 0.95, GZ), haveFrame = false;
 
   const controls = new OrbitControls(camera, cv); controls.enableDamping = true; controls.dampingFactor = 0.12; controls.minDistance = 0.8; controls.maxDistance = 14; controls.maxPolarAngle = Math.PI / 2 - 0.02;
@@ -59,7 +73,7 @@ export function mountBody3D(host, {tr, state, seek}) {
     return t.clone().add(new THREE.Vector3(0, 4.6, 0)).addScaledVector(f, -0.05);
   }
   function setView(k, now = false) {
-    view = k; pressed();
+    view = k; pressed(); musKey = null;
     const isCam = k === "cam"; controls.enabled = true; vidBtn.hidden = !isCam || !vtex; k2.hidden = !isCam; stage.classList.toggle("is-cam", isCam);
     if (!isCam) { camera.clearViewOffset(); camera.fov = 38; camera.aspect = (cv.clientWidth || 4) / (cv.clientHeight || 5); camera.near = 0.05; camera.updateProjectionMatrix(); scene.background = BG; floorG.visible = true;
       const p1 = goal(k); if (now) { camera.position.copy(p1); controls.target.copy(pelvis); } else anim = {t0: performance.now(), off0: camera.position.clone().sub(controls.target), tg0: controls.target.clone()}; }
@@ -101,6 +115,61 @@ export function mountBody3D(host, {tr, state, seek}) {
     return {rect, W0, H0};
   }
 
+  /* ---- muscles (body.js globals; without them the view keeps its left / right colours) ---- */
+  const HAVE_BM = typeof BM_EXERCISES !== "undefined" && typeof bmSetFactor === "function";
+  const bmOpts = () => ({machines: (typeof cfg !== "undefined" && cfg?.machines) || null});
+  const mobSets = () => tr.mobility3d?.()?.sets || [];
+  const asBm = st => ({exercise: st.ex || null, machine: st.m, reps: st.reps, duration_s: st.t1 - st.t0, m3: bmMobFor(st, mobSets())});
+  const setCache = new Map();
+  function setInfo(st) {
+    if (!setCache.has(st)) { const F = bmSetFactor(asBm(st), bmOpts()), E = BM_EXERCISES[F.ex], levels = {};
+      for (const m of E.secondary) levels[m] = 0.45; for (const m of E.primary) levels[m] = 1;
+      setCache.set(st, {F, E, levels: Object.keys(levels).length ? levels : null}); }
+    return setCache.get(st);
+  }
+  let sess = null;
+  function session() { // this person's whole recording: effective sets per muscle
+    if (sess) return sess;
+    const res = bmMeasuredLoad(tr.sets.map(asBm), bmOpts()), max = Math.max(0, ...Object.values(res.load)), levels = {};
+    if (max > 0) for (const [m, v] of Object.entries(res.load)) if (v > 0) levels[m] = Math.round(Math.max(0.12, v / max) * 100) / 100;
+    return sess = {res, levels: max > 0 ? levels : null, n: tr.sets.length};
+  }
+  const names = ids => ids.map(id => esc(bmMuscleName(id))).join(" · ");
+  const sw = c => `<i style="background:${hex(c)}"></i>`;
+  const f2 = v => (Math.round(v * 100) / 100).toFixed(2);
+  let musKey = null;
+  function muscles(t) {
+    const cur = tr.sets.find(s => t >= s.t0 && t <= s.t1) || null;
+    const k = `${mode}|${cur ? cur.t0 : "-"}`; if (k === musKey) return; musKey = k;
+    let levels = null, leg = "", load = "";
+    if (HAVE_BM && mode === "set" && cur) {
+      const {F, E, levels: L} = setInfo(cur); levels = L;
+      leg = L ? `<div class="b3v-mus-h"><b>${esc(E.name)}</b><span>muscles worked</span></div>`
+          + `<div class="b3v-mus-r">${sw(MC.strong)}<small>Primary</small><span>${names(E.primary)}</span></div>`
+          + (E.secondary.length ? `<div class="b3v-mus-r">${sw(MC.light)}<small>Secondary</small><span>${names(E.secondary)}</span></div>` : "")
+        : `<div class="b3v-mus-h"><b>Exercise not recognised</b><span>no muscles to show</span></div>`;
+      if (L) {
+        const ref = BM_ROM_REF[F.ex];
+        load = `<div class="b3v-h">Muscle load · this set</div><div class="b3v-lv"><b class="num">${f2(F.f)}</b><span>effective set${F.f === 1 ? "" : "s"} for each primary muscle, half that for secondary</span>${F.est ? `<em class="bm-est">estimated</em>` : ""}</div>`
+          + (F.est ? `<div class="b3v-lf"><span>${esc(F.note ? F.note[0].toUpperCase() + F.note.slice(1) : "Not measured")}: counted as 1 set from the exercise label</span></div>`
+            : `<div class="b3v-lf"><span>${ref.depth && F.depth != null ? `Avg depth <b class="num">${Math.round(F.depth)}°</b> ${ref.what} · ` : ""}${ref.depth ? "range" : `${ref.what[0].toUpperCase() + ref.what.slice(1)} range`} <b class="num">${Math.round(F.rom)}°</b> <span class="muted">vs ${ref.full}° full-range reference</span></span><b class="num">×${f2(F.romF)}</b></div>`
+            + `<div class="b3v-lf"><span><b class="num">${F.reps}</b> reps · <b class="num">${Math.round(F.tul)} s</b> under load</span><b class="num">×${f2(F.effF)}</b></div>`);
+      }
+    } else if (HAVE_BM && mode === "session") {
+      const S = session(); levels = S.levels;
+      const top = Object.entries(S.res.load).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 4);
+      leg = levels ? `<div class="b3v-mus-h"><b>This session</b><span>${S.n} set${S.n === 1 ? "" : "s"} · effective sets</span></div>`
+          + `<div class="b3v-mus-r b3v-ramp"><small>Less</small><i style="background:linear-gradient(90deg, ${hex(MC.light)}, ${hex(MC.strong)})"></i><small>More</small></div>`
+          + `<div class="b3v-mus-r"><span>${top.map(([m, v]) => `${esc(bmMuscleName(m))} <b class="num">${bmNum(v)}</b>`).join(" · ")}</span></div>`
+        : `<div class="b3v-mus-h"><b>This session</b><span>no recognised sets yet</span></div>`;
+      load = levels ? `<div class="b3v-h">Muscle load · this session</div>${bmLoadListHTML(S.res, {targets: {}, period: "this session"})}` : "";
+    }
+    painter.set(levels);
+    musEl.innerHTML = leg; musEl.hidden = !leg;
+    lrEls.forEach(e => e.hidden = !!levels); keyEl.hidden = !!levels && k2.hidden;
+    loadEl.innerHTML = load; loadEl.hidden = !load;
+  }
+
   function readouts(p, t) {
     const A = p?.A || {}, cell = (l, v, u = "°", tip = "") => `<div data-tip="${tip}"><span>${l}</span><b class="num">${r0(v)}${v == null || Number.isNaN(v) ? "" : u}</b></div>`;
     const pair = (l, a, b, tip) => `<div data-tip="${tip}"><span>${l}</span><b class="num"><em>L</em>${r0(A[a])}°<em>R</em>${r0(A[b])}°</b></div>`;
@@ -136,6 +205,7 @@ export function mountBody3D(host, {tr, state, seek}) {
       sun.position.copy(pelvis).add(new THREE.Vector3(1.5, 4, 2.2)); sun.target.position.copy(pelvis);
     } else { body.group.visible = false; msg.hidden = false; msg.textContent = tr.has3d() ? "Not measured in 3D at this moment" : "No 3D body for this person"; }
     if (Math.abs(t - lastRead) > 0.15 || lastT == null) { lastRead = t; readouts(p, t); }
+    muscles(t);
     lastT = t;
     if (anim) { // swing around the body (direction and distance separately), time-based so slow devices finish too
       const k = Math.min(1, (performance.now() - anim.t0) / 650), e = k * k * (3 - 2 * k), off1 = goal(view).sub(pelvis);
@@ -160,5 +230,5 @@ export function mountBody3D(host, {tr, state, seek}) {
   }
   setView("front", true);
   raf = requestAnimationFrame(frame);
-  return {destroy() { cancelAnimationFrame(raf); ro.disconnect(); controls.dispose(); vtex?.dispose(); renderer.dispose(); host.innerHTML = ""; }};
+  return {destroy() { cancelAnimationFrame(raf); ro.disconnect(); controls.dispose(); vtex?.dispose(); painter.dispose(); renderer.dispose(); host.innerHTML = ""; }};
 }

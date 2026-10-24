@@ -50,8 +50,7 @@ const BM_EXERCISES = {
   situp:          {name: "Sit-up",           primary: ["abs"],                           secondary: ["obliques"],                                                      pattern: "core",   kind: "isolation", equip: "body"},
   raise:          {name: "Front raise",      primary: ["front_delts"],                   secondary: ["side_delts", "traps"],                                           pattern: "push",   kind: "isolation", equip: "free"},
   battle_rope:    {name: "Battle ropes",     primary: ["front_delts", "forearms"],       secondary: ["side_delts", "biceps", "abs", "upper_back"],                     pattern: "conditioning", kind: "conditioning", equip: "body"},
-  plank:          {name: "Plank / floor core",
-  raise:          {name: "Front raise",      primary: ["front_delts"],                   secondary: ["side_delts", "traps"],                                           pattern: "push",   kind: "isolation", equip: "free"}, primary: ["abs"],                         secondary: ["obliques", "front_delts", "glutes"],                             pattern: "core",   kind: "isolation", equip: "body"},
+  plank:          {name: "Plank / floor core", primary: ["abs"],                         secondary: ["obliques", "front_delts", "glutes"],                             pattern: "core",   kind: "isolation", equip: "body"},
   unknown:        {name: "Unrecognised exercise", primary: [], secondary: [],                                                                                       pattern: null,     kind: null,        equip: null},
   // machine / station exercises
   bench_press:    {name: "Bench press",      primary: ["chest", "triceps"],              secondary: ["front_delts"],                                                   pattern: "push",   kind: "compound",  equip: "free"},
@@ -146,6 +145,119 @@ function bmRecentSets(sets, days = 7, now = Date.now() / 1000) { const t0 = now 
 /* convenience: this week's load for a history */
 const bmWeekLoad = (history, opts) => bmMuscleLoad(bmRecentSets(history?.sets, 7, bmNow(history)), opts);
 
+/* ================================================================
+   Measured load: what the 3D actually saw, not just the exercise label
+   ================================================================ */
+/* Full-range reference per exercise for its main 3D angle (degrees, 0 = straight joint): the textbook range of a
+   full rep. angle names follow server/gymtrack/pose3d.py (MAIN_ANGLE; lateral / front raises use the shoulder
+   angle, which MAIN_ANGLE doesn't list). depth: describe the set by its average bottom-of-rep angle. */
+const BM_ROM_REF = {
+  squat:          {angle: "knee_flex", full: 120, what: "knee flexion", depth: true},
+  lunge:          {angle: "knee_flex", full: 100, what: "knee flexion", depth: true},
+  leg_press:      {angle: "knee_flex", full: 100, what: "knee flexion", depth: true},
+  deadlift:       {angle: "hip_flex", full: 90, what: "hip hinge"},
+  hip_thrust:     {angle: "hip_flex", full: 90, what: "hip hinge"},
+  cable_row:      {angle: "elbow_flex", full: 100, what: "elbow"},
+  row:            {angle: "elbow_flex", full: 90, what: "elbow"},
+  bench_press:    {angle: "elbow_flex", full: 90, what: "elbow"},
+  incline_press:  {angle: "elbow_flex", full: 90, what: "elbow"},
+  push_up:        {angle: "elbow_flex", full: 90, what: "elbow"},
+  overhead_press: {angle: "elbow_flex", full: 100, what: "elbow"},
+  shoulder_press_machine: {angle: "elbow_flex", full: 100, what: "elbow"},
+  triceps_pushdown: {angle: "elbow_flex", full: 90, what: "elbow"},
+  curl:           {angle: "elbow_flex", full: 120, what: "elbow"},
+  lat_pulldown:   {angle: "elbow_flex", full: 100, what: "elbow"},
+  pull_up:        {angle: "elbow_flex", full: 110, what: "elbow"},
+  lateral_raise:  {angle: "shoulder_abd", full: 80, what: "shoulder abduction"},
+  raise:          {angle: "shoulder_flex", full: 90, what: "shoulder flexion"},
+};
+/* a set counts fully for effort at >= 8 reps or >= 30 s under load (each is half of the effort factor) */
+const BM_EFFORT = {reps: 8, tul_s: 30, min: 0.25};
+const bmClamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+/* the 3D mobility entry (core.js mobility3d().sets) for one replay set {t0, pid} */
+const bmMobFor = (set, mob) => (mob || []).find(c => Math.abs(c.t0 - set.t0) < 0.05 && (c.pid == null || set.pid == null || c.pid === set.pid)) || null;
+
+/* attach 3D mobility entries to history sets ({start, end, reps, exercise}) that have lost their replay times:
+   matched in order by exercise, set length (±0.35 s) and reps. Returns new set objects; unmatched sets get m3 = null. */
+function bmAttachMeasured(sets, mob, opts = {}) {
+  const pool = [...(mob || [])].sort((a, b) => a.t0 - b.t0), used = new Set();
+  return [...(sets || [])].sort((a, b) => a.start - b.start).map(s => {
+    const ex = bmExerciseFor(s, opts.machines), dur = (s.end ?? s.start) - s.start;
+    const c = pool.find(c => !used.has(c) && (!c.ex || c.ex === ex) && Math.abs((c.t1 - c.t0) - dur) < 0.35 && (c.reps_counted == null || c.reps_counted === s.reps));
+    if (c) used.add(c);
+    return {...s, m3: c || null};
+  });
+}
+
+/* How much one set counts. s = {exercise|machine, reps, duration_s | start+end, m3: mobility entry | null}.
+   measured (3D range of the main angle usable): f = romF × effF, where
+     romF = measured range / full-range reference, clamped 0.25..1 (a deeper-than-reference rep doesn't count extra)
+     effF = ½·min(1, reps / 8) + ½·min(1, time under load / 30 s), clamped 0.25..1
+   otherwise f = 1 (the label-only rule) and est = true, with the reason in note. */
+function bmSetFactor(s, opts = {}) {
+  const ex = bmExerciseFor(s, opts.machines), ref = BM_ROM_REF[ex], m = s.m3, reps = s.reps || 0;
+  const tul = s.duration_s ?? Math.max(0, (s.end ?? s.start) - s.start);
+  const out = {ex, reps, tul, f: 1, est: true, note: null, rom: null, ref: ref?.full ?? null, romF: null, effF: null, depth: null};
+  if (!m) { out.note = "no 3D for this set"; return out; }
+  if (!ref) { out.note = "no full-range reference for this exercise"; return out; }
+  const r = m.ranges?.[ref.angle], rom = m.main === ref.angle && m.rom_deg != null ? m.rom_deg : r ? r[1] - r[0] : null;
+  if (!(rom > 0) || rom > 175) { out.note = "3D range not usable"; return out; }
+  const effF = bmClamp(0.5 * Math.min(1, reps / BM_EFFORT.reps) + 0.5 * Math.min(1, tul / BM_EFFORT.tul_s), BM_EFFORT.min, 1);
+  const romF = bmClamp(rom / ref.full, 0.25, 1);
+  if (ref.depth) { const pk = m.main === ref.angle ? (m.reps || []).map(x => x.peak).filter(v => v != null) : []; out.depth = pk.length ? bmAvg(pk) : r ? r[1] : null; }
+  return {...out, f: romF * effF, est: false, rom, romF, effF};
+}
+
+/* Measured muscle load. Per set: f (bmSetFactor) × 1 for each primary muscle, × 0.5 for each secondary one.
+   Returns {load: {muscle: effective sets}, detail: {muscle: {sets, eff, n, est, why}}, perSet: [factor...]}, where
+   sets = the label-only count (same as bmMuscleLoad), eff = effective sets, n = sets that touched it,
+   est = how many of those had no usable 3D, why = a short reason ("Squat ×2, avg depth 92° knee flexion"). */
+function bmMeasuredLoad(sets, opts = {}) {
+  const load = Object.fromEntries(BM_MUSCLES.map(m => [m.id, 0])), detail = {}, perSet = [];
+  for (const s of sets || []) {
+    const F = bmSetFactor(s, opts), ex = BM_EXERCISES[F.ex]; perSet.push(F);
+    for (const [ids, w] of [[ex.primary, 1], [ex.secondary, 0.5]]) for (const id of ids) {
+      const d = detail[id] ||= {sets: 0, eff: 0, n: 0, est: 0, by: {}};
+      d.sets += w; d.eff += w * F.f; d.n++; if (F.est) d.est++; load[id] += w * F.f;
+      const b = d.by[F.ex] ||= {n: 0, est: 0, eff: 0, rom: [], depth: []};
+      b.n++; b.eff += w * F.f; if (F.est) b.est++; else { b.rom.push(F.rom); if (F.depth != null) b.depth.push(F.depth); }
+    }
+  }
+  for (const d of Object.values(detail)) d.why = bmWhy(d.by);
+  return {load, detail, perSet};
+}
+function bmWhy(by) {
+  return Object.entries(by).sort((a, b) => b[1].eff - a[1].eff).slice(0, 2).map(([ex, b]) => {
+    const E = BM_EXERCISES[ex], ref = BM_ROM_REF[ex], head = `${E?.name || ex} ×${b.n}`;
+    if (!b.rom.length) return `${head}, estimated (no 3D)`;
+    // sets that differ a lot (a full and a partial squat) show their span: an average would describe neither
+    const desc = (vals, word) => { const lo = Math.round(Math.min(...vals)), hi = Math.round(Math.max(...vals));
+      return vals.length > 1 && hi - lo > 30 ? `${word} ${lo}–${hi}°` : `${vals.length > 1 ? "avg " : ""}${word} ${Math.round(bmAvg(vals))}°`; };
+    const what = ref.depth && b.depth.length ? `${desc(b.depth, "depth")} ${ref.what}` : `${ref.what} ${desc(b.rom, "range")}`;
+    return `${head}, ${what}${b.est ? ` (${b.est} estimated)` : ""}`;
+  }).join("; ");
+}
+/* this week's measured load for a history whose sets may carry m3 */
+const bmWeekLoadMeasured = (history, opts) => bmMeasuredLoad(bmRecentSets(history?.sets, 7, bmNow(history)), opts);
+
+/* Per-muscle list for a profile: muscle, sets, effective sets vs target, why, "estimated" tag.
+   opts.targets: {} to show no targets (bars then scale to the largest); opts.period: "this week" (default) / "this session". */
+function bmLoadListHTML(res, opts = {}) {
+  const T = opts.targets || bmWeeklyTargets(), period = opts.period || "this week", rows = Object.entries(res?.detail || {}).filter(([, d]) => d.sets > 0).sort((a, b) => b[1].eff - a[1].eff);
+  if (!rows.length) return `<div class="bm-ll-empty">No sets ${period}</div>`;
+  const maxEff = Math.max(1e-9, ...rows.map(([, d]) => d.eff));
+  const anyMeasured = rows.some(([, d]) => d.est < d.n);
+  return `<div class="bm-ll" role="table" aria-label="Muscle load ${period}"><div class="bm-ll-h" role="row"><span role="columnheader">Muscle</span><span role="columnheader" class="n">Sets</span><span role="columnheader" class="n">Effective</span></div>`
+    + rows.map(([id, d]) => {
+      const tag = d.est === d.n ? `<em class="bm-est" title="No usable 3D for these sets: counted from the exercise label">estimated</em>` : d.est ? `<em class="bm-est part" title="${d.est} of ${d.n} sets had no usable 3D">partly estimated</em>` : "";
+      const pct = Math.min(100, d.eff / (T[id] || maxEff) * 100);
+      return `<div class="bm-ll-r" role="row"><span class="nm" role="cell">${esc(bmMuscleName(id))}</span><span class="n num" role="cell">${bmNum(d.sets)}</span><span class="n num" role="cell"><b>${bmNum(d.eff)}</b>${T[id] ? `<small>/${T[id]}</small>` : ""}</span>`
+        + `<span class="bar" aria-hidden="true"><i style="width:${pct.toFixed(1)}%"></i></span><span class="why" role="cell">${esc(d.why)}${tag}</span></div>`;
+    }).join("")
+    + `</div><p class="bm-ll-note">${anyMeasured ? "Effective sets: each set counts 1 for the muscles it mainly works and ½ for helpers, scaled by the range of motion measured in 3D (against a full-range reference) and by reps and time under load. " : `No 3D measurements ${period}. `}Sets without usable 3D count at face value and are marked estimated.</p>`;
+}
+
 /* Muscles clearly under target: load below 35% of the weekly target. Empty when nothing was trained at
    all (no point outlining the whole body). Sorted most-missing first. */
 function bmGaps(load, targets = bmWeeklyTargets()) {
@@ -224,14 +336,14 @@ const BM_MIRROR = `transform="matrix(-1 0 0 1 160 0)"`;
 /* bmBodyMap(load, opts) → SVG string (width:100%, scales with its container).
    opts.view: "both" (default) | "front" | "back"; opts.highlight: muscle ids to outline (dashed, orange);
    opts.targets: override bmWeeklyTargets(); opts.legend: false to omit the in-SVG legend;
-   opts.label: aria label prefix; opts.unit: tooltip unit (default "sets this week"). */
+   opts.label: aria label prefix; opts.unit: tooltip unit (default "sets this week"); opts.notes: {muscle: extra tooltip line}. */
 function bmBodyMap(load = {}, opts = {}) {
   const view = opts.view || "both", targets = opts.targets || bmWeeklyTargets(), unit = opts.unit || "sets this week";
   const hl = new Set(opts.highlight || []), legend = opts.legend !== false;
   const views = view === "front" ? ["front"] : view === "back" ? ["back"] : ["front", "back"];
   const VW = 160, GAP = 24, W = views.length * VW + (views.length - 1) * GAP, H = legend ? 392 : 362;
   const sil = bmSilPath();
-  const tipFor = id => `${bmMuscleName(id)}\n${bmNum(load[id] || 0)} ${unit}${targets[id] ? ` · target ${targets[id]}` : ""}`;
+  const tipFor = id => `${bmMuscleName(id)}\n${bmNum(load[id] || 0)} ${unit}${targets[id] ? ` · target ${targets[id]}` : ""}${opts.notes?.[id] ? "\n" + opts.notes[id] : ""}`;
   const aria = (opts.label || "Muscles trained this week") + ": " + BM_MUSCLES.map(m => `${m.name} ${bmNum(load[m.id] || 0)}${targets[m.id] ? " of " + targets[m.id] : ""} sets`).join(", ");
   let s = `<svg class="bm-map" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(aria)}" style="display:block;width:100%;height:auto;max-width:${Math.round(W * 1.35)}px;margin:0 auto;font-family:var(--f-display)">`
     + `<title>${esc(opts.label || "Muscles trained this week")}</title>`
