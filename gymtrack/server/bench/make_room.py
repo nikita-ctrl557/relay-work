@@ -16,7 +16,8 @@ Per camera framing (segment):
      JSON (uint16 depths, base64) + the plate as JPEG texture, plus measured equipment footprints for
      the config's zones (points inside each zone polygon standing above the floor), grown by the zone's
      optional "station" (metres added on each side: where a lifter stands or sits to use it, e.g. inside a
-     rack's cage in front of its measured uprights, or on a plate-loaded machine's seat).
+     rack's cage in front of its measured uprights, or on a plate-loaded machine's seat). Contacts are searched
+     around the zone's "plan_hint" (else its "plan"), so writing the result back as "plan" doesn't move the search.
 The frontend (assets/twin3d.js) rebuilds vertex = C + depth * (D @ [u, v, 1]) in plan coordinates.
 """
 from __future__ import annotations
@@ -159,7 +160,7 @@ def build(segs_dir, frames_dir, seg, base=None):
     for zc_, p in zip(cc["zones"], zones_img):
         m = np.zeros((GH, GW), np.uint8); cv2.fillPoly(m, [np.int32(p * GW / W)], 1)
         sel = (m > 0) & anchored & (P[..., 2] > 0.12) & (P[..., 2] < 3.0)
-        pp = np.float32(zc_.get("plan") or [])
+        pp = np.float32(zc_.get("plan_hint") or zc_.get("plan") or [])   # where to look (+-EQ_GROW); "plan" may be this result
         e = None
         if len(pp) >= 3 and sel.sum() >= 15:
             cpt, pts = contact[sel], P[sel]

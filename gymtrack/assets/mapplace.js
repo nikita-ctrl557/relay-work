@@ -178,6 +178,8 @@ export function body3dOk(P, cam, box, kp = null) {
   if (!ref) return true;
   const rh = Math.max(ref[3] - ref[1], 12), rw = Math.max(ref[2] - ref[0], 8);
   if (y1 - y0 > 1.6 * rh + 15 || x1 - x0 > 2.2 * Math.max(rw, rh * 0.6) + 15) return false;          // drawn far bigger than the person
+  // cut off by the frame edge: only the visible part was measured, so the body must not spill far past it
+  if ((ref[0] < 4 || ref[2] > W0 - 4 || ref[3] > H0 - 4) && (y1 - y0 > 1.25 * rh + 10 || y0 < ref[1] - 0.2 * rh - 6)) return false;
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
   return Math.abs(cx - (ref[0] + ref[2]) / 2) < 0.6 * rw + 0.3 * rh + 10 && Math.abs(cy - (ref[1] + ref[3]) / 2) < 0.6 * rh + 10; // and where they are
 }

@@ -23,7 +23,8 @@ def prog(f, vt, sp):
         last[0] = time.time(); print(f'{seg} {f*100:.0f}% video {vt:.0f}s wall {time.time()-t:.0f}s', flush=True)
 rep = analyse(cam.source, cfg, cam, None, start_ts=0, timeline=tl, poses=poses, trace=trace, detect_every_s=0.2, on_progress=prog)
 out = {"timeline": tl, "sets": rep["replay_sets"], "people": rep["people"], "duration": rep["video_s"], "poses": poses,
-       "postprocess": rep.get("postprocess"), "vetoed": rep.get("vetoed"), "mirrors": rep.get("mirrors")}
+       "postprocess": rep.get("postprocess"), "vetoed": rep.get("vetoed"), "mirrors": rep.get("mirrors"),
+       "follow": rep.get("follow"), "zone_epochs": rep.get("zone_epochs")}
 json.dump(out, open(OUT + f'{seg}.json', 'w'), separators=(',', ':'), default=str)
 pickle.dump({"trace": trace, "timeline": tl, "poses": poses}, open(OUT + f'{seg}.pkl', 'wb'))
 print(seg, 'took', round(time.time() - t), 's video', rep['video_s'], 'sets', len(rep['replay_sets']), 'people', rep['people'].get('tracked'), rep.get('postprocess'),

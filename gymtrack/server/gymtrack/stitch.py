@@ -57,6 +57,7 @@ GAP_NN_ONE = 0.48     # ... (a single view after the gap must be further off)
 GAP_MARGIN = 0.08     # ... and clearly further than the ID's own views are from each other
 GAP_BASE = 0.2        # ... (that self-distance when there are too few views to measure it)
 GAP_BEFORE_S, GAP_AFTER_S = 60.0, 40.0
+HIDDEN_GAP_S = 8.0    # ... also this long without a clean view of the body
 PIECE_GAP_S = 30.0    # longest gap a cut-off piece may be re-linked across
 
 
@@ -471,9 +472,11 @@ def _gap_cuts(boxes, seq, min_gap: float = 1.5) -> list[float]:
     T = np.array([t for t, _ in seq])
     V = np.array([v for _, v in seq], np.float32)
     out = []
-    for (a, _), (b, _) in zip(boxes, boxes[1:]):
-        if b - a < min_gap:
-            continue
+    # the box missing (re-identified / stitched), or the box there but no clean view of the body for a while
+    # (hidden behind a rack or a crowd, where IDs also slide): both are moments to check
+    gaps = [(a, b, (a + b) / 2) for (a, _), (b, _) in zip(boxes, boxes[1:]) if b - a >= min_gap]
+    gaps += [(a, b, _cut_time(boxes, a, b)) for a, b in zip(T, T[1:]) if b - a >= HIDDEN_GAP_S]
+    for a, b, tc in sorted(gaps):
         ia = np.where((T >= a - GAP_BEFORE_S) & (T <= a + 0.5))[0][-40:]
         ib = np.where((T >= b - 0.5) & (T <= b + GAP_AFTER_S))[0][:20]
         if len(ia) < 3 or len(ib) < 1:
@@ -484,8 +487,8 @@ def _gap_cuts(boxes, seq, min_gap: float = 1.5) -> list[float]:
         if nn != nn:
             continue
         need = GAP_NN if len(ib) >= 2 else GAP_NN_ONE
-        if nn >= need and nn >= (base if base == base else GAP_BASE) + GAP_MARGIN:
-            out.append((a + b) / 2)
+        if nn >= need and nn >= (base if base == base else GAP_BASE) + GAP_MARGIN and all(abs(tc - c) > 3.0 for c in out):
+            out.append(tc)
     return out
 
 

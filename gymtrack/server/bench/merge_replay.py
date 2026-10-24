@@ -6,8 +6,10 @@ Segment start offsets are taken from the published data so times line up with th
 """
 import json, os, sys, collections
 S = '/tmp/claude-0/-home-user-relay-work/851771c1-781b-56fa-9dda-a42b6ec0afa3/scratchpad/'
-R = os.environ.get('RUN_DIR', S + 'rerun/'); OUT = S + 'replay/'
-os.makedirs(R + 'merged', exist_ok=True)
+R = os.environ.get('RUN_DIR', S + 'rerun/'); OUT = os.environ.get('REPLAY_OUT', S + 'replay/')
+MERGED = os.environ.get('MERGED_OUT', R + 'merged/')
+SEG_CFG = os.environ.get('SEG_DIR', S + 'yt/segs')   # per-segment configs (zones) for the lifter location check
+os.makedirs(MERGED, exist_ok=True)
 CAMS = {"floor": [f"floor{i}" for i in range(7)], "cables": ["cables0", "cables1"]}
 if len(sys.argv) > 1:  # merge only these cameras, e.g. "python merge_replay.py cables"
     CAMS = {k: v for k, v in CAMS.items() if k in sys.argv[1:]}
@@ -26,6 +28,18 @@ for cam, segs in CAMS.items():
 
     for n in segs:
         d = json.load(open(R + f'{n}.json'))
+        # lifter location check (postprocess.lifter_location; results analysed before it existed get it here, re-running it
+        # is a no-op): sets go to the person at the machine, spill-over sets from a neighbouring station are dropped
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+        from gymtrack.postprocess import lifter_location, _zone_geo
+        from gymtrack.exercises import refine_sets
+        from gymtrack.config import GymConfig
+        _cfg = GymConfig.load(f'{SEG_CFG}/{n}-config.json')
+        _ch = lifter_location(d['sets'], d['timeline'], _zone_geo(_cfg.cameras[0]), 640, 360, d.get('zone_epochs'))
+        if _ch:
+            d['sets'] = [s for s in d['sets'] if not s.get('_spill')]
+            refine_sets([s for s in d['sets'] if s.get('credit_by') == 'location'], [{'id': m.id, 'name': m.name, 'kind': m.kind} for m in _cfg.machines], d.get('poses', []))
+            print(n, 'lifter location:', _ch)
         off = old_segs[n]['start']; dur_old = old_segs[n]['end'] - old_segs[n]['start']
         if abs(d['duration'] - dur_old) > 0.05:
             print('WARNING duration mismatch', n, d['duration'], dur_old)
@@ -88,7 +102,7 @@ for cam, segs in CAMS.items():
         r['zones'] = dict(r['zones'].most_common()); r['sets'] = nsets.get(r['id'], 0)
     people = {"rows": sorted(rows.values(), key=lambda r: r['first']), "tracked": len(rows)}
     full = {"timeline": tl, "sets": sets, "poses": poses, "people": people, "duration": duration, "segments": segments}
-    json.dump(full, open(R + f'merged/{cam}.full.json', 'w'), separators=(',', ':'), default=str)
+    json.dump(full, open(MERGED + f'{cam}.full.json', 'w'), separators=(',', ':'), default=str)
     slim = {"timeline": tl, "sets": [{k: s.get(k) for k in SET_KEYS if s.get(k) is not None or k in ("pid", "reps")} for s in sets],
             "poses": [{"t": e['t'], "k": e['k']} for e in poses], "people": people, "duration": duration, "segments": segments}
     json.dump(slim, open(OUT + f'{cam}.json', 'w'), separators=(',', ':'))

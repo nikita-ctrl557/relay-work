@@ -89,7 +89,7 @@ export function mountBody3D(host, {tr, state, seek}) {
       const Mr = R.map(r => [r[0], r[1], r[2] * fl]); let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
       for (const v of J) { const d = [v.x - cam.C[0], v.z - cam.C[1], v.y - cam.C[2]], q = Mr.map(r => r[0] * d[0] + r[1] * d[1] + r[2] * d[2]); if (q[2] < 0.3) continue;
         const u = cam.f * q[0] / q[2] + (cam.cx ?? W0 / 2), w = cam.f * q[1] / q[2] + (cam.cy ?? H0 / 2); x0 = Math.min(x0, u); x1 = Math.max(x1, u); y0 = Math.min(y0, w); y1 = Math.max(y1, w); }
-      if (x1 > x0) { const h = Math.min(H0, Math.max((y1 - y0) * 1.7, H0 * 0.35)), w = Math.max(h * A, (x1 - x0) * 1.5), hh = w / A;
+      if (x1 > x0) { const h = Math.min(H0, Math.max((y1 - y0) * 2.1, H0 * 0.5)), w = Math.max(h * A, (x1 - x0) * 1.5), hh = w / A;
         const cl = (v, lo, hi) => hi < lo ? (lo + hi) / 2 : Math.max(lo, Math.min(hi, v)), tgt = {x: cl((x0 + x1) / 2 - w / 2, 0, W0 - w), y: cl((y0 + y1) / 2 - hh / 2, 0, H0 - hh), w, h: hh};
         camRect = camRect ? {x: camRect.x + (tgt.x - camRect.x) * 0.15, y: camRect.y + (tgt.y - camRect.y) * 0.15, w: camRect.w + (tgt.w - camRect.w) * 0.15, h: camRect.h + (tgt.h - camRect.h) * 0.15} : tgt;
         rect = {...camRect}; }

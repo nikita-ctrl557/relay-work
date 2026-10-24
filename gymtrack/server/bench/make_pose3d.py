@@ -282,6 +282,10 @@ def frame_quality(cam, g, X, UV, Wg):
     q = np.full(G, np.nan)
     for i in range(G):
         m = Wg[i] > 0
+        # joints the detector pinned to the frame border are clamped guesses: judge the body on the rest
+        inner = (UV[i][:, 0] > 4) & (UV[i][:, 0] < 636) & (UV[i][:, 1] > 4) & (UV[i][:, 1] < 356)
+        edge = bool((m & ~inner).any() or (m.sum() < 13))
+        m = m & inner
         if m.sum() < 3:
             continue
         uv = UV[i][m]
@@ -289,9 +293,8 @@ def frame_quality(cam, g, X, UV, Wg):
         e = np.linalg.norm(cam.project(X[i])[m] - uv, axis=-1)
         rel = float(np.nanmedian(e)) / ph if np.isfinite(e).any() else 9.0
         qi = np.clip(1.0 - (rel - 0.08) / 0.22, 0, 1)                  # 8 % of height: full, 30 %: none
-        qi *= np.clip((m.sum() - 3) / 5.0, 0.2, 1)                       # < 8 joints seen: less sure
-        edge = (uv[:, 0] < 3).any() or (uv[:, 0] > 637).any() or (uv[:, 1] > 357).any() or (uv[:, 1] < 3).any()
-        if edge and m.sum() < 9:
+        qi *= np.clip((m.sum() - 2) / 4.0, 0.25, 1)                      # < 6 joints seen: less sure
+        if edge and m.sum() < 6:
             qi *= 0.6
         q[i] = qi
     z = cam.depth(X).min(1)
@@ -300,7 +303,7 @@ def frame_quality(cam, g, X, UV, Wg):
         q = np.interp(np.arange(G), np.flatnonzero(ok), q[ok])
     else:
         q = np.full(G, 0.5)
-    q *= np.clip((z - 0.8) / 0.7, 0, 1)                                  # within 1.5 m of the lens: suspicious
+    q *= np.clip((z - 1.2) / 0.5, 0, 1)                                  # within 1.7 m of the lens: suspicious (app hides < 1.2 m)
     return np.round(q * 100)
 
 

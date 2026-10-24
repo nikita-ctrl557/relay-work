@@ -8,6 +8,7 @@ show up in members' history like live sessions do.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import time
 from dataclasses import dataclass, field
 
@@ -150,8 +151,26 @@ class _DeferredSets:
         self.pending = []
 
 
+def _apply_geometry(geo: dict, cam_id: str, analyser, tracker, guard, engine) -> None:
+    """The camera moved (follow.py): zones, ignore areas, mirrors and floor calibration as they now are in the picture."""
+    analyser.set_zones(geo["zones"])
+    if tracker is not None:
+        tracker.set_zones(geo["zones"])
+        tracker.ignore = [np.array(p, np.float32) for p in geo["ignore"] + geo["mirrors"]]
+        if geo["H_plan"] is not None:
+            tracker.H = geo["H_plan"]
+            tracker.calib_image = geo["calib"]["image"]
+    if guard is not None:
+        guard.mirrors = [list(p) for p in geo["mirrors"]]
+    for z in geo["zones"]:
+        p = z.polygon
+        engine._zone_polys[(cam_id, z.machine)] = p
+        engine._zone_boxes[(cam_id, z.machine)] = (min(q[0] for q in p), min(q[1] for q in p), max(q[0] for q in p), max(q[1] for q in p))
+    engine._overlap.clear()
+
+
 def _finish(cfg: GymConfig, cam: Camera, engine: Engine, sink, start_ts: float, end: float, tracker,
-            timeline: list, poses: list, postprocess: bool, guard=None) -> dict:
+            timeline: list, poses: list, postprocess: bool, guard=None, zone_epochs: list | None = None) -> dict:
     """End of a recording: close open sets, post-process, close sessions, write sets, build the report."""
     for mt in engine.machines.values():  # recording ended mid-set
         if mt.state == "lifting":
@@ -163,7 +182,7 @@ def _finish(cfg: GymConfig, cam: Camera, engine: Engine, sink, start_ts: float, 
     if postprocess:
         from .postprocess import apply_to_records, finish_sets
         data = {"timeline": timeline, "poses": poses, "sets": [r.as_replay(start_ts) for r in engine.recent_sets_all],
-                "people": {"rows": []}}
+                "people": {"rows": []}, "zone_epochs": zone_epochs or []}
         if tracker is not None and hasattr(tracker, "appearance_summary"):
             try:
                 data["looks"] = tracker.appearance_summary()
@@ -246,7 +265,10 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
 
     sink = _DeferredSets(store) if store is not None else None  # sets reach the store only after post-processing
     engine = Engine(cfg, sink, keep_all=True)
-    analyser = FrameAnalyzer(cam)
+    follow = bool(getattr(cam, "reference", None))
+    # following a moving camera re-draws the analyser's zones: on a copy, the config's camera keeps the drawn ones
+    analyser = FrameAnalyzer(dataclasses.replace(cam) if follow else cam)
+    follower, zone_epochs = None, []
     if people is None:
         people = DEFAULT_MODEL.exists()
     tracker = None
@@ -281,6 +303,14 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         if frame.shape[1] != width:
             full = frame
             frame = cv2.resize(frame, (width, int(frame.shape[0] * width / frame.shape[1])), interpolation=cv2.INTER_AREA)
+        if follow:
+            if follower is None:
+                from .follow import CameraFollower
+                follower = CameraFollower(cam, cam.reference, frame.shape[1], frame.shape[0])
+            geo = follower.check(frame, t)
+            if geo is not None:
+                _apply_geometry(geo, cam.id, analyser, tracker, guard, engine)
+                zone_epochs.append({"t": round(t, 2), "zones": {z.machine: z.polygon for z in geo["zones"]}})
         if guard is not None and guard.mirrors and cam.mirror_motion:  # mirror glass: motion only counts on real people
             analyser.exclude = guard.motion_exclusion(frame.shape, kept_tracks)
         reading = analyser.analyze(frame, start_ts + t)
@@ -332,7 +362,10 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
         writer.release()
     end = start_ts + t
     wall = time.time() - wall0
-    rep = _finish(cfg, cam, engine, sink, start_ts, end, tracker, timeline, poses, postprocess, guard)
+    rep = _finish(cfg, cam, engine, sink, start_ts, end, tracker, timeline, poses, postprocess, guard, zone_epochs)
+    if follower is not None:
+        rep["follow"] = {"reference": cam.reference, "epochs": follower.epochs}
+        rep["zone_epochs"] = zone_epochs
     if tracker is not None and background is not None:
         ok, jpg = cv2.imencode(".jpg", heatmap_image(background, tracker.heat), [cv2.IMWRITE_JPEG_QUALITY, 80])
         rep["heatmap_jpg_b64"] = base64.b64encode(jpg.tobytes()).decode() if ok else None

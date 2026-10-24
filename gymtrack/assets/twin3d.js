@@ -459,6 +459,8 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       const p = person(key); seen.add(key);
       p.q = q; p.want = 1; p.Jm = Jm; p.A = Jm ? (A || [(Jm[33] + Jm[36]) / 2, (Jm[34] + Jm[37]) / 2]) : null; p.conf = q.pose3d?.c || null; p.s = fm?.s || 1;
       p.inside = pl.st.inside; // feet inside tall equipment: not drawn
+      // someone cut off by the frame edge with no believable 3D: where they stand is a guess, so no stand-in body
+      p.edge = !Jm && !!q.box && (q.box[0] < 0.012 || q.box[0] + q.box[2] > 0.988 || q.box[1] + q.box[3] > 0.985);
       const lift = q.inSet || q.activity && q.activity !== "standing";
       p.mat.color.setHex(lift ? COL.lift : q.planted && q.zone ? COL.station : COL.move);
       p.jmat.color.copy(p.mat.color).lerp(WHITE, 0.55); p.faint.color.copy(p.mat.color);
@@ -472,7 +474,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     }
     for (const [k, p] of ppl) if (!seen.has(k)) p.want = 0;
     // two bodies on one spot: the same person seen twice (boxes overlap) -> keep the better one; else step apart to 0.4 m
-    const shown = [...ppl.values()].filter(p => p.want && p.pos && !p.inside && !p.swapTo);
+    const shown = [...ppl.values()].filter(p => p.want && p.pos && !p.inside && !p.edge && !p.swapTo);
     for (const p of shown) { p.dup = false; p.sepT = p.sepT || new THREE.Vector3(); p.sepT.set(0, 0, 0); }
     const iou = (a, b) => { if (!a || !b) return 0; const x = Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])), y = Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1])), i = x * y; return i / (a[2] * a[3] + b[2] * b[3] - i || 1); };
     const score = p => (p.Jm ? 2 : 0) + (p.q.member ? 1 : 0) + (p.q.box ? p.q.box[3] : 0);
@@ -594,7 +596,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const bodyR = []; // screen rects of the drawn bodies: no label may cover one
     const fadeK = 1 - Math.exp(-Math.min(0.5, (ts - (lastFrame ?? ts - 16)) / 1000) / 0.13); lastFrame = ts; // time-based: slow devices fade as fast
     for (const [k, p] of [...ppl]) {
-      const vis = showP && p.want && !p.inside && !p.dup && !p.swapTo ? 1 : 0;
+      const vis = showP && p.want && !p.inside && !p.dup && !p.edge && !p.swapTo ? 1 : 0;
       p.alpha += (vis - p.alpha) * fadeK;
       if (p.swapTo && p.alpha < 0.04) { p.pos = p.swapTo; p.swapTo = null; p.vel = null; p.sep?.set(0, 0, 0); } // faded out: reappear at the new spot
       if (p.sepT) { (p.sep ||= new THREE.Vector3()).lerp(p.sepT, fadeK * 0.5); }
@@ -651,6 +653,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   }
   applyColours();
   raf = requestAnimationFrame(frame);
+  wrap._state = () => [...ppl].map(([k, p]) => ({k, a: +p.alpha.toFixed(2), want: p.want, inside: !!p.inside, dup: !!p.dup, edge: !!p.edge, swap: !!p.swapTo, b3d: !!p.Jm, pos: p.pos && [+p.pos.x.toFixed(2), +p.pos.z.toFixed(2)]})); // for checks
   return {highlight(pid) { for (const [k, p] of ppl) if (p.q?.pid === pid) { hoverPid = k; return; } hoverPid = null; },
     setColourMode(m) { colourMode = m; savePref("colour", m); wrap.querySelectorAll("[data-cm]").forEach(b => b.setAttribute("aria-pressed", b.dataset.cm === m)); applyColours(); }, destroy() { destroyed = true; cancelAnimationFrame(raf); roomCache.forEach(p => p.then(r => { r.mesh.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); }).catch(() => {})); ro.disconnect(); controls.dispose(); renderer.dispose(); wrap.remove(); }};
 }
