@@ -80,7 +80,7 @@
     "src_pid_r1": 24
    },
    {
-    "person": "cables:person in black bent over",
+    "person": "cables:man beige tee",
     "t": 445.8,
     "box": [
      413.4,
@@ -88,7 +88,8 @@
      445.4,
      219.6
     ],
-    "src_pid_r1": 66
+    "src_pid_r1": 66,
+    "note": "round-2 review: same man bending at the dumbbell rack (was mislabelled as a different person)"
    },
    {
     "person": "cables:man beige tee",

@@ -69,7 +69,10 @@ THRESH = {
     "A1_teleports_3d_all": ("<=", 0, "count", "3D root jumps > 1.5 m between consecutive samples (everyone)"),
     "A1_teleports_map_members": ("<=", 0, "count", "Floor-map position jumps > max(1.5 m, 2.5 m/s*dt), tracked members"),
     "A2_duplicate_person_s": ("<=", 1.0, "% person-time", "two pids on one person (2D boxes IoU > 0.6)"),
-    "A3_appearance_switch_pids": ("<=", 0, "pids", "pids whose torso colour changes abruptly (suspected swap)"),
+    # A3_appearance_switch_pids (automatic colour test) is report-only since round 2: on the round-2 cables data
+    # all 3 of its flags were the same person (pose / lighting change), and colour features could not separate
+    # 11 hand-labelled swaps from 52 clean tracks (AUC <= 0.77). The crop sheet (identity_*.jpg) is still made
+    # for a human to look at; A3_gt_swaps is the judged identity test.
     "A3_gt_swaps": ("<=", 0, "pairs", "hand-labelled different people (verify3d_identity_gt.json) that share one pid [round 2]"),
     "A4_coverage_all": (">=", 90.0, "%", "on-screen person-time with a 3D body"),
     "A4_coverage_members": (">=", 98.0, "%", "tracked-member on-screen time with a 3D body"),
