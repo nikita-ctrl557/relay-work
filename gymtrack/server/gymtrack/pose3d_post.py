@@ -472,7 +472,7 @@ class RefineProblem(P3._Problem):
         okl = ww[:, [LSH, RSH, LHIP, RHIP]].all(1)
         self.lying = okl & (np.abs(d[:, 0]) > 1.6 * np.abs(d[:, 1])) & (np.linalg.norm(d, axis=-1) > 15)
 
-    def set_neutral(self, X0, groups):
+    def set_neutral(self, X0, groups, seated=None):
         """Unseen limb joints get a weak pull to a relaxed pose hanging from their visible parents (legs straight
         down from the hips, arms down the sides): a partly visible person stands or sits plausibly instead of
         flailing limbs into the air."""
@@ -485,9 +485,13 @@ class RefineProblem(P3._Problem):
         mh = (X0[:, LHIP] + X0[:, RHIP]) / 2
         ms = (X0[:, LSH] + X0[:, RSH]) / 2
         trunk = _unit(ms - mh)
+        sf = _hfwd(X0, self.hand)
+        sf = sf * np.array([1.0, 1.0, 0.0])
+        sf = sf / np.maximum(np.linalg.norm(sf, axis=-1, keepdims=True), 1e-6)
+        st_ = np.zeros(T, bool) if seated is None else np.asarray(seated, bool)
         for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
-            k = X0[:, hp] - UP * g["thigh"]
-            a = k - UP * g["shank"]
+            k = np.where(st_[:, None], X0[:, hp] + sf * g["thigh"], X0[:, hp] - UP * g["thigh"])
+            a = k - UP * np.where(st_[:, None], np.minimum(g["shank"], np.maximum(k[:, 2:3] - ANKLE_Z, 0.05)), g["shank"])
             tgt[:, kn] = np.where(unseen[:, kn][:, None], k, np.nan)
             tgt[:, an] = np.where(unseen[:, an][:, None], a, np.nan)
         for sh, el, wr in ((LSH, LEL, LWR), (RSH, REL, RWR)):
@@ -692,10 +696,25 @@ def exercise_rows(X0, sets, g, bench_h=None):
             if "lying" in kinds and mh_ is not None:
                 rows.append((f, [(LHIP, 2, 0.5), (RHIP, 2, 0.5)], mh_ + 0.1, 0.05))
                 rows.append((f, [(LSH, 2, 0.5), (RSH, 2, 0.5)], mh_ + 0.12, 0.05))
+            if "lying" in kinds:      # supine: the trunk level on the bench
+                rows.append((f, [(LSH, 2, 0.5), (RSH, 2, 0.5), (LHIP, 2, -0.5), (RHIP, 2, -0.5)], 0.03, 0.06))
     return rows
 
 
-def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=None, anchor=None, sets=()):
+def seated_pose(X, groups, hand, P):
+    """X moved so its mid-hip sits at P, legs seated (thighs forward level, shanks down to the floor)."""
+    gd = dict(zip(P3.GROUP_NAMES, np.asarray(groups, float)))
+    Y = X + (P - (X[LHIP] + X[RHIP]) / 2)
+    f = _hfwd(Y[None], hand)[0]
+    f = np.array([f[0], f[1], 0.0]) / max(np.linalg.norm(f[:2]), 1e-6)
+    for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
+        Y[kn] = Y[hp] + f * gd["thigh"]
+        Y[an] = Y[kn] - UP * min(gd["shank"], max(Y[kn, 2] - ANKLE_Z, 0.05))
+    return Y
+
+
+def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=None, anchor=None, sets=(),
+                       seat=None):
     import os
     iters = iters or int(os.environ.get("REFINE_ITERS", 20))
     """Robust windowed solve on the grid. Xs: smoothed fitted track (G, 13, 3) used as prior + start."""
@@ -718,9 +737,20 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
                 X0[i] = P3.init_frame(cam, UV[i], L, hand, w=W[i])
         X0 = floor_shift(X0)
         pm[bad] = 0.0
+    seated = np.zeros(G, bool)
+    if seat is not None:
+        # hips seen on a seat / bench (the hip ray meets the seat inside its footprint, legs hidden or bent): seated
+        # there, not standing behind it; the standing fit is no prior for those frames
+        seated = np.isfinite(seat).all(1)
+        for i in np.flatnonzero(seated):
+            X0[i] = seated_pose(X0[i], groups, hand, seat[i])
+        pm[seated] = 0.0
     pins = stance_pins(X0)
     pins[bad] = np.nan
     ex_rows = exercise_rows(X0, sets, g) if sets else []
+    for i in np.flatnonzero(seated):
+        for k in range(3):
+            ex_rows.append((i, [(LHIP, k, 0.5), (RHIP, k, 0.5)], seat[i, k], 0.08 if k < 2 else 0.05))
     prior = (Xs, pm)
     out = np.zeros_like(X0)
     wsum = np.zeros(G)
@@ -734,7 +764,7 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         sl = slice(s, e)
         pr = RefineProblem(cam, UV[sl], W[sl], g[sl], L, hand, (prior[0][sl], prior[1][sl]), bend_ok[sl], pins[sl],
                            anchor=None if anchor is None else anchor[sl])
-        pr.set_neutral(X0[sl], groups)
+        pr.set_neutral(X0[sl], groups, seated[sl])
         if ex_rows:
             pr.lin = [(f - s, terms, tgt, sg) for f, terms, tgt, sg in ex_rows if s <= f < e]
         x0 = X0[sl].copy()

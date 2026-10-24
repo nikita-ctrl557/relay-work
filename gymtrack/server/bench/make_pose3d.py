@@ -154,8 +154,9 @@ def room_cam(d):
     R = np.array(d["R"], float)
     K = np.linalg.inv(R @ np.array(d["D"], float))
     sx, sy = 640 / d["W"], 360 / d["H"]
-    return PinholeCamera(f=float(d["f"]) * sx, cx=float(K[0, 2]) * sx, cy=float(K[1, 2]) * sy, R=R,
-                         C=np.array(d["C"], float), width=640, height=360, flip=1.0)
+    flip = float(np.sign(np.linalg.det(R)))      # the room's R is our R with the plan's handedness folded in (_M)
+    return PinholeCamera(f=float(d["f"]) * sx, cx=float(K[0, 2]) * sx, cy=float(K[1, 2]) * sy, R=R @ np.diag([1.0, 1.0, flip]),
+                         C=np.array(d["C"], float), width=640, height=360, flip=flip)
 
 
 def _cam_offset_px(a, b):
@@ -217,7 +218,28 @@ def aim_cams(segcams, room_index, session, tol_px=3.0, same_px=1.0, min_s=1.5):
             c = cam if _cam_offset_px(cam, g["cam"]) < same_px else g["cam"]
             name = seg["name"] if len(steady) == 1 else f"{seg['name']}~g{k:02d}"
             out.append(({"name": name, "start": g["start"], "end": g["end"], "parent": seg["name"], "aim": g["aim"],
-                         "warps": [(a, b, wc.to_dict()) for a, b, wc in g["warps"]]}, c))
+                         "warps": [(a, b, wc.to_dict()) for a, b, wc in g["warps"]], "base": cam.to_dict()}, c))
+    return out
+
+
+def cam_entries(replay, segcams):
+    """pose3d_meta.cams: one entry per recording segment (its base camera), plus one per re-aimed stretch group
+    with its t0/t1 and the room framing ("aim") whose exact rotation it uses (core.js camera3dAt / verify3d prefer
+    the entry whose t0 <= t < t1)."""
+    out = []
+    ent = lambda seg, cam, **kw: {"segment": seg, **kw, **(cam.summary() if cam else {}), **({"camera": cam.to_dict()} if cam else {})}
+    base = {}
+    for seg, cam in segcams:
+        base.setdefault(seg.get("parent", seg["name"]), []).append((seg, cam))
+    for rs in replay.get("segments", []):
+        groups = base.get(rs["name"], [])
+        if not groups:
+            continue
+        own = PinholeCamera.from_dict(groups[0][0]["base"]) if groups[0][0].get("base") else groups[0][1]
+        out.append(ent(rs["name"], own))      # the segment's base aim (the floor-plan calibration's)
+        if len(groups) > 1:
+            for s_, c in groups:
+                out.append(ent(rs["name"], c, t0=round(s_["start"], 3), t1=round(s_["end"], 3), aim=s_["aim"]))
     return out
 
 
@@ -312,6 +334,10 @@ def collapse_unseen(uv, w):
 
 HEIGHT_RANGE = (float(os.environ.get("HEIGHT_MIN", 1.60)), 1.95)
 Q_MIN = int(os.environ.get("Q_MIN", 20))          # frames below this confidence are not exported
+DEPTH_CAP_ON = os.environ.get("DEPTH_CAP", "1") == "1"     # far people: no faster-than-walking depth hops
+HIDDEN_FEET_ON = os.environ.get("HIDDEN_FEET", "1") == "1"   # ankles behind an occluder: trust the head ray
+SEATS_ON = os.environ.get("SEATS", "1") == "1"          # seated prior from the seat / bench geometry
+AIMS_ON = os.environ.get("AIMS", "1") == "1"            # per re-aim cameras (assets/room/index.json stretches)
 EX_PRIORS_ON = os.environ.get("EX_PRIORS", "1") == "1"     # exercise-aware priors during credited sets
 EXPORT_ANGLES = os.environ.get("EXPORT_ANGLES", "0") == "1"
 FIT_MIRROR = os.environ.get("FIT_MIRROR", "0") == "1"   # orientation is resolved later (pose3d_post.fix_flips)
@@ -338,7 +364,7 @@ def person_groups(cam, pieces, prior_w):
 
 
 def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, try_mirror=True, sets=(), present=(),
-               anchors=None):
+               anchors=None, seats=None):
     """pieces: [(t, uv, w)] of one person in one segment; sets: [(t0, t1)] of their sets (bending allowed);
     present: [(t0, t1)] when the tracker shows them on screen (tracks are extended to cover it).
     Returns list of dict per piece."""
@@ -376,8 +402,99 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, t
                 "height": height, "hand": res["hand"], "n_prior": 0 if prior is None else int((prior[1] == 1).all(1).sum())}
         if refine:
             item["R"] = refine_v3(cam, t, res["X"], res["unc"], t_all, uv_all, w_all, groups, res["hand"], hz, sets, present,
-                                  anchors=anchors)
+                                  anchors=anchors, seats=seats)
         out.append(item)
+    return out
+
+
+def cap_depth_speed(cam, g, X, near=8.0, win=1.5, vmax=2.5):
+    """Far away, a pixel of the feet (or of the head) is metres along the line of sight, and occlusions shift both:
+    the body would hop or glide in depth faster than anyone walks. Beyond `near` m the distance along the ground ray
+    is a running median (+-win s) limited to vmax m/s (forward and backward pass, averaged); the body moves along
+    that ray, height kept. Sideways motion (seen directly in the image) is untouched."""
+    root = (X[:, P3.LAN] + X[:, P3.RAN]) / 2
+    v = root[:, :2] - cam.C[:2]
+    r = np.linalg.norm(v, axis=1)
+    if len(g) < 5 or np.nanmax(r) < near:
+        return X
+    rm = np.array([np.median(r[np.abs(g - g[i]) <= win]) for i in range(len(g))])
+    f, b = rm.copy(), rm.copy()
+    for i in range(1, len(g)):
+        lim = vmax * (g[i] - g[i - 1])
+        f[i] = np.clip(rm[i], f[i - 1] - lim, f[i - 1] + lim)
+    for i in range(len(g) - 2, -1, -1):
+        lim = vmax * (g[i + 1] - g[i])
+        b[i] = np.clip(rm[i], b[i + 1] - lim, b[i + 1] + lim)
+    rs = (f + b) / 2
+    use = (r > near) | (rs > near)
+    k = np.where(use, rs / np.maximum(r, 1e-6), 1.0)
+    shift = v * (k - 1)[:, None]
+    Y = X.copy()
+    Y[:, :, :2] += shift[:, None, :]
+    return Y
+
+
+def hidden_feet(cam, g, Xs, UV, Wg, anc, seat=None, tol=1.5, rel=0.12):
+    """Feet hidden behind something while the detector still places ankles (at the occluder's edge): the ankle ray
+    then puts a far person metres away from where the head / shoulder ray at their known standing height does, and
+    the body would glide there and back. Per frame (standing, nose and shoulders seen): when the two floor points
+    differ by > max(tol, rel * distance), the leg keypoints are dropped and the head-ray point (smoothed over
+    +-1 s) becomes the floor anchor."""
+    G = len(g)
+    UV, Wg = UV.copy(), Wg.copy()
+    anc = np.full((G, 2), np.nan) if anc is None else np.array(anc, float)
+    nose_h = np.nanmedian(Xs[:, P3.NOSE, 2] - np.minimum(Xs[:, P3.LAN, 2], Xs[:, P3.RAN, 2])) + 0.07
+    if not np.isfinite(nose_h) or nose_h < 1.3:
+        return UV, Wg, anc
+    mh = (Xs[:, P3.LHIP, 2] + Xs[:, P3.RHIP, 2]) / 2
+    standing = mh > 0.7
+    if seat is not None:
+        standing &= ~np.isfinite(seat).all(1)
+    head = np.full((G, 2), np.nan)
+    foot = np.full((G, 2), np.nan)
+    for i in range(G):
+        w = Wg[i] > 0
+        if not (standing[i] and w[P3.NOSE] and w[P3.LSH] and w[P3.RSH] and (w[P3.LAN] or w[P3.RAN])):
+            continue
+        P = cam.backproject_to_height(UV[i, P3.NOSE], nose_h)
+        if np.isfinite(P).all() and cam.depth(P) > 1.0:
+            head[i] = P[:2]
+        a = [UV[i, j] for j in (P3.LAN, P3.RAN) if w[j]]
+        F = cam.backproject_to_height(np.mean(a, 0), 0.07)
+        if np.isfinite(F).all() and cam.depth(F) > 1.0:
+            foot[i] = F[:2]
+    ok = np.isfinite(head).all(1)
+    if ok.sum() < 5:
+        return UV, Wg, anc
+    hs = head.copy()
+    idx = np.flatnonzero(ok)
+    for i in idx:
+        m = idx[np.abs(g[idx] - g[i]) <= 1.0]
+        hs[i] = np.median(head[m], 0)
+    d = np.linalg.norm(hs[:, :2] - cam.C[:2], axis=1)
+    off = np.linalg.norm(foot - hs, axis=1)
+    hid = ok & np.isfinite(off) & (off > np.maximum(tol, rel * d))
+    if hid.any():
+        Wg[np.ix_(hid, [P3.LKN, P3.RKN, P3.LAN, P3.RAN])] = 0.0
+        anc[hid] = hs[hid]
+    return UV, Wg, anc
+
+
+def reject_hops(g, anc, win=2.5, tol=0.8):
+    """Tracker floor points that hop (the box bottom jumps when a machine or another person hides the feet) are no
+    anchor: keep only those within tol of their running median over +-win s, so the body is not pulled across the
+    room in a glide."""
+    anc = np.array(anc, float)
+    ok = np.isfinite(anc).all(1)
+    if ok.sum() < 3:
+        return anc
+    idx = np.flatnonzero(ok)
+    out = anc.copy()
+    for i in idx:
+        m = idx[np.abs(g[idx] - g[i]) <= win]
+        med = np.median(anc[m], axis=0)
+        if np.linalg.norm(anc[i] - med) > tol:
+            out[i] = np.nan
     return out
 
 
@@ -456,7 +573,60 @@ def app_gate_ok(cam, X, t, t2, uv2, w2):
     return ok
 
 
-def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_hold=1.0, anchors=None):
+def seat_targets(cam, UV, Wg, seats):
+    """(G, 3) mid-hip on a seat, NaN elsewhere: both hips seen, the hip ray meets a seat's height inside its footprint
+    (+10 cm), and the legs are hidden or bent in the image (a person standing next to a bench keeps standing)."""
+    G = len(UV)
+    out = np.full((G, 3), np.nan)
+    if not seats:
+        return out
+    inner = (UV[..., 0] > 4) & (UV[..., 0] < 636) & (UV[..., 1] > 4) & (UV[..., 1] < 356)
+    seen = (Wg > 0) & inner
+    for i in range(G):
+        if not (seen[i, P3.LHIP] and seen[i, P3.RHIP]):
+            continue
+        u = UV[i]
+        legs_hidden = not (seen[i, P3.LKN] or seen[i, P3.RKN])
+        bent = False
+        for hp, kn, an in ((P3.LHIP, P3.LKN, P3.LAN), (P3.RHIP, P3.RKN, P3.RAN)):
+            if seen[i, hp] and seen[i, kn] and seen[i, an]:
+                a, b = u[kn] - u[hp], u[an] - u[kn]
+                c = float(a @ b / max(np.linalg.norm(a) * np.linalg.norm(b), 1e-6))
+                bent |= c < np.cos(np.radians(45))          # knee flexed > 45 deg in the image
+        if not (legs_hidden or bent):
+            continue
+        hip = (u[P3.LHIP] + u[P3.RHIP]) / 2
+        best = None
+        for x, y, w, d, zs in seats:
+            P = cam.backproject_to_height(hip, zs)
+            if not np.isfinite(P).all() or cam.depth(P) < 1.0:
+                continue
+            if abs(P[0] - x) <= w / 2 + 0.1 and abs(P[1] - y) <= d / 2 + 0.1:
+                dd = np.hypot(P[0] - x, P[1] - y)
+                if best is None or dd < best[0]:
+                    best = (dd, P)
+        if best is not None:
+            out[i] = best[1]
+    return out
+
+
+SEAT_NAMES = ("seated", "bench", "decline", "pl-row", "pl-press", "back-b", "pulldown")
+
+
+def seats_from_equipment(equipment):
+    """[(x, y, w, d, mid-hip height when seated)] for machines people sit or lie on (bench tops; 0.5 m on machines
+    whose measured height is the frame's, not the seat's)."""
+    out = []
+    for e in equipment or []:
+        if e.get("area") or not e.get("w") or not e.get("d") or not any(k in e["machine"] for k in SEAT_NAMES):
+            continue
+        h = float(e.get("h") or 0)
+        zs = (h + 0.08) if 0.3 <= h <= 0.7 else 0.5
+        out.append((float(e["x"]), float(e["y"]), float(e["w"]), float(e["d"]), zs))
+    return out
+
+
+def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_hold=1.0, anchors=None, seats=None):
     """Fitted samples -> steady grid: smooth, then the constrained solve (2D, rigid bones, floor, pinned stance
     feet, plausibility), facing with a capped turn rate; ends held to cover the time the person is on screen."""
     X = PP.fix_flips(cam, t, X, hand)
@@ -493,7 +663,13 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
             anc[okb] = tmp
         far = np.array([np.abs(ta - gi).min() > 1.1 for gi in g])
         anc[far] = np.nan
-    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc, sets=ex_sets)
+        anc = reject_hops(g, anc)
+    seat = seat_targets(cam, UV, Wg, seats) if SEATS_ON else None
+    if HIDDEN_FEET_ON:
+        UV, Wg, anc = hidden_feet(cam, g, Xs, UV, Wg, anc, seat)
+    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc, sets=ex_sets, seat=seat)
+    if DEPTH_CAP_ON:
+        Xr = cap_depth_speed(cam, g, Xr)
     Q = frame_quality(cam, g, Xr, UV, Wg, boxes)
     # per-joint confidence: seen in the 2D (not pinned to the frame border) 100, seen within 0.5 s 70, inferred 30
     inner = (UV[..., 0] > 4) & (UV[..., 0] < 636) & (UV[..., 1] > 4) & (UV[..., 1] < 356)
@@ -642,6 +818,7 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
     for st in replay.get("sets", []):
         if st.get("pid") is not None:
             sets_by.setdefault(st["pid"], []).append((st["t0"], st["t1"], st.get("ex"), heights.get(st.get("m"))))
+    seats = seats_from_equipment(equipment)
     pres = {}
     tl = replay.get("timeline", [])
     for e in tl:
@@ -702,7 +879,7 @@ def make(replay, segcams, sam_dir=None, cam_id="cam", hz=10, jobs=3, max_mb=12.0
             # A (lifters): every pose sample, B (regulars): every 2nd, C (passers-by): every 2nd, no mirror search
             step = 1 if ph == "A" else 2
             futs[ex.submit(fit_person, cam, pieces, s_, W, Hh, hz, step, True, True, ph != "C",
-                           sets_by.get(pid, []), present.get(pid, []), anchors.get(pid))] = (ph, si, pid)
+                           sets_by.get(pid, []), present.get(pid, []), anchors.get(pid), seats)] = (ph, si, pid)
         done = 0
         for f in as_completed(futs):
             ph, si, pid = futs[f]
@@ -819,7 +996,7 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             mp = meta_people.setdefault(str(pid), {"height_m": round(it["height"], 2),
                                                    "bones_m": {g: round(float(v), 3) for g, v in zip(P3.GROUP_NAMES, it["groups"])},
                                                    "segments": []})
-            mp["segments"].append({"segment": seg["name"], "t0": float(R["t"][0]), "t1": float(R["t"][-1]),
+            mp["segments"].append({"segment": seg.get("parent", seg["name"]), "t0": float(R["t"][0]), "t1": float(R["t"][-1]),
                                    "frames": int(len(R["t"])), "learned_keyframes": it["n_prior"],
                                    "quality": {k: (round(float(v), 3) if np.isfinite(v) else None) for k, v in q.items()}})
     # no teleports between a person's consecutive tracks: a later track that starts too far away too soon
@@ -888,7 +1065,7 @@ def assemble(replay, segcams, results, cam_id, hz, max_mb, t_start, n_rec=0, n_m
             "units": {"P": "cm, floor plan x/y + height z", "A": "degrees (hip_minus_knee_cm: cm)", "U": "cm (1 sigma)",
                       "F": "yaw, 0.01 rad, plan frame (forward = cos, sin)"},
             "encoding": "P/A: base64 int16 first frame | base64 int8 closed-loop deltas per later frame; F: base64 int16",
-            "cams": [{"segment": seg["name"], **(cam.summary() if cam else {}), **({"camera": cam.to_dict()} if cam else {})} for seg, cam in segcams],
+            "cams": cam_entries(replay, segcams),
             "people": meta_people, "runtime_s": round(runtime, 1), "quality": summ,
             "learned": {"sam_crops": n_rec, "matched": n_match},
             "dropped_tracks": dropped,
@@ -930,6 +1107,9 @@ def main(argv=None):
     replay = json.load(open(a.replay))
     cam_id = a.cam_id or Path(a.replay).stem
     segcams = segment_cams(replay, a.configs, a.cams_cache)
+    ri_ = Path(__file__).resolve().parents[2] / "assets" / "room" / "index.json"
+    if AIMS_ON and ri_.exists():
+        segcams = aim_cams(segcams, str(ri_), a.cam_id or Path(a.replay).stem)
     people = {int(p) for p in a.people.split(",")} if a.people else None
     window = tuple(float(v) for v in a.window.split(",")) if a.window else None
     if a.reassemble:

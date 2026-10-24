@@ -980,7 +980,8 @@ class ReplaySource {
   }
   camera3dAt(camId, ct) { // the CCTV camera the 3D was solved with (pose3d frame = plan frame), for the "camera view"
     const c = this.cams.find(x => x.id === camId); const cs = c?.p3?.cams || []; if (!cs.length) return null;
-    return (cs.find(x => x.seg && ct >= x.seg.start && ct < x.seg.end) || cs[0]).camera || null;
+    // a re-aimed stretch's own camera (t0 <= ct < t1) first, else the recording segment's
+    return (cs.find(x => x.t0 != null && ct >= x.t0 && ct < x.t1) || cs.find(x => x.seg && x.t0 == null && ct >= x.seg.start && ct < x.seg.end) || cs.find(x => x.seg && ct >= x.seg.start && ct < x.seg.end) || cs[0]).camera || null;
   }
   mobility3d(camId, pid) {
     const c = this.cams.find(x => x.id === camId); const m = c?.p3?.mobility; if (!m) return null;
