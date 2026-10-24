@@ -257,8 +257,14 @@
     {
      "seg": "floor2",
      "t0": 144.8,
-     "t1": 479.7,
+     "t1": 381.8,
      "file": "floor2.json"
+    },
+    {
+     "seg": "floor2-a01",
+     "t0": 381.8,
+     "t1": 479.7,
+     "file": "floor2-a01.json"
     },
     {
      "seg": "floor3",
@@ -273,40 +279,772 @@
      "file": "floor4.json"
     },
     {
-     "seg": "floor5a",
+     "seg": "floor5-a01",
      "t0": 654.5,
-     "t1": 769.5,
+     "t1": 654.75,
+     "file": "floor5-a01.json"
+    },
+    {
+     "seg": "floor5-a02",
+     "t0": 654.75,
+     "t1": 655.75,
+     "file": "floor5-a02.json"
+    },
+    {
+     "seg": "floor5-a03",
+     "t0": 655.75,
+     "t1": 656.25,
+     "file": "floor5-a03.json"
+    },
+    {
+     "seg": "floor5-a04",
+     "t0": 656.25,
+     "t1": 656.75,
+     "file": "floor5-a04.json"
+    },
+    {
+     "seg": "floor5-a05",
+     "t0": 656.75,
+     "t1": 657.25,
+     "file": "floor5-a05.json"
+    },
+    {
+     "seg": "floor5-a06",
+     "t0": 657.25,
+     "t1": 657.75,
+     "file": "floor5-a06.json"
+    },
+    {
+     "seg": "floor5-a07",
+     "t0": 657.75,
+     "t1": 658.25,
+     "file": "floor5-a07.json"
+    },
+    {
+     "seg": "floor5-a08",
+     "t0": 658.25,
+     "t1": 658.75,
+     "file": "floor5-a08.json"
+    },
+    {
+     "seg": "floor5-a09",
+     "t0": 658.75,
+     "t1": 659.25,
+     "file": "floor5-a09.json"
+    },
+    {
+     "seg": "floor5-a10",
+     "t0": 659.25,
+     "t1": 659.75,
+     "file": "floor5-a10.json"
+    },
+    {
+     "seg": "floor5-a11",
+     "t0": 659.75,
+     "t1": 660.25,
+     "file": "floor5-a11.json"
+    },
+    {
+     "seg": "floor5-a12",
+     "t0": 660.25,
+     "t1": 660.75,
+     "file": "floor5-a12.json"
+    },
+    {
+     "seg": "floor5-a13",
+     "t0": 660.75,
+     "t1": 661.25,
+     "file": "floor5-a13.json"
+    },
+    {
+     "seg": "floor5-a14",
+     "t0": 661.25,
+     "t1": 661.75,
+     "file": "floor5-a14.json"
+    },
+    {
+     "seg": "floor5-a15",
+     "t0": 661.75,
+     "t1": 662.25,
+     "file": "floor5-a15.json"
+    },
+    {
+     "seg": "floor5-a16",
+     "t0": 662.25,
+     "t1": 662.75,
+     "file": "floor5-a16.json"
+    },
+    {
+     "seg": "floor5-a17",
+     "t0": 662.75,
+     "t1": 663.25,
+     "file": "floor5-a17.json"
+    },
+    {
+     "seg": "floor5-a18",
+     "t0": 663.25,
+     "t1": 665.5,
+     "file": "floor5-a18.json"
+    },
+    {
+     "seg": "floor5a",
+     "t0": 665.5,
+     "t1": 771.75,
      "file": "floor5a.json"
     },
     {
+     "seg": "floor5-a19",
+     "t0": 771.75,
+     "t1": 772.25,
+     "file": "floor5-a19.json"
+    },
+    {
+     "seg": "floor5-a20",
+     "t0": 772.25,
+     "t1": 772.75,
+     "file": "floor5-a20.json"
+    },
+    {
+     "seg": "floor5-a21",
+     "t0": 772.75,
+     "t1": 773.25,
+     "file": "floor5-a21.json"
+    },
+    {
+     "seg": "floor5-a22",
+     "t0": 773.25,
+     "t1": 773.75,
+     "file": "floor5-a22.json"
+    },
+    {
+     "seg": "floor5-a23",
+     "t0": 773.75,
+     "t1": 774.25,
+     "file": "floor5-a23.json"
+    },
+    {
+     "seg": "floor5-a24",
+     "t0": 774.25,
+     "t1": 774.75,
+     "file": "floor5-a24.json"
+    },
+    {
      "seg": "floor5",
-     "t0": 769.5,
-     "t1": 814.5,
+     "t0": 774.75,
+     "t1": 805.25,
      "file": "floor5.json"
     },
     {
+     "seg": "floor5-a25",
+     "t0": 805.25,
+     "t1": 805.75,
+     "file": "floor5-a25.json"
+    },
+    {
+     "seg": "floor5-a26",
+     "t0": 805.75,
+     "t1": 806.25,
+     "file": "floor5-a26.json"
+    },
+    {
+     "seg": "floor5-a27",
+     "t0": 806.25,
+     "t1": 806.75,
+     "file": "floor5-a27.json"
+    },
+    {
+     "seg": "floor5-a28",
+     "t0": 806.75,
+     "t1": 807.25,
+     "file": "floor5-a28.json"
+    },
+    {
+     "seg": "floor5-a29",
+     "t0": 807.25,
+     "t1": 807.75,
+     "file": "floor5-a29.json"
+    },
+    {
+     "seg": "floor5-a30",
+     "t0": 807.75,
+     "t1": 808.75,
+     "file": "floor5-a30.json"
+    },
+    {
+     "seg": "floor5-a31",
+     "t0": 808.75,
+     "t1": 810.25,
+     "file": "floor5-a31.json"
+    },
+    {
+     "seg": "floor5-a32",
+     "t0": 810.25,
+     "t1": 812.25,
+     "file": "floor5-a32.json"
+    },
+    {
+     "seg": "floor5-a33",
+     "t0": 812.25,
+     "t1": 815.5,
+     "file": "floor5-a33.json"
+    },
+    {
+     "seg": "floor5-a34",
+     "t0": 815.5,
+     "t1": 819.5,
+     "file": "floor5-a34.json"
+    },
+    {
+     "seg": "floor5-a35",
+     "t0": 819.5,
+     "t1": 831.5,
+     "file": "floor5-a35.json"
+    },
+    {
      "seg": "floor5c",
-     "t0": 814.5,
-     "t1": 924.4,
+     "t0": 831.5,
+     "t1": 903.5,
      "file": "floor5c.json"
     },
     {
-     "seg": "floor6a",
+     "seg": "floor5-a36",
+     "t0": 903.5,
+     "t1": 924.4,
+     "file": "floor5-a36.json"
+    },
+    {
+     "seg": "floor6-a01",
      "t0": 924.4,
-     "t1": 1129.4,
+     "t1": 944.52,
+     "file": "floor6-a01.json"
+    },
+    {
+     "seg": "floor6-a02",
+     "t0": 944.52,
+     "t1": 945.52,
+     "file": "floor6-a02.json"
+    },
+    {
+     "seg": "floor6-a03",
+     "t0": 945.52,
+     "t1": 946.77,
+     "file": "floor6-a03.json"
+    },
+    {
+     "seg": "floor6-a04",
+     "t0": 946.77,
+     "t1": 948.27,
+     "file": "floor6-a04.json"
+    },
+    {
+     "seg": "floor6-a05",
+     "t0": 948.27,
+     "t1": 949.9,
+     "file": "floor6-a05.json"
+    },
+    {
+     "seg": "floor6-a06",
+     "t0": 949.9,
+     "t1": 952.9,
+     "file": "floor6-a06.json"
+    },
+    {
+     "seg": "floor6-a07",
+     "t0": 952.9,
+     "t1": 957.9,
+     "file": "floor6-a07.json"
+    },
+    {
+     "seg": "floor6-a08",
+     "t0": 957.9,
+     "t1": 969.9,
+     "file": "floor6-a08.json"
+    },
+    {
+     "seg": "floor6-a09",
+     "t0": 969.9,
+     "t1": 1003.9,
+     "file": "floor6-a09.json"
+    },
+    {
+     "seg": "floor6a",
+     "t0": 1003.9,
+     "t1": 1032.9,
      "file": "floor6a.json"
+    },
+    {
+     "seg": "floor6-a10",
+     "t0": 1032.9,
+     "t1": 1037.9,
+     "file": "floor6-a10.json"
+    },
+    {
+     "seg": "floor6-a11",
+     "t0": 1037.9,
+     "t1": 1055.9,
+     "file": "floor6-a11.json"
+    },
+    {
+     "seg": "floor6-a12",
+     "t0": 1055.9,
+     "t1": 1106.62,
+     "file": "floor6-a12.json"
+    },
+    {
+     "seg": "floor6-a13",
+     "t0": 1106.62,
+     "t1": 1106.88,
+     "file": "floor6-a13.json"
+    },
+    {
+     "seg": "floor6-a14",
+     "t0": 1106.88,
+     "t1": 1107.12,
+     "file": "floor6-a14.json"
+    },
+    {
+     "seg": "floor6-a15",
+     "t0": 1107.12,
+     "t1": 1107.38,
+     "file": "floor6-a15.json"
+    },
+    {
+     "seg": "floor6-a16",
+     "t0": 1107.38,
+     "t1": 1107.62,
+     "file": "floor6-a16.json"
+    },
+    {
+     "seg": "floor6-a17",
+     "t0": 1107.62,
+     "t1": 1107.88,
+     "file": "floor6-a17.json"
+    },
+    {
+     "seg": "floor6-a18",
+     "t0": 1107.88,
+     "t1": 1108.12,
+     "file": "floor6-a18.json"
+    },
+    {
+     "seg": "floor6-a19",
+     "t0": 1108.12,
+     "t1": 1108.38,
+     "file": "floor6-a19.json"
+    },
+    {
+     "seg": "floor6-a20",
+     "t0": 1108.38,
+     "t1": 1108.62,
+     "file": "floor6-a20.json"
     },
     {
      "seg": "floor6",
-     "t0": 1129.4,
-     "t1": 2019.4,
+     "t0": 1108.62,
+     "t1": 1674.5,
      "file": "floor6.json"
     },
     {
-     "seg": "floor6a",
-     "t0": 2019.4,
+     "seg": "floor6-a21",
+     "t0": 1674.5,
+     "t1": 1735.5,
+     "file": "floor6-a21.json"
+    },
+    {
+     "seg": "floor6",
+     "t0": 1735.5,
+     "t1": 1973.5,
+     "file": "floor6.json"
+    },
+    {
+     "seg": "floor6-a22",
+     "t0": 1973.5,
+     "t1": 1993.38,
+     "file": "floor6-a22.json"
+    },
+    {
+     "seg": "floor6-a23",
+     "t0": 1993.38,
+     "t1": 1993.62,
+     "file": "floor6-a23.json"
+    },
+    {
+     "seg": "floor6-a24",
+     "t0": 1993.62,
+     "t1": 1993.88,
+     "file": "floor6-a24.json"
+    },
+    {
+     "seg": "floor6-a25",
+     "t0": 1993.88,
+     "t1": 1994.12,
+     "file": "floor6-a25.json"
+    },
+    {
+     "seg": "floor6-a26",
+     "t0": 1994.12,
+     "t1": 1994.38,
+     "file": "floor6-a26.json"
+    },
+    {
+     "seg": "floor6-a27",
+     "t0": 1994.38,
+     "t1": 1994.62,
+     "file": "floor6-a27.json"
+    },
+    {
+     "seg": "floor6-a28",
+     "t0": 1994.62,
+     "t1": 2003.62,
+     "file": "floor6-a28.json"
+    },
+    {
+     "seg": "floor6-a29",
+     "t0": 2003.62,
+     "t1": 2003.88,
+     "file": "floor6-a29.json"
+    },
+    {
+     "seg": "floor6-a30",
+     "t0": 2003.88,
+     "t1": 2004.12,
+     "file": "floor6-a30.json"
+    },
+    {
+     "seg": "floor6-a31",
+     "t0": 2004.12,
+     "t1": 2004.38,
+     "file": "floor6-a31.json"
+    },
+    {
+     "seg": "floor6-a32",
+     "t0": 2004.38,
+     "t1": 2004.62,
+     "file": "floor6-a32.json"
+    },
+    {
+     "seg": "floor6-a33",
+     "t0": 2004.62,
+     "t1": 2004.88,
+     "file": "floor6-a33.json"
+    },
+    {
+     "seg": "floor6-a34",
+     "t0": 2004.88,
+     "t1": 2005.12,
+     "file": "floor6-a34.json"
+    },
+    {
+     "seg": "floor6-a35",
+     "t0": 2005.12,
+     "t1": 2005.38,
+     "file": "floor6-a35.json"
+    },
+    {
+     "seg": "floor6-a36",
+     "t0": 2005.38,
+     "t1": 2005.62,
+     "file": "floor6-a36.json"
+    },
+    {
+     "seg": "floor6-a37",
+     "t0": 2005.62,
+     "t1": 2005.88,
+     "file": "floor6-a37.json"
+    },
+    {
+     "seg": "floor6-a38",
+     "t0": 2005.88,
+     "t1": 2016.88,
+     "file": "floor6-a38.json"
+    },
+    {
+     "seg": "floor6-a39",
+     "t0": 2016.88,
+     "t1": 2017.12,
+     "file": "floor6-a39.json"
+    },
+    {
+     "seg": "floor6-a40",
+     "t0": 2017.12,
+     "t1": 2017.38,
+     "file": "floor6-a40.json"
+    },
+    {
+     "seg": "floor6-a41",
+     "t0": 2017.38,
+     "t1": 2017.62,
+     "file": "floor6-a41.json"
+    },
+    {
+     "seg": "floor6-a42",
+     "t0": 2017.62,
+     "t1": 2017.88,
+     "file": "floor6-a42.json"
+    },
+    {
+     "seg": "floor6-a43",
+     "t0": 2017.88,
+     "t1": 2018.12,
+     "file": "floor6-a43.json"
+    },
+    {
+     "seg": "floor6-a44",
+     "t0": 2018.12,
+     "t1": 2018.38,
+     "file": "floor6-a44.json"
+    },
+    {
+     "seg": "floor6-a45",
+     "t0": 2018.38,
+     "t1": 2018.62,
+     "file": "floor6-a45.json"
+    },
+    {
+     "seg": "floor6-a46",
+     "t0": 2018.62,
+     "t1": 2018.88,
+     "file": "floor6-a46.json"
+    },
+    {
+     "seg": "floor6-a47",
+     "t0": 2018.88,
+     "t1": 2019.12,
+     "file": "floor6-a47.json"
+    },
+    {
+     "seg": "floor6-a48",
+     "t0": 2019.12,
+     "t1": 2019.38,
+     "file": "floor6-a48.json"
+    },
+    {
+     "seg": "floor6-a49",
+     "t0": 2019.38,
+     "t1": 2019.62,
+     "file": "floor6-a49.json"
+    },
+    {
+     "seg": "floor6-a50",
+     "t0": 2019.62,
+     "t1": 2019.88,
+     "file": "floor6-a50.json"
+    },
+    {
+     "seg": "floor6-a51",
+     "t0": 2019.88,
+     "t1": 2020.12,
+     "file": "floor6-a51.json"
+    },
+    {
+     "seg": "floor6-a52",
+     "t0": 2020.12,
+     "t1": 2020.38,
+     "file": "floor6-a52.json"
+    },
+    {
+     "seg": "floor6-a53",
+     "t0": 2020.38,
+     "t1": 2020.62,
+     "file": "floor6-a53.json"
+    },
+    {
+     "seg": "floor6-a54",
+     "t0": 2020.62,
+     "t1": 2020.88,
+     "file": "floor6-a54.json"
+    },
+    {
+     "seg": "floor6-a55",
+     "t0": 2020.88,
+     "t1": 2021.12,
+     "file": "floor6-a55.json"
+    },
+    {
+     "seg": "floor6-a56",
+     "t0": 2021.12,
+     "t1": 2021.38,
+     "file": "floor6-a56.json"
+    },
+    {
+     "seg": "floor6-a57",
+     "t0": 2021.38,
+     "t1": 2021.62,
+     "file": "floor6-a57.json"
+    },
+    {
+     "seg": "floor6-a58",
+     "t0": 2021.62,
+     "t1": 2071.62,
+     "file": "floor6-a58.json"
+    },
+    {
+     "seg": "floor6-a59",
+     "t0": 2071.62,
+     "t1": 2071.88,
+     "file": "floor6-a59.json"
+    },
+    {
+     "seg": "floor6-a60",
+     "t0": 2071.88,
+     "t1": 2072.12,
+     "file": "floor6-a60.json"
+    },
+    {
+     "seg": "floor6-a61",
+     "t0": 2072.12,
+     "t1": 2072.38,
+     "file": "floor6-a61.json"
+    },
+    {
+     "seg": "floor6-a62",
+     "t0": 2072.38,
+     "t1": 2072.62,
+     "file": "floor6-a62.json"
+    },
+    {
+     "seg": "floor6-a63",
+     "t0": 2072.62,
+     "t1": 2072.88,
+     "file": "floor6-a63.json"
+    },
+    {
+     "seg": "floor6-a64",
+     "t0": 2072.88,
+     "t1": 2073.12,
+     "file": "floor6-a64.json"
+    },
+    {
+     "seg": "floor6-a65",
+     "t0": 2073.12,
+     "t1": 2073.38,
+     "file": "floor6-a65.json"
+    },
+    {
+     "seg": "floor6-a66",
+     "t0": 2073.38,
+     "t1": 2073.62,
+     "file": "floor6-a66.json"
+    },
+    {
+     "seg": "floor6-a67",
+     "t0": 2073.62,
+     "t1": 2073.88,
+     "file": "floor6-a67.json"
+    },
+    {
+     "seg": "floor6-a68",
+     "t0": 2073.88,
+     "t1": 2074.12,
+     "file": "floor6-a68.json"
+    },
+    {
+     "seg": "floor6-a69",
+     "t0": 2074.12,
+     "t1": 2074.38,
+     "file": "floor6-a69.json"
+    },
+    {
+     "seg": "floor6-a70",
+     "t0": 2074.38,
+     "t1": 2074.62,
+     "file": "floor6-a70.json"
+    },
+    {
+     "seg": "floor6-a71",
+     "t0": 2074.62,
+     "t1": 2075.62,
+     "file": "floor6-a71.json"
+    },
+    {
+     "seg": "floor6-a72",
+     "t0": 2075.62,
+     "t1": 2075.88,
+     "file": "floor6-a72.json"
+    },
+    {
+     "seg": "floor6-a73",
+     "t0": 2075.88,
+     "t1": 2076.12,
+     "file": "floor6-a73.json"
+    },
+    {
+     "seg": "floor6-a74",
+     "t0": 2076.12,
+     "t1": 2094.5,
+     "file": "floor6-a74.json"
+    },
+    {
+     "seg": "floor6-a75",
+     "t0": 2094.5,
+     "t1": 2095.12,
+     "file": "floor6-a75.json"
+    },
+    {
+     "seg": "floor6-a76",
+     "t0": 2095.12,
+     "t1": 2095.38,
+     "file": "floor6-a76.json"
+    },
+    {
+     "seg": "floor6-a77",
+     "t0": 2095.38,
+     "t1": 2095.62,
+     "file": "floor6-a77.json"
+    },
+    {
+     "seg": "floor6-a78",
+     "t0": 2095.62,
+     "t1": 2095.88,
+     "file": "floor6-a78.json"
+    },
+    {
+     "seg": "floor6-a79",
+     "t0": 2095.88,
+     "t1": 2096.12,
+     "file": "floor6-a79.json"
+    },
+    {
+     "seg": "floor6-a80",
+     "t0": 2096.12,
+     "t1": 2097.12,
+     "file": "floor6-a80.json"
+    },
+    {
+     "seg": "floor6-a81",
+     "t0": 2097.12,
+     "t1": 2097.38,
+     "file": "floor6-a81.json"
+    },
+    {
+     "seg": "floor6-a82",
+     "t0": 2097.38,
+     "t1": 2097.62,
+     "file": "floor6-a82.json"
+    },
+    {
+     "seg": "floor6-a83",
+     "t0": 2097.62,
+     "t1": 2097.88,
+     "file": "floor6-a83.json"
+    },
+    {
+     "seg": "floor6-a84",
+     "t0": 2097.88,
+     "t1": 2098.12,
+     "file": "floor6-a84.json"
+    },
+    {
+     "seg": "floor6-a85",
+     "t0": 2098.12,
+     "t1": 2098.38,
+     "file": "floor6-a85.json"
+    },
+    {
+     "seg": "floor6-a86",
+     "t0": 2098.38,
      "t1": 2139.3,
-     "file": "floor6a.json"
+     "file": "floor6-a86.json"
     }
    ],
    "default": "floor6",

@@ -365,16 +365,24 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
   const roomCache = new Map(), texLoader = new THREE.TextureLoader();
   let roomSeg = null, roomCur = null, roomWant = null;
   const segAt = t => { const sg = room?.segments || []; if (t == null || !sg.length) return sg.find(x => x.seg === room.default) || sg[0]; return sg.find(x => t >= x.t0 && t < x.t1) || (t < sg[0].t0 ? sg[0] : sg[sg.length - 1]); };
+  const getJSON = f => fetch(room.base + f).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+  const meshCache = new Map(); // one mesh per reconstruction file, shared by the framings that re-aim the same camera
+  const meshOf = (file, d) => {
+    if (!meshCache.has(file)) meshCache.set(file, (d ? Promise.resolve(d) : getJSON(file))
+      .then(m => new Promise((ok, bad) => texLoader.load(room.base + m.texture, tex => { tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4; ok(roomMesh(m, tex)); }, undefined, bad))).catch(e => { meshCache.delete(file); throw e; }));
+    return meshCache.get(file);
+  };
+  // a framing is the camera (C, D, view: how the footage maps to the floor) plus a mesh; a re-aimed camera
+  // (bench/room_aims.py) keeps its reconstruction's mesh ("mesh": that file) with its own measured aim
   const loadSeg = sg => {
-    if (!roomCache.has(sg.seg)) roomCache.set(sg.seg, fetch(room.base + sg.file).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(d => new Promise((ok, bad) => texLoader.load(room.base + d.texture, tex => { tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4; ok({d, mesh: roomMesh(d, tex)}); }, undefined, bad))));
+    if (!roomCache.has(sg.seg)) roomCache.set(sg.seg, getJSON(sg.file).then(d => meshOf(d.mesh || sg.file, d.mesh ? null : d).then(mesh => ({d, mesh}))));
     return roomCache.get(sg.seg);
   };
   function showSeg(sg) {
     if (!sg || roomWant === sg.seg) return; roomWant = sg.seg;
     loadSeg(sg).then(r => {
       if (roomWant !== sg.seg || destroyed) return;
-      if (roomCur) roomG.remove(roomCur.mesh);
+      if (roomCur && roomCur.mesh !== r.mesh) roomG.remove(roomCur.mesh);
       roomCur = r; roomSeg = sg.seg; roomG.add(r.mesh);
       const v = r.d.view; roomCam.position.fromArray(v.pos); roomCam.lookAt(new THREE.Vector3().fromArray(v.look)); roomCam.up.fromArray(v.up);
       applyRoom(); if (!userMoved) setView(curView, !roomShown); roomShown = true; // a new framing: follow it unless the user has taken over
