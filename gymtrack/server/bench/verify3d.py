@@ -44,6 +44,7 @@ from gymtrack import pose3d as P3  # noqa: E402
 from gymtrack.camera import ANKLE_Z, PinholeCamera  # noqa: E402
 
 ASSETS = ROOT / "assets"
+SEG_CONFIGS = Path("/tmp/claude-0/-home-user-relay-work/851771c1-781b-56fa-9dda-a42b6ec0afa3/scratchpad/yt/segs")  # --seg-configs
 DEF_OUT = Path("/tmp/claude-0/-home-user-relay-work/851771c1-781b-56fa-9dda-a42b6ec0afa3/scratchpad/verify")
 W, H = 640, 360
 NOSE, LSH, RSH, LEL, REL, LWR, RWR, LHIP, RHIP, LKN, RKN, LAN, RAN = range(13)
@@ -969,13 +970,20 @@ def check_cameras(S):
     res = {}
     if not S.cams3d:
         return {"D3_cam_vs_plan_px": None, "D3_cam_vs_room_m": None, "D3_cam_yaw_deg": None}
-    cal = S.cam["calib"]
-    P = np.c_[np.array(cal["plan"], float), np.zeros(len(cal["plan"]))]
-    I = np.array(cal["image"], float)
-    px, dm, dy, rows = [], [], [], []
+    # The floor-plan calibration a segment's plan positions were made with is that segment's own config
+    # (<SEG_CONFIGS>/<seg>-config.json: the video's framing changes between segments). The manifest's single
+    # calib only describes one framing; it is kept as information (D3_cam_vs_manifest_px), not judged.
+    def calib_pts(cal):
+        return np.c_[np.array(cal["plan"], float), np.zeros(len(cal["plan"]))], np.array(cal["image"], float)
+    Pm, Im = calib_pts(S.cam["calib"])
+    px, pxm, dm, dy, rows = [], [], [], [], []
     for t0, t1, cam, name in S.cams3d:
+        cfgp = SEG_CONFIGS / f"{name}-config.json"
+        cal = json.load(open(cfgp))["cameras"][0].get("calib") if cfgp.exists() else None
+        P, I = calib_pts(cal) if cal else (Pm, Im)
         e = np.linalg.norm(cam.project(P) - I, axis=1)
         px.append(float(np.max(e)))
+        pxm.append(float(np.max(np.linalg.norm(cam.project(Pm) - Im, axis=1))))
         room = S.room_at((t0 + t1) / 2)
         if room:
             Cr = np.array(room["C"])
@@ -984,9 +992,11 @@ def check_cameras(S):
             fwr = np.array(room["D"]) @ np.array([room["W"] / 2, room["H"] / 2, 1.0])
             y3, yr = np.degrees(np.arctan2(fw3[1], fw3[0])), np.degrees(np.arctan2(fwr[1], fwr[0]))
             dy.append(float(abs((y3 - yr + 180) % 360 - 180)))
-            rows.append({"segment": name, "calib_px_max": round(px[-1], 1), "C_3d": np.round(cam.C, 2).tolist(), "C_room": np.round(Cr, 2).tolist(),
+            rows.append({"segment": name, "calib": "segment config" if cal else "manifest (no segment config)",
+                         "calib_px_max": round(px[-1], 1), "manifest_calib_px_max": round(pxm[-1], 1), "C_3d": np.round(cam.C, 2).tolist(), "C_room": np.round(Cr, 2).tolist(),
                          "f_3d": round(cam.f, 1), "f_room_640": round(room["f"] * W / room["W"], 1), "yaw_diff_deg": round(dy[-1], 1)})
     res["D3_cam_vs_plan_px"] = max(px)
+    res["D3_cam_vs_manifest_px"] = max(pxm)
     res["D3_cam_vs_room_m"] = max(dm) if dm else None
     res["D3_cam_yaw_deg"] = max(dy) if dy else None
     res["D3_cameras"] = rows
@@ -1362,7 +1372,10 @@ def main(argv=None):
     ap.add_argument("--busy", type=int, default=10)
     ap.add_argument("--no-video", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seg-configs", default=None, help="directory of <segment>-config.json (per-segment floor-plan calibration for D3)")
     a = ap.parse_args(argv)
+    if a.seg_configs:
+        globals()["SEG_CONFIGS"] = Path(a.seg_configs)
     over = dict(x.split("=", 1) for x in a.pose3d)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
