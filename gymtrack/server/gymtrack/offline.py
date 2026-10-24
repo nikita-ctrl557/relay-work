@@ -150,10 +150,18 @@ class _DeferredSets:
         self.pending = []
 
 
-def _apply_geometry(geo: dict, cam_id: str, analyser, tracker, guard, engine) -> None:
+REFRAME_PX = 25.0  # a camera move bigger than this (corner displacement, analysis px) ends sets under way
+
+
+def _apply_geometry(geo: dict, cam_id: str, analyser, tracker, guard, engine, ts: float | None = None, jump_px: float = 0.0) -> None:
     """The camera moved (follow.py): ignore areas, mirrors, floor calibration and the zones people are placed in, as
     they now are in the picture. The analyser keeps the drawn zones: it reads the frame warped onto the reference."""
-    analyser.prev = None  # the warp changed: no frame difference across it (it would light up every zone at once)
+    if ts is not None and jump_px > REFRAME_PX:
+        # the camera was re-aimed: a set under way can't be followed across it (its zone signals before and after
+        # are different pictures, and what moved during the move is the camera), so it ends here
+        for mt in engine.machines.values():
+            if mt.state == "lifting":
+                mt._finish_set(ts)
     if tracker is not None:
         tracker.set_zones(geo["zones"])
         tracker.ignore = [np.array(p, np.float32) for p in geo["ignore"] + geo["mirrors"]]
@@ -162,11 +170,11 @@ def _apply_geometry(geo: dict, cam_id: str, analyser, tracker, guard, engine) ->
             tracker.calib_image = geo["calib"]["image"]
     if guard is not None:
         guard.mirrors = [list(p) for p in geo["mirrors"]]
+    # "near the zone" boxes follow the picture; which zones overlap stays decided on the drawn ones (a property of
+    # the layout: a few pixels of drift must not flip whether feet in the next zone count as "at another machine")
     for z in geo["zones"]:
         p = z.polygon
-        engine._zone_polys[(cam_id, z.machine)] = p
         engine._zone_boxes[(cam_id, z.machine)] = (min(q[0] for q in p), min(q[1] for q in p), max(q[0] for q in p), max(q[1] for q in p))
-    engine._overlap.clear()
 
 
 def _finish(cfg: GymConfig, cam: Camera, engine: Engine, sink, start_ts: float, end: float, tracker,
@@ -267,7 +275,7 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
     engine = Engine(cfg, sink, keep_all=True)
     follow = bool(getattr(cam, "reference", None))
     analyser = FrameAnalyzer(cam)
-    follower, zone_epochs = None, []
+    follower, zone_epochs, prev_raw = None, [], None
     if people is None:
         people = DEFAULT_MODEL.exists()
     tracker = None
@@ -308,8 +316,12 @@ def analyse(path: str, cfg: GymConfig, cam: Camera, store=None, start_ts: float 
                 follower = CameraFollower(cam, cam.reference, frame.shape[1], frame.shape[0])
             geo = follower.check(frame, t)
             if geo is not None:
-                _apply_geometry(geo, cam.id, analyser, tracker, guard, engine)
+                _apply_geometry(geo, cam.id, analyser, tracker, guard, engine, start_ts + t, geo["jump_px"])
+                if prev_raw is not None:  # difference the next frame against the previous one seen through the new warp
+                    pw = cv2.warpPerspective(prev_raw, follower.H, (frame.shape[1], frame.shape[0])) if follower.moved else prev_raw
+                    analyser.prev = cv2.GaussianBlur(cv2.cvtColor(pw, cv2.COLOR_BGR2GRAY) if pw.ndim == 3 else pw, (5, 5), 0)
                 zone_epochs.append({"t": round(t, 2), "zones": {z.machine: z.polygon for z in geo["zones"]}})
+            prev_raw = frame
         if guard is not None and guard.mirrors and cam.mirror_motion:  # mirror glass: motion only counts on real people
             analyser.exclude = guard.motion_exclusion(frame.shape, kept_tracks)
         if follower is not None and follower.moved:
