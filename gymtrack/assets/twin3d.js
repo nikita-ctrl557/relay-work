@@ -496,10 +496,11 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       const key = (q.camera || "") + ":" + q.pid;
       let Jm = null, A = null;
       if (q.pose3d?.J) { const r = mapBody(q.pose3d.J, fm); if (r) { Jm = r.J; A = fm ? r.A : null; } } // no camera for the 3D: shape only, placed by the tracker
+      let ref3d = null; if (!q.pose3d && q.pose3dOff?.J && fm) { const r = mapBody(q.pose3dOff.J, fm); if (r) ref3d = r.A; } // 3D measured but not shown
       if (!rf && !A && !placers.get(key)?.st.pos) continue;
       const pl = placers.get(key) || (placers.set(key, {st: newPlacer()}), placers.get(key)); pl.seen = t;
       const eq = q.setM ? stationOf(q.setM) : null; // nudge towards where its user stands / sits
-      const pos = stepPlacer(pl.st, t, A, rf, {set: eq, obstacles, free: q.planted && q.zone ? [q.zone] : [], planted: !!q.planted});
+      const pos = stepPlacer(pl.st, t, A, rf, {set: eq, obstacles, free: q.planted && q.zone ? [q.zone] : [], planted: !!q.planted, ref3d});
       if (!pos || pos[0] < x0 - 2 || pos[0] > x1 + 2 || pos[1] < z0 - 2 || pos[1] > z1 + 2) continue;
       const p = person(key); seen.add(key);
       p.q = q; p.want = 1; p.Jm = Jm; p.A = Jm ? (A || [(Jm[33] + Jm[36]) / 2, (Jm[34] + Jm[37]) / 2]) : null; p.conf = q.pose3d?.c || null; p.s = fm?.s || 1;

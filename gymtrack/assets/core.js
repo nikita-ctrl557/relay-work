@@ -849,7 +849,7 @@ class ReplaySource {
       if (p.c) { let s = 0; for (let j = 0; j < 13; j++) s += p.c[j]; ok = s / 13 >= 0.45; }
       if (ok && this.mp) ok = this.mp.body3dOk(p.J, cam, q.box, q.pose);
       if (!ok) bad.set(q.pid, ct + 1);
-      if ((bad.get(q.pid) ?? -1) > ct) { q.pose3d = null; q.pose3dHidden = true; }
+      if ((bad.get(q.pid) ?? -1) > ct) { q.pose3d = null; q.pose3dHidden = true; q.pose3dOff = p; } // off: not drawn, but where its feet were measured still tells the map whether a tracker point is plausible
     }
     return list;
   }

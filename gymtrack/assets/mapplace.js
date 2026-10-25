@@ -113,7 +113,8 @@ export function mapBody(P, map, out = null) {
    Unbacked fallback: when the 3D is off and the tracker point is > 1.5 m from where the person's 3D feet were measured
    within the last 2 s (a box ending at the far wall behind equipment, or a box that jumped to someone else), that
    point is not drawn: st.hidden is set (the view fades the body out) until the 3D is back, the tracker point agrees
-   again, or the 2 s have passed. The placer still follows the measured point (nothing is held or moved). */
+   again, or the 2 s have passed. The placer still follows the measured point (nothing is held or moved). A 3D body that
+   exists but is not shown (the believability gate) still measured where the feet are: ctx.ref3d (its mapped feet). */
 export const WALK = 2.0;                 // m/s: the fallback never moves a body faster
 const FALL_GAP = 1.5, FALL_WIN = 2.0, GLIDE_V = 3.0, GLIDE_WIN = 0.3, TAU_FALL = 0.15, TAU_BLEND = 0.2, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 0.7, CUT_HOLD = 0.15, RESET_GAP = 2.0, EQ_IN = 0.35;
 const capStep = (dx, dy, max) => { const l = Math.hypot(dx, dy); return l > max && l > 0 ? [dx * max / l, dy * max / l] : [dx, dy]; };
@@ -126,14 +127,15 @@ export const insideEq = (p, r) => Math.abs(p[0] - r.x) < r.w / 2 - EQ_IN && Math
 
 export function newPlacer() { return {t: null, base: null, off: [0, 0], c: [0, 0], src: null, lastA: null, far: 0, pos: null, cut: false, inside: false, hist: [], glide: false, last3d: null, hidden: false}; }
 /* st: placer state; t: replay seconds; A: mapped 3D feet or null; rf: tracker room-feet point or null;
-   ctx: {set: equipment rect of the machine of the set under way (or null), obstacles: [rect], free: [machine ids]}.
+   ctx: {set: equipment rect of the machine of the set under way (or null), obstacles: [rect], free: [machine ids],
+        ref3d: mapped feet of a 3D body that exists but is not shown (or null)}.
    Returns the map position of the person's feet ([x, y]) or null; st.cut is true on the step where the body
    jumped to a new spot (fade it), st.inside when the feet are inside tall equipment, st.hidden when the point is an
    unbacked tracker fallback (see above; not drawn). */
 export function stepPlacer(st, t, A, rf, ctx = {}) {
   const dt = st.t == null ? Infinity : t - st.t;
   st.cut = false; st.hidden = false;
-  if (A) st.last3d = [t, A[0], A[1]];
+  const R3 = A || ctx.ref3d; if (R3) st.last3d = [t, R3[0], R3[1]];
   if (!(dt >= 0 && dt <= RESET_GAP) || !st.base) { // first sight, a seek, or back after a long gap: place directly
     const p = A || rf; if (!p) { st.t = t; return st.pos; }
     Object.assign(st, {base: p.slice(), off: [0, 0], c: [0, 0], src: A ? "3d" : "trk", lastA: A, far: 0, cut: st.pos != null, hist: A ? [[t, A[0], A[1]]] : [], glide: false});
