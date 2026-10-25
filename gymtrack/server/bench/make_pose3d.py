@@ -760,7 +760,7 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
         bend[(g >= st[0] - 1) & (g <= st[1] + 1)] = 1.0
     ex_sets = [(st[0], st[1], st[2], st[3]) for st in sets if len(st) >= 4 and EX_PRIORS_ON]
     for st in sets:      # supine sets: a level trunk is no implausible back lean
-        if len(st) >= 3 and st[2] == "bench_press":
+        if len(st) >= 3 and st[2] in ("bench_press", "deadlift", "row"):    # supine, or hinged (lean from foreshortening)
             bend[(g >= st[0] - 1) & (g <= st[1] + 1)] = 2.0
     anc, boxes = None, None
     if anchors is not None and len(anchors) >= 1:
@@ -790,11 +790,35 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
         far = np.array([np.abs(ta - gi).min() > 1.1 for gi in g])
         anc[far] = np.nan
         anc = reject_hops(g, anc)
+    for st in ex_sets:      # standing exercises: legs drawn short in the 2D are hidden (behind a rack), not bent
+        if st[2] in ("overhead_press", "lateral_raise", "triceps_pushdown", "curl"):
+            m_ = (g >= st[0] - 0.5) & (g <= st[1] + 0.5)
+            hv = (UV[:, P3.LHIP, 1] + UV[:, P3.RHIP, 1]) / 2
+            sv = (UV[:, P3.LSH, 1] + UV[:, P3.RSH, 1]) / 2
+            av = np.nanmax(np.where(Wg[:, [P3.LAN, P3.RAN]] > 0, UV[:, [P3.LAN, P3.RAN], 1], np.nan), axis=1)
+            with np.errstate(invalid="ignore"):
+                short = m_ & ((Wg[:, [P3.LSH, P3.RSH, P3.LHIP, P3.RHIP]] > 0).all(1)) & ((av - hv) < 0.9 * (hv - sv))
+            if short.any():
+                Wg = Wg.copy()
+                Wg[np.ix_(short, [P3.LKN, P3.RKN, P3.LAN, P3.RAN])] = 0.0
     seat = seat_targets(cam, UV, Wg, seats, g) if SEATS_ON else None
     if HIDDEN_FEET_ON:
         UV, Wg, anc = hidden_feet(cam, g, Xs, UV, Wg, anc, seat)
     Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc, sets=ex_sets, seat=seat,
                                      inner=raw_inner(cam, g, UV))
+    # a hinge leans forward: seen from behind, the detector's left/right (front/back) is a guess; when the fitted
+    # body leans backward against its own facing through the hinge sets, the labels were mirrored: swap them
+    hm = np.zeros(len(g), bool)
+    for st in ex_sets:
+        if st[2] in ("deadlift", "row"):
+            hm |= (g >= st[0]) & (g <= st[1])
+    if hm.sum() >= 10:
+        fw = PP._hfwd(Xr, hand)
+        tr = ((Xr[:, P3.LSH] + Xr[:, P3.RSH]) / 2 - (Xr[:, P3.LHIP] + Xr[:, P3.RHIP]) / 2)[:, :2]
+        lean = (tr * fw[:, :2]).sum(1)
+        if np.median(lean[hm]) < -0.05:
+            sw = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11]
+            Xr, UV, Wg = Xr[:, sw], UV[:, sw], Wg[:, sw]
     if DEPTH_CAP_ON:
         Xr = cap_depth_speed(cam, g, Xr)
     Q = frame_quality(cam, g, Xr, UV, Wg, boxes, raw_inner(cam, g, UV))

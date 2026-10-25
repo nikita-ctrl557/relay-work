@@ -98,6 +98,43 @@ export function mapBody(P, map, out = null) {
   return {J: out, A: [(out[33] + out[36]) / 2, (out[34] + out[37]) / 2]};
 }
 
+/* ---------- the tracker's feet point ---------- */
+/* Where a person without a usable 3D body stands on the room floor, from the tracker box: the bottom-centre of the box
+   through the room camera onto the floor. That is only the feet when the feet are what the box bottom is: someone
+   behind a dumbbell tower or seated behind a machine has a box ending at the equipment, and that ray runs on to the far
+   wall, metres behind them. So the room's own depth is checked at the box bottom (depth: a reconstruction with
+   {W, H, C, D, gw, gh, far, zq: depths 0..65535} in its own framing, which may be another aim of the same camera):
+   when the room there is equipment standing in front of the floor point, the feet are hidden and the point comes from
+   the head instead: the ray through the head (2D nose, else just under the box top) meets the height the head is at
+   (the person's 3D nose height when there is a 3D fit, shown or not; else a standing nose height), and the feet are
+   below it. Returns {p: [x, y], occluded} or null. cam: {W, H, C, D} of the framing playing (pixels W x H). */
+export const NOSE_Z = 1.55;
+export function trackerFeet(cam, box, {depth = null, head = null, headZ = null} = {}) {
+  if (!cam || !box) return null;
+  const {W, H, C, D} = cam, ray = (u, v) => [0, 1, 2].map(i => D[i][0] * u + D[i][1] * v + D[i][2]);
+  const u = (box[0] + box[2] / 2) * W, v = (box[1] + box[3]) * H, d = ray(u, v);
+  if (d[2] > -1e-4) return null;
+  const t = -C[2] / d[2]; if (t > 40) return null;
+  const F = [C[0] + t * d[0], C[1] + t * d[1]];
+  let occluded = false;
+  if (depth && box[1] + box[3] < 0.985) {   // the room at the box bottom (2 px up): equipment in front of the floor point?
+    const Di = inv3(depth.D), e = ray(u, v - 2), p = Di && Di.map(r => r[0] * e[0] + r[1] * e[1] + r[2] * e[2]);
+    if (p && p[2] > 1e-6) {
+      const ud = p[0] / p[2], vd = p[1] / p[2], j = Math.round(ud / depth.W * (depth.gw - 1)), i = Math.round(vd / depth.H * (depth.gh - 1));
+      if (i >= 0 && i < depth.gh && j >= 0 && j < depth.gw) {
+        const z = depth.zq[i * depth.gw + j] / 65535 * depth.far, Dd = depth.D, Cd = depth.C;
+        const R = [0, 1, 2].map(k => Cd[k] + z * (Dd[k][0] * ud + Dd[k][1] * vd + Dd[k][2]));
+        occluded = R[2] > 0.25 && Math.hypot(R[0] - C[0], R[1] - C[1]) < Math.hypot(F[0] - C[0], F[1] - C[1]) - 0.3;
+      }
+    }
+  }
+  if (!occluded) return {p: F, occluded};
+  const hu = head ? head[0] * W : u, hv = head ? head[1] * H : (box[1] + 0.07 * box[3]) * H, hz = headZ ?? NOSE_Z, dh = ray(hu, hv);
+  if (!(dh[2] < -1e-4) || !(hz < C[2] - 0.1)) return {p: F, occluded};
+  const th = (hz - C[2]) / dh[2]; if (!(th > 0 && th < 40)) return {p: F, occluded};
+  return {p: [C[0] + th * dh[0], C[1] + th * dh[1]], occluded};
+}
+
 /* ---------- placer ---------- */
 /* One per person. The 3D feet win whenever there is 3D (followed exactly: no lag, planted feet stay planted);
    the 1 Hz tracker point is only a fallback, smoothed at walking pace. Never a long glide: when the source the

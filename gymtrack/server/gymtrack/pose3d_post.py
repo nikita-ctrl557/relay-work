@@ -660,17 +660,17 @@ def grid_2d(t, uv, w, g, max_dt=0.4):
 
 # exercise -> which soft priors hold during the set (see exercise_rows)
 EX_PRIORS = {
-    "squat": ("feet", "legsym", "hipxy", "facing"), "deadlift": ("feet", "legsym", "facing"),     # a hinge: hips move back
+    "squat": ("feet", "legsym", "hipxy", "facing"), "deadlift": ("feet", "legsym", "facing", "hinge"),     # a hinge: hips move back
     "bench_press": ("feet", "lying", "armsym", "pelvis"),
     "cable_row": ("feet", "pelvis"), "seated": ("feet", "pelvis"), "lat_pulldown": ("feet", "pelvis"),
-    "row": ("feet", "floor", "lean", "facing"),
+    "row": ("feet", "floor", "hinge", "facing"),
     "overhead_press": ("feet", "floor", "stand", "pelvis", "armsym", "facing"),
     "lateral_raise": ("feet", "floor", "stand", "pelvis", "armsym", "facing"),
     "triceps_pushdown": ("feet", "floor", "stand", "pelvis", "facing"), "curl": ("feet", "floor", "stand", "pelvis", "facing"),
 }
 
 
-def exercise_rows(X0, sets, g, bench_h=None, groups=None):
+def exercise_rows(X0, sets, g, bench_h=None, groups=None, UV=None, W=None):
     """Soft linear priors for the credited lifter during each set, from the set's own median pose (so a true
     mislabel can still pull away): feet locked, pelvis on the seat / bench, legs moving symmetrically, hips on a
     vertical path, facing and trunk lean constant, bilateral arms level. sets: [(t0, t1, ex, machine_h or None)]."""
@@ -686,6 +686,27 @@ def exercise_rows(X0, sets, g, bench_h=None, groups=None):
             M[[LAN, RAN], 2] = ANKLE_Z
         if "stand" in kinds and gd is not None:
             M[[LHIP, RHIP], 2] = ANKLE_Z + gd["shank"] * 0.97 + gd["thigh"] * 0.95
+        if "hinge" in kinds and gd is not None and UV is not None:
+            # a hinge seen from behind or in front: the torso foreshortens against the thighs; that ratio (vs the
+            # upright one of this person's bones) is the cosine of the trunk lean -> the trunk's height above the hips
+            ok_ = (np.asarray(W)[idx][:, [LSH, RSH, LHIP, RHIP, LKN, RKN]] > 0).all(1)
+            u = np.asarray(UV, float)[idx]
+            tp = np.linalg.norm((u[:, LSH] + u[:, RSH]) / 2 - (u[:, LHIP] + u[:, RHIP]) / 2, axis=-1)
+            th = (np.linalg.norm(u[:, LKN] - u[:, LHIP], axis=-1) + np.linalg.norm(u[:, RKN] - u[:, RHIP], axis=-1)) / 2
+            c = np.where(ok_ & (th > 5), tp / np.maximum(th, 1e-6) / (gd["torso"] / gd["thigh"]), np.nan)
+            cs = np.full(len(idx), np.nan)
+            for k_ in range(len(idx)):
+                m_ = np.abs(g[idx] - g[idx[k_]]) <= 0.3
+                if np.isfinite(c[m_]).sum() >= 2:
+                    cs[k_] = np.nanmedian(c[m_])
+            for k_, f in enumerate(idx):
+                if np.isfinite(cs[k_]):
+                    rows.append((f, [(LSH, 2, 0.5), (RSH, 2, 0.5), (LHIP, 2, -0.5), (RHIP, 2, -0.5)],
+                                 gd["torso"] * float(np.clip(cs[k_], 0.15, 1.0)), 0.08))
+                # the hinge is at the hips: thighs stay near vertical (knees roughly under the hips)
+                for hp, kn in ((LHIP, LKN), (RHIP, RKN)):
+                    for k in range(2):
+                        rows.append((f, [(kn, k, 1.0), (hp, k, -1.0)], 0.0, 0.12))
         for f in idx:
             if "stand" in kinds and gd is not None:     # standing straight-legged: knees over the ankles
                 for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
@@ -768,7 +789,7 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
         pm[seated] = 0.0
     pins = stance_pins(X0)
     pins[bad] = np.nan
-    ex_rows = exercise_rows(X0, sets, g, groups=groups) if sets else []
+    ex_rows = exercise_rows(X0, sets, g, groups=groups, UV=UV, W=W) if sets else []
     for i in np.flatnonzero(seated):
         for k in range(3):
             ex_rows.append((i, [(LHIP, k, 0.5), (RHIP, k, 0.5)], seat[i, k], 0.08 if k < 2 else 0.05))

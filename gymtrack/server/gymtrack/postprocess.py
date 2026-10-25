@@ -114,6 +114,35 @@ def _in_poly(poly: np.ndarray, x: float, y: float) -> bool:
     return cv2.pointPolygonTest(poly, (float(x), float(y)), False) >= 0
 
 
+def _ev(s: dict) -> dict:
+    ev = s.get("ev") or s.get("evidence") or {}
+    if isinstance(ev, str):    # older results stored it as a Python repr
+        import ast
+        try:
+            ev = ast.literal_eval(ev)
+        except (ValueError, SyntaxError):
+            ev = {}
+    return ev
+
+
+def nobody_did_it(s: dict) -> bool:
+    """The set's own evidence says nobody lifted: no one's motion matched the machine (no credit score, or every
+    candidate's below CREDIT_MIN; not given by location to someone at the machine), and the only rep evidence is the
+    zone's own motion (the pose and thumbnail counters found no reps) for fewer than MIN_REPS reps. Someone standing
+    by a machine talking, a bag set down. A set any counter saw repeat, or with 3+ zone reps, is left alone."""
+    from .engine import MIN_REPS
+    if s.get("credit") is not None or s.get("credit_by") == "location":
+        return False
+    if s.get("cands") and max(s["cands"].values()) >= CREDIT_MIN:
+        return False
+    counts = _ev(s).get("counts") or {}
+    if not counts or "zone" not in counts:
+        return False
+    other = sum((v[0] or 0) for k, v in counts.items() if k != "zone")
+    est = s.get("reps_est", s.get("reps"))
+    return other == 0 and est is not None and est < MIN_REPS
+
+
 def lifter_location(sets: list[dict], timeline: list[dict], zones: dict, W: float = 640.0, H: float = 360.0,
                     epochs: list | None = None) -> list[dict]:
     """Lifter location check (step 4 above), in place. zones: _zone_geo(cam). Returns the changes made.
@@ -126,6 +155,12 @@ def lifter_location(sets: list[dict], timeline: list[dict], zones: dict, W: floa
         return changes
     T = np.array([e["t"] for e in timeline])
     for s in sets:
+        if nobody_did_it(s):
+            s["_spill"] = "no_lifter"
+            s["drop_reason"] = ("nobody moved with the machine and nothing but a borderline zone flicker repeated "
+                                f"({s.get('reps_est')} rep(s), no pose or thumbnail reps): not a set")
+            changes.append({"m": s["m"], "t0": s["t0"], "from": s.get("pid"), "to": None, "why": "no_lifter_evidence"})
+            continue
         geo = zones.get(s.get("m"))
         if geo is None:
             continue

@@ -306,16 +306,18 @@ def merge_equipment(rooms):
     return out
 
 
-def work_of(cfg_path):
-    """{machine: (x0, y0, x1, y1)} of the config's zone "work" rects (working positions measured from the video)."""
+def work_of(cfg_path, key="work"):
+    """{machine: (x0, y0, x1, y1)} of the config's zone "work" rects (working positions measured from the video), or with
+    key="outline" the zones' video-measured outline overrides (where the room's contacts merged separate objects into
+    the machine, e.g. the bins standing in front of the dumbbell towers)."""
     out = {}
     for z in json.load(open(cfg_path))["cameras"][0]["zones"]:
-        if z.get("work"):
-            a = np.float32(z["work"]); out[z["machine"]] = (float(a[:, 0].min()), float(a[:, 1].min()), float(a[:, 0].max()), float(a[:, 1].max()))
+        if z.get(key):
+            a = np.float32(z[key]); out[z["machine"]] = (float(a[:, 0].min()), float(a[:, 1].min()), float(a[:, 0].max()), float(a[:, 1].max()))
     return out
 
 
-def apply_work(equip, work):
+def apply_work(equip, work, outline=None):
     """Each machine's last equipment entry becomes its "area": the machine's outline plus its working position (the
     floor where its users stand or sit while lifting: a lever's handle end, in front of a cable tower or a rack, the
     floor around the dumbbell racks), measured from the video (config zone "work"). Height 0 and "area", so nothing takes
@@ -334,6 +336,8 @@ def apply_work(equip, work):
             continue
         base = next((e for e in es if e.get("area")), es[-1])
         ox0, oy0, ox1, oy1 = base["x"] - base["w"] / 2, base["y"] - base["d"] / 2, base["x"] + base["w"] / 2, base["y"] + base["d"] / 2
+        if outline and m in outline:   # the machine itself as measured on the video (config zone "outline")
+            ox0, oy0, ox1, oy1 = outline[m]
         x0, y0, x1, y1 = min(ox0, wx0), min(oy0, wy0), max(ox1, wx1), max(oy1, wy1)
         r = lambda a, b, c, d: {"x": round((a + c) / 2, 2), "y": round((b + d) / 2, 2), "w": round(c - a, 2), "d": round(d - b, 2)}
         e = {"machine": m, **r(x0, y0, x1, y1), "h": 0.0, "top": base.get("top", base.get("h")), "views": base.get("views"),
@@ -369,7 +373,8 @@ if __name__ == "__main__" and sys.argv[1:2] == ["--work"]:
     index = json.load(open(f"{out_dir}/index.json"))
     for arg in sys.argv[4:]:
         session, cseg = arg.split(":")
-        index["sessions"][session]["equipment"] = apply_work(index["sessions"][session]["equipment"], work_of(f"{segs_dir}/{cseg}-config.json"))
+        index["sessions"][session]["equipment"] = apply_work(index["sessions"][session]["equipment"], work_of(f"{segs_dir}/{cseg}-config.json"),
+                                                         work_of(f"{segs_dir}/{cseg}-config.json", "outline"))
         print(session, [(e["machine"], e["x"], e["y"], e["w"], e["d"]) for e in index["sessions"][session]["equipment"] if e.get("use")])
     json.dump(index, open(f"{out_dir}/index.json", "w"), indent=1)
 elif __name__ == "__main__":
@@ -397,6 +402,6 @@ elif __name__ == "__main__":
         sh = [r["shell"] for r in rooms]
         bounds = {"x0": min(b["x0"] for b in sh), "x1": max(b["x1"] for b in sh), "y0": min(b["y0"] for b in sh) - 0.2, "y1": max(b["y1"] for b in sh)}
         index["sessions"][session] = {"segments": entries, "default": longest, "bounds": {k: round(v, 2) for k, v in bounds.items()},
-                                      "height": CEIL, "equipment": apply_work(merge_equipment(rooms), work_of(f"{segs_dir}/{segs[0].split('@')[-2] if '@' in segs[0] else segs[0]}-config.json"))}
+                                      "height": CEIL, "equipment": apply_work(merge_equipment(rooms), *(work_of(f"{segs_dir}/{segs[0].split('@')[-2] if '@' in segs[0] else segs[0]}-config.json", k) for k in ("work", "outline")))}
     json.dump(index, open(f"{out_dir}/index.json", "w"), indent=1)
 
