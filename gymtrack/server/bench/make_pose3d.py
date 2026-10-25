@@ -790,22 +790,47 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
         far = np.array([np.abs(ta - gi).min() > 1.1 for gi in g])
         anc[far] = np.nan
         anc = reject_hops(g, anc)
+    reinit = None
+    stand_sets = []
     for st in ex_sets:      # standing exercises: legs drawn short in the 2D are hidden (behind a rack), not bent
         if st[2] in ("overhead_press", "lateral_raise", "triceps_pushdown", "curl"):
-            m_ = (g >= st[0] - 0.5) & (g <= st[1] + 0.5)
+            m_ = (g >= st[0] - 15.0) & (g <= st[1] + 15.0)      # the set, and the lifter standing at the station around it
             hv = (UV[:, P3.LHIP, 1] + UV[:, P3.RHIP, 1]) / 2
             sv = (UV[:, P3.LSH, 1] + UV[:, P3.RSH, 1]) / 2
             av = np.nanmax(np.where(Wg[:, [P3.LAN, P3.RAN]] > 0, UV[:, [P3.LAN, P3.RAN], 1], np.nan), axis=1)
             with np.errstate(invalid="ignore"):
-                short = m_ & ((Wg[:, [P3.LSH, P3.RSH, P3.LHIP, P3.RHIP]] > 0).all(1)) & ((av - hv) < 0.9 * (hv - sv))
+                # standing, the ankles are ~1.7 torso lengths below the hips in the image; < 1.3: hidden, guessed
+                obs = m_ & ((Wg[:, [P3.LSH, P3.RSH, P3.LHIP, P3.RHIP]] > 0).all(1)) & np.isfinite(av)
+                short = obs & ((av - hv) < 1.3 * (hv - sv))
+                # frames without a 2D sample take the nearest sample's verdict (the legs stay hidden in between)
+                oi = np.flatnonzero(obs)
+                if len(oi) and short.any():
+                    near_ = oi[np.clip(np.searchsorted(oi, np.arange(len(g))), 0, len(oi) - 1)]
+                    prev_ = oi[np.clip(np.searchsorted(oi, np.arange(len(g))) - 1, 0, len(oi) - 1)]
+                    pick = np.where(np.abs(prev_ - np.arange(len(g))) < np.abs(near_ - np.arange(len(g))), prev_, near_)
+                    short = m_ & short[pick]
             if short.any():
                 Wg = Wg.copy()
                 Wg[np.ix_(short, [P3.LKN, P3.RKN, P3.LAN, P3.RAN])] = 0.0
+                # the box bottom is the occluder's edge, not the feet: stand her where the shoulders put her at
+                # standing shoulder height, and start those frames from that standing pose (not the crouched fit)
+                gd_ = dict(zip(P3.GROUP_NAMES, np.asarray(groups, float)))
+                sh_h = 0.07 + gd_["shank"] + gd_["thigh"] + gd_["torso"] * 0.97
+                anc = np.full((len(g), 2), np.nan) if anc is None else np.array(anc, float)
+                for i_ in np.flatnonzero(short):
+                    Pq = cam.backproject_to_height((UV[i_, P3.LSH] + UV[i_, P3.RSH]) / 2, sh_h)
+                    if np.isfinite(Pq).all() and cam.depth(Pq) > 1.0:
+                        anc[i_] = Pq[:2]
+                reinit = short if reinit is None else (reinit | short)
+                idx_ = np.flatnonzero(short)        # and stand: straight legs, feet on the floor (runs of hidden legs)
+                for run in np.split(idx_, np.flatnonzero(np.diff(idx_) > 3) + 1):
+                    if len(run) >= 3:
+                        stand_sets.append((float(g[run[0]]), float(g[run[-1]]), "stand", None))
     seat = seat_targets(cam, UV, Wg, seats, g) if SEATS_ON else None
     if HIDDEN_FEET_ON:
         UV, Wg, anc = hidden_feet(cam, g, Xs, UV, Wg, anc, seat)
-    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc, sets=ex_sets, seat=seat,
-                                     inner=raw_inner(cam, g, UV))
+    Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc, sets=list(ex_sets) + stand_sets, seat=seat,
+                                     inner=raw_inner(cam, g, UV), reinit=reinit)
     if DEPTH_CAP_ON:
         Xr = cap_depth_speed(cam, g, Xr)
     Q = frame_quality(cam, g, Xr, UV, Wg, boxes, raw_inner(cam, g, UV))

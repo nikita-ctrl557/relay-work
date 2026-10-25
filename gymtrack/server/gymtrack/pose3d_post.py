@@ -666,6 +666,7 @@ EX_PRIORS = {
     "row": ("feet", "floor", "hinge", "facing"),
     "overhead_press": ("feet", "floor", "stand", "pelvis", "armsym", "facing"),
     "lateral_raise": ("feet", "floor", "stand", "pelvis", "armsym", "facing"),
+    "stand": ("floor", "stand"),        # hidden legs of someone standing at a station (not a set)
     "triceps_pushdown": ("feet", "floor", "stand", "pelvis", "facing"), "curl": ("feet", "floor", "stand", "pelvis", "facing"),
 }
 
@@ -685,7 +686,7 @@ def exercise_rows(X0, sets, g, bench_h=None, groups=None, UV=None, W=None):
         if "floor" in kinds:          # standing exercises: the feet on the floor (not on whatever hides them)
             M[[LAN, RAN], 2] = ANKLE_Z
         if "stand" in kinds and gd is not None:
-            M[[LHIP, RHIP], 2] = ANKLE_Z + gd["shank"] * 0.97 + gd["thigh"] * 0.95
+            M[[LHIP, RHIP], 2] = ANKLE_Z + gd["shank"] * 0.99 + gd["thigh"] * 0.99
         if "hinge" in kinds and gd is not None and UV is not None:
             # a hinge seen from behind or in front: the torso foreshortens against the thighs; that ratio (vs the
             # upright one of this person's bones) is the cosine of the trunk lean -> the trunk's height above the hips
@@ -710,8 +711,11 @@ def exercise_rows(X0, sets, g, bench_h=None, groups=None, UV=None, W=None):
         for f in idx:
             if "stand" in kinds and gd is not None:     # standing straight-legged: knees over the ankles
                 for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
-                    rows.append((f, [(kn, 2, 1.0), (an, 2, -1.0)], gd["shank"] * 0.97, 0.05))
-                    rows.append((f, [(hp, 2, 1.0), (kn, 2, -1.0)], gd["thigh"] * 0.95, 0.05))
+                    rows.append((f, [(kn, 2, 1.0), (an, 2, -1.0)], gd["shank"] * 0.99, 0.03))
+                    rows.append((f, [(hp, 2, 1.0), (kn, 2, -1.0)], gd["thigh"] * 0.99, 0.03))
+            if "floor" in kinds and "feet" not in kinds:
+                for an in (LAN, RAN):
+                    rows.append((f, [(an, 2, 1.0)], ANKLE_Z, 0.03))
             if "feet" in kinds:
                 for an in (LAN, RAN):
                     for k in range(3):
@@ -756,7 +760,7 @@ def seated_pose(X, groups, hand, P):
 
 
 def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap=8, iters=None, anchor=None, sets=(),
-                       seat=None, inner=None):
+                       seat=None, inner=None, reinit=None):
     import os
     iters = iters or int(os.environ.get("REFINE_ITERS", 20))
     """Robust windowed solve on the grid. Xs: smoothed fitted track (G, 13, 3) used as prior + start."""
@@ -770,6 +774,8 @@ def constrained_refine(cam, g, Xs, UV, W, groups, hand, bend_ok, win=30, overlap
     if anchor is not None:      # feet far from the tracker's floor point: restart there
         fa = (X0[:, LAN, :2] + X0[:, RAN, :2]) / 2
         bad |= np.isfinite(anchor[:, 0]) & (np.linalg.norm(np.nan_to_num(fa - anchor), axis=1) > 1.5)
+    if reinit is not None:
+        bad = bad | (np.asarray(reinit, bool) & np.isfinite(anchor).all(1) if anchor is not None else np.asarray(reinit, bool))
     pm = np.ones((G, 13))
     if bad.any():
         for i in np.flatnonzero(bad):
