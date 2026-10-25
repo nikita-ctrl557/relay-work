@@ -641,7 +641,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       let y = Math.max(h + 2, Math.min(H - 2, (1 - s.y) / 2 * H));
       for (let i = 0; i < 2 && taken.some(q => x - w / 2 < q.r && x + w / 2 > q.l && y - h < q.b && y > q.t) && y - h - 2 > h + 2; i++) y -= h + 2; // stacked heads: lift the tag
       taken.push({l: x - w / 2, r: x + w / 2, t: y - h, b: y}); tag.style.display = ""; tag.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`; };
-    const bodyR = [], ndc = new THREE.Vector3(); // screen rects of the drawn bodies: no label may cover one
+    const bodyR = [], ndc = new THREE.Vector3(), atCam = roomOn && !!roomCur && camera.position.distanceTo(roomCam.position) < 1.0; // screen rects of the drawn bodies: no label may cover one
     const fadeK = 1 - Math.exp(-Math.min(0.5, (ts - (lastFrame ?? ts - 16)) / 1000) / 0.13); lastFrame = ts; // time-based: slow devices fade as fast
     for (const [k, p] of [...ppl]) {
       const vis = showP && p.want && !p.inside && !p.glide && !p.dup && !p.edge && !p.swapTo ? 1 : 0;
@@ -657,13 +657,14 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       const J = p.J3 = use3d ? jointsFrom(p.Jm, [p.pos.x + sx - p.A[0], p.pos.z + sz - p.A[1]], p.J3 || undefined) : jointsFrom(neutralAt(p, sx, sz), null, p.J3 || undefined);
       if (use3d) { const dz = Math.min(J[11].y, J[12].y) - 0.075; if (Math.abs(dz) > 0.005) for (const v of J) v.y -= dz; } // feet on the floor: no floating, no sinking
       { // right under the viewpoint (the camera view looks from the CCTV camera): a body that fills much of the view or is
-        // partly out of it reads as a grey blob, not a person: faded with its size on screen (from 30 % of the view's height,
-        // gone at 55 %, or with half of it out of view)
+        // partly out of it reads as a grey blob, not a person: faded when partly out of view (gone with half of it out) or when
+        // it fills the view (from 45 % of its height, gone at 70 %; from the footage's own viewpoint, where everyone right
+        // under the camera is cut off, from 30 %, gone at 55 %)
         let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, behind = false;
         for (const v of J) { ndc.copy(v).project(camera); if (ndc.z > 1) { behind = true; break; } x0 = Math.min(x0, ndc.x); x1 = Math.max(x1, ndc.x); y0 = Math.min(y0, ndc.y); y1 = Math.max(y1, ndc.y); }
         const area = Math.max((x1 - x0) * (y1 - y0), 1e-6), inA = Math.max(0, Math.min(x1, 1) - Math.max(x0, -1)) * Math.max(0, Math.min(y1, 1) - Math.max(y0, -0.76)); // the view bar covers the bottom
         const hh = (y1 - y0) / 2, fin = inA > 0 ? inA / area : 1;
-        const near = behind ? 0 : Math.min(1, Math.max(0, 1 - (hh - 0.3) / 0.25)) * Math.min(1, Math.max(0, (fin - 0.5) / 0.25));
+        const near = behind ? 0 : Math.min(1, Math.max(0, 1 - (hh - (atCam ? 0.3 : 0.45)) / 0.25)) * Math.min(1, Math.max(0, (fin - 0.5) / 0.25));
         p.near = (p.near ?? near) + (near - (p.near ?? near)) * fadeK;
       }
       const fx = (J[11].x + J[12].x) / 2, fz = (J[11].z + J[12].z) / 2; // the shadow sits under the drawn feet

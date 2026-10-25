@@ -184,9 +184,11 @@ export function body3dWhy(P, cam, box, kp = null) {
   const low = (P[23] + P[26]) / 2 < 0.38 && Math.min(P[35], P[38]) > 0.12;
   if (!cam) return low ? "contorted" : "";
   const W0 = cam.width || 640, H0 = cam.height || 360, M = camM(cam), uv = [];
+  let nearZ = Infinity;
   for (let i = 0; i < 13; i++) {
     const d = [P[i * 3] - cam.C[0], P[i * 3 + 1] - cam.C[1], P[i * 3 + 2] - cam.C[2]], q = M.map(r => r[0] * d[0] + r[1] * d[1] + r[2] * d[2]);
     if (q[2] < 1.2) return "lens";                                                              // right in front of the lens
+    nearZ = Math.min(nearZ, q[2]);
     uv.push([cam.f * q[0] / q[2] + cam.cx, cam.f * q[1] / q[2] + cam.cy]);
   }
   // the joints the camera saw (2D keypoints): median distance of the 3D joints from them, against the person's height
@@ -211,6 +213,9 @@ export function body3dWhy(P, cam, box, kp = null) {
     if (box[0] < 0.015 || box[0] + box[2] > 0.985 || box[1] + box[3] > 0.985) {
       const headOut = uv[0][0] < 0 || uv[0][0] > W0 || uv[0][1] < 0 || uv[0][1] > H0;
       if (vis.length < 4 || headOut && ![1, 2, 7, 8].some(i => kp[i])) return "edge";
+      // right under the camera (< 3.5 m from the lens) and fitted as a ball (head < 1 m, hips < 0.45 m): the camera sees
+      // the top of a head or a shoulder there, and the body built on it is a guess
+      if (nearZ < 3.5 && P[2] < 1.0 && (P[23] + P[26]) / 2 < 0.45) return "edge";
       const m = 0.1 * bh, bx0 = Math.min(...cx), by0 = Math.min(...cy);
       const iw = Math.max(0, Math.min(bx0 + pw, box[0] * W0 + bw + m) - Math.max(bx0, box[0] * W0 - m)), ih = Math.max(0, Math.min(by0 + ph, box[1] * H0 + bh + m) - Math.max(by0, box[1] * H0 - m));
       if (1 - iw * ih / Math.max(pw * ph, 1) > OUT_BOX) return "edge";
