@@ -488,7 +488,7 @@ def fit_person(cam, pieces, sam, W, Hh, hz, step, use_prior=True, refine=True, t
     return out
 
 
-def cap_depth_speed(cam, g, X, near=8.0, win=1.5, vmax=2.5):
+def cap_depth_speed(cam, g, X, near=8.0, win=1.5, vmax=2.0):
     """Far away, a pixel of the feet (or of the head) is metres along the line of sight, and occlusions shift both:
     the body would hop or glide in depth faster than anyone walks. Beyond `near` m the distance along the ground ray
     is a running median (+-win s) limited to vmax m/s (forward and backward pass, averaged); the body moves along

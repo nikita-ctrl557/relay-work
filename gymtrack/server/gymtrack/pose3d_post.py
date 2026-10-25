@@ -439,8 +439,8 @@ def extra_terms(X, hand, bend_ok, cam=None):
     out.append(_relu(mh[:, 2] + np.where(flat, -0.12, 0.25) - X[:, NOSE, 2]) / 0.03 * uw)
     out.append(_relu(mh[:, 2] + np.where(flat, -0.08, 0.15) - ms[:, 2]) / 0.03 * uw)
     # crouched (hips this low): a foot on the floor, not sitting on air with both feet raised
-    low = 1 / (1 + np.exp(-(0.42 - mh[:, 2]) / 0.03))
-    out.append(_relu(za - 0.05) / 0.02 * low)
+    low = 1 / (1 + np.exp(-(0.45 - mh[:, 2]) / 0.03))
+    out.append(_relu(za - 0.02) / 0.02 * low)
     # elbows <= 150 deg, knees not hyper-extended
     for a, b, c in ((LSH, LEL, LWR), (RSH, REL, RWR)):
         co = (_unit(X[:, b] - X[:, a]) * _unit(X[:, c] - X[:, b])).sum(-1)
