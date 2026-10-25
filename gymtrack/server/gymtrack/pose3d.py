@@ -847,6 +847,11 @@ def joint_angles(X, hand: float = 1.0) -> dict:
     mid_h = (X[:, LHIP] + X[:, RHIP]) / 2
     mid_s = (X[:, LSH] + X[:, RSH]) / 2
     trunk = _unit(mid_s - mid_h)
+    # a trunk leaning > 25 deg "backward" is a hinge whose front/back the 2D could not tell (seen from behind):
+    # the lean defines forward for the sagittal angles
+    lean_ = np.degrees(np.arccos(np.clip(trunk[:, 2], -1, 1)))
+    back_ = (lean_ > 25) & ((trunk[:, :2] * fwd[:, :2]).sum(-1) < 0)
+    fwd = np.where(back_[:, None], -fwd, fwd)
     ang = lambda a, b: np.degrees(np.arccos(np.clip((_unit(a) * _unit(b)).sum(-1), -1, 1)))
     out = {}
     for side, (hp, kn, an) in (("l", (LHIP, LKN, LAN)), ("r", (RHIP, RKN, RAN))):

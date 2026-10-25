@@ -806,22 +806,16 @@ def refine_v3(cam, t, X, U, t2, uv2, w2, groups, hand, hz, sets, present, max_ho
         UV, Wg, anc = hidden_feet(cam, g, Xs, UV, Wg, anc, seat)
     Xr, pins = PP.constrained_refine(cam, g, Xs, UV, Wg, groups, hand, bend, anchor=anc, sets=ex_sets, seat=seat,
                                      inner=raw_inner(cam, g, UV))
-    # a hinge leans forward: seen from behind, the detector's left/right (front/back) is a guess; when the fitted
-    # body leans backward against its own facing through the hinge sets, the labels were mirrored: swap them
-    hm = np.zeros(len(g), bool)
-    for st in ex_sets:
-        if st[2] in ("deadlift", "row"):
-            hm |= (g >= st[0]) & (g <= st[1])
-    if hm.sum() >= 10:
-        fw = PP._hfwd(Xr, hand)
-        tr = ((Xr[:, P3.LSH] + Xr[:, P3.RSH]) / 2 - (Xr[:, P3.LHIP] + Xr[:, P3.RHIP]) / 2)[:, :2]
-        lean = (tr * fw[:, :2]).sum(1)
-        if np.median(lean[hm]) < -0.05:
-            sw = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11]
-            Xr, UV, Wg = Xr[:, sw], UV[:, sw], Wg[:, sw]
     if DEPTH_CAP_ON:
         Xr = cap_depth_speed(cam, g, Xr)
     Q = frame_quality(cam, g, Xr, UV, Wg, boxes, raw_inner(cam, g, UV))
+    if boxes is not None:
+        # a balled-up body right at the camera, cut by the frame edge: a failed fit, not a crouch we can trust
+        edge_b = np.isfinite(boxes).all(1) & ((boxes[:, 0] < 0.015) | (boxes[:, 0] + boxes[:, 2] > 0.985) | (boxes[:, 1] + boxes[:, 3] > 0.985))
+        ht = float(np.sum(np.asarray(groups)[[P3.GROUP_NAMES.index(k) for k in ("thigh", "shank", "torso", "head")]]))
+        ext = Xr[:, :, 2].max(1) - Xr[:, :, 2].min(1)
+        near = cam.depth(Xr).min(1) < 4.0
+        Q = np.where(edge_b & near & (ext < 0.6 * ht), 0, Q)
     # per-joint confidence: seen in the 2D (not pinned to the frame border) 100, seen within 0.5 s 70, inferred 30
     inner = raw_inner(cam, g, UV)
     seen = (Wg > 0) & inner

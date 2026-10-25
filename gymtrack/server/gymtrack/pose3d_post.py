@@ -702,11 +702,11 @@ def exercise_rows(X0, sets, g, bench_h=None, groups=None, UV=None, W=None):
             for k_, f in enumerate(idx):
                 if np.isfinite(cs[k_]):
                     rows.append((f, [(LSH, 2, 0.5), (RSH, 2, 0.5), (LHIP, 2, -0.5), (RHIP, 2, -0.5)],
-                                 gd["torso"] * float(np.clip(cs[k_], 0.15, 1.0)), 0.08))
+                                 gd["torso"] * float(np.clip(cs[k_], 0.15, 1.0)), 0.05))
                 # the hinge is at the hips: thighs stay near vertical (knees roughly under the hips)
                 for hp, kn in ((LHIP, LKN), (RHIP, RKN)):
                     for k in range(2):
-                        rows.append((f, [(kn, k, 1.0), (hp, k, -1.0)], 0.0, 0.12))
+                        rows.append((f, [(kn, k, 1.0), (hp, k, -1.0)], 0.0, 0.06))
         for f in idx:
             if "stand" in kinds and gd is not None:     # standing straight-legged: knees over the ankles
                 for hp, kn, an in ((LHIP, LKN, LAN), (RHIP, RKN, RAN)):
