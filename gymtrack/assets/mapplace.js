@@ -215,7 +215,15 @@ export function body3dWhy(P, cam, box, kp = null) {
   const pw = Math.max(...cx) - Math.min(...cx), ph = Math.max(...cy) - Math.min(...cy);
   if (box) {
     const bw = box[2] * W0, bh = box[3] * H0;
-    if (ph > 1.4 * bh + 12 || pw > 1.4 * bw + 12) return "size";
+    if (ph > 1.4 * bh + 12 || pw > 1.4 * bw + 12) {
+      // legs hidden behind equipment or someone in front: the box ends where the occluder starts (clear of every frame
+      // edge), so a correct standing body is drawn taller than it. Then the upper body (head to hips, what the box
+      // holds) is judged instead, with both feet drawn below the box; a body too big for the person is too big there too
+      const up = [0, 1, 2, 3, 4, 5, 6, 7, 8], uy = up.map(i => cy[i]), ux = up.map(i => cx[i]);
+      const uh = Math.max(...uy) - Math.min(...uy), uw = Math.max(...ux) - Math.min(...ux), bot = (box[1] + box[3]) * H0;
+      const hidLegs = box[1] + box[3] < 0.985 && box[0] > 0.015 && box[0] + box[2] < 0.985 && Math.min(uv[11][1], uv[12][1]) > bot && uh <= 1.15 * bh + 8 && uw <= 1.4 * bw + 12;
+      if (!hidLegs) return "size";
+    }
     // cut off by the frame edge: the 3D is only as good as what was seen; too little seen (< 4 joints), or the head out
     // of the frame with no shoulder or hip seen, is a guess; and a body drawn largely beside the cut-off person's box
     // (> 30 % of its rectangle, as clipped to the frame, outside the box + 10 %) is someone else's (an identity slip)
