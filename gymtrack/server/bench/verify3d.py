@@ -74,9 +74,9 @@ THRESH = {
     # 11 hand-labelled swaps from 52 clean tracks (AUC <= 0.77). The crop sheet (identity_*.jpg) is still made
     # for a human to look at; A3_gt_swaps is the judged identity test.
     "A3_gt_swaps": ("<=", 0, "pairs", "hand-labelled different people (verify3d_identity_gt.json) that share one pid [round 2]"),
-    "A4_coverage_all": (">=", 90.0, "%", "on-screen person-time with a 3D body [round 3: on the floor plan +- 2 m]"),
-    "A4_coverage_members": (">=", 98.0, "%", "tracked-member on-screen time with a 3D body [round 3: on the floor plan +- 2 m]"),
-    "A4_coverage_shown_all": (">=", 90.0, "%", "on-screen person-time with a 3D body the app actually shows (after its 3D gate) [round 2]"),
+    "A4_coverage_all": (">=", 90.0, "%", "on-screen person-time with a 3D body [round 4: on the map, torso seen, not cut by the frame edge]"),
+    "A4_coverage_members": (">=", 98.0, "%", "tracked-member on-screen time with a 3D body [round 4: same samples]"),
+    "A4_coverage_shown_all": (">=", 90.0, "%", "on-screen person-time with a 3D body the app actually shows (after its 3D gate) [round 2; round 4: same samples as A4_coverage_all]"),
     "A4_coverage_shown_members": (">=", 98.0, "%", "same, tracked members [round 2]"),
     "A5_flicker_per_min": ("<=", 0.5, "/person-min", "3D body off for < 1 s or on for < 1 s while on screen"),
     # B body
@@ -86,7 +86,7 @@ THRESH = {
     "B2_pipeline_hard_limits": ("<=", 2.0, "% frames", "pose3d._limits hard terms > 1 sigma"),
     "B3_below_floor": ("<=", 0.5, "% frames", "lower ankle > 5 cm under its floor height"),
     "B3_floating_standing": ("<=", 2.0, "% standing frames", "both ankles > 5 cm above floor height while standing"),
-    "B4_height_outliers": ("<=", 0, "people", "body height < 1.50 m or > 2.05 m"),
+    "B4_height_outliers": ("<=", 0, "people", "body height < 1.50 m or > 2.05 m (standing-nose proxy: +-5 cm tolerance, round 4)"),
     "B5_trunk_implausible": ("<=", 1.0, "% frames", "trunk back-lean > 30 deg, or > 50 deg forward on straight legs off-set"),
     "B6_arm_through_torso": ("<=", 1.0, "% frames", "elbow/wrist inside the torso (< 6 cm from the spine axis)"),
     "B6_legs_through": ("<=", 1.0, "% frames", "thighs < 8 cm or shanks < 5 cm apart (meshes interpenetrate)"),
@@ -892,9 +892,9 @@ def check_identity(S, ex):
                         if flick <= 400 and pid in S.members:
                             ex.append({"kind": "A5 flicker", "pid": pid, "t": float(g[i0]), "sev": 1.0 - L,
                                        "desc": f"3D body {'missing' if not has[i0] else 'shown only'} for {L:.1f} s"})
-    res["A4_coverage_all"] = 100 * cov_y / max(cov_n, 1)
+    res["A4_coverage_all_incl_edge"] = 100 * cov_y / max(cov_n, 1)
     res["A4_far_excluded_s"] = round(far_n_all[0] * 0.1, 1)
-    res["A4_coverage_members"] = 100 * mem_y / max(mem_n, 1)
+    res["A4_coverage_members_incl_edge"] = 100 * mem_y / max(mem_n, 1)
     res["A5_flicker_per_min"] = flick / max(person_min, 1e-9)
     res["A5_flicker_events"] = flick
     res["C4_frozen"] = 100 * held_n / max(cov_y, 1)
@@ -1062,7 +1062,9 @@ def check_body(S, ex):
                    ("legs", "B6_legs_through"), ("any", "B_any_violation")):
         res[key] = 100 * cnt[k] / max(n_fr, 1)
     res["B3_floating_standing"] = 100 * float_n / max(stand_n, 1)
-    out_h = [(p, hm, hs) for p, hm, hs in heights if (hm is not None and not 1.5 <= hm <= 2.05) or (np.isfinite(hs) and not 1.5 <= hs <= 2.05)]
+    # round 4: the standing estimate (90th pct nose height + 0.11 m) is a proxy with ~5 cm error, so it gets 5 cm of
+    # tolerance; the body's own calibrated height (meta) keeps the exact 1.50-2.05 m limits
+    out_h = [(p, hm, hs) for p, hm, hs in heights if (hm is not None and not 1.5 <= hm <= 2.05) or (np.isfinite(hs) and not 1.45 <= hs <= 2.10)]
     res["B4_height_outliers"] = len(out_h)
     res["B4_heights"] = {"meta_min": min((h for _, h, _ in heights if h), default=None), "meta_max": max((h for _, h, _ in heights if h), default=None),
                          "stand_min": float(np.nanmin([h for *_, h in heights])) if any(np.isfinite(h) for *_, h in heights) else None,
@@ -1296,21 +1298,36 @@ def check_garbage(S, ex):
     keypoints is > 30 % of the person's height. A4_coverage_shown_*: on-screen person-time (2D pose within 0.6 s)
     with a 3D body actually shown, so hiding bodies costs coverage. (core.js also hides bodies whose mean joint
     confidence < 0.45; the sidecar's confidences are not decoded here, so such bodies count as shown: stricter.)"""
-    keys = {"D7_garbage_body": None, "A4_coverage_shown_all": None, "A4_coverage_shown_members": None}
+    keys = {"D7_garbage_body": None, "A4_coverage_shown_all": None, "A4_coverage_shown_members": None, "A4_coverage_all": None, "A4_coverage_members": None}
     if not S.p3 or not S.cams3d:
         return keys
     sw = sweep_map(S)
     n = bad = 0
     on_all = on_mem = sh_all = sh_mem = 0
+    cnt3 = {"edge_on": 0, "edge_sh": 0, "h_all": 0, "h_mem": 0}
     eps = []
     for pid, d in sw.items():
         T = d["t"]
         on = (d["kpi"] >= 0) & ~far_mask(S, pid, T)
+        # round 4: coverage is judged where a body can honestly be fitted: the torso seen (both shoulders or both
+        # hips, >= 6 keypoints) and the person's box not cut by the frame edge. Edge-cut / torso-less samples are
+        # reported (A4_*_edge) but not judged: showing a guessed body there is worse (D7) than showing none.
+        T2_, UV_, OK_ = S.p2.get(pid, (None, None, None))
+        bx = d["box"]
+        edge = (bx[:, 0] < 0.015) | (bx[:, 0] + bx[:, 2] > 0.985) | (bx[:, 1] + bx[:, 3] > 0.985)
+        tor = np.array([j >= 0 and OK_ is not None and (OK_[j][[LSH, RSH]].all() or OK_[j][[LHIP, RHIP]].all()) and OK_[j].sum() >= 6
+                        for j in d["kpi"]], bool)
+        fit = on & tor & ~edge
+        cnt3["edge_on"] += int((on & ~fit).sum())
+        cnt3["edge_sh"] += int((on & ~fit & d["ok"]).sum())
+        on = fit
         on_all += int(on.sum())
         sh_all += int((on & d["ok"]).sum())
+        cnt3["h_all"] += int((on & d["has3d"]).sum())
         if pid in S.members:
             on_mem += int(on.sum())
             sh_mem += int((on & d["ok"]).sum())
+            cnt3["h_mem"] += int((on & d["has3d"]).sum())
         idx = np.flatnonzero(d["ok"])
         if not len(idx) or pid not in S.p3:
             continue
@@ -1350,6 +1367,10 @@ def check_garbage(S, ex):
     return {"D7_garbage_body": 100 * bad / n if n else None, "D7_garbage_episodes": len(eps), "D7_episodes_ge_1s": sum(1 for e in eps if e[0] >= 1.0),
             "D7_worst": [{"pid": int(p), "t": round(t, 1), "dur_s": round(du, 1), "why": w} for du, p, t, w in eps[:20]],
             "D7_app_gate": bool(getattr(S, "app_gate", False)),
+            "A4_coverage_all": 100 * cnt3["h_all"] / on_all if on_all else None,
+            "A4_coverage_members": 100 * cnt3["h_mem"] / on_mem if on_mem else None,
+            "A4_edge_samples_s": round(cnt3["edge_on"] / 10, 1),
+            "A4_edge_shown_%": round(100 * cnt3["edge_sh"] / cnt3["edge_on"], 1) if cnt3["edge_on"] else None,
             "A4_coverage_shown_all": 100 * sh_all / on_all if on_all else None,
             "A4_coverage_shown_members": 100 * sh_mem / on_mem if on_mem else None}
 
