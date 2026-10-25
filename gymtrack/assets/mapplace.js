@@ -109,9 +109,13 @@ export function mapBody(P, map, out = null) {
    inside a solid piece of equipment (not for anyone planted at a zone); the view hides those.
    Glides: a 3D track that slides faster than anyone walks in a gym (> 3 m/s over 0.3 s; the fit carried across an
    identity change or an occlusion, e.g. a box whose bottom is hidden) is not a person moving: st.glide is set while
-   it lasts (the view fades the body out) and the end of the slide is a cut (the body comes back at the new spot). */
+   it lasts (the view fades the body out) and the end of the slide is a cut (the body comes back at the new spot).
+   Unbacked fallback: when the 3D is off and the tracker point is > 1.5 m from where the person's 3D feet were measured
+   within the last 2 s (a box ending at the far wall behind equipment, or a box that jumped to someone else), that
+   point is not drawn: st.hidden is set (the view fades the body out) until the 3D is back, the tracker point agrees
+   again, or the 2 s have passed. The placer still follows the measured point (nothing is held or moved). */
 export const WALK = 2.0;                 // m/s: the fallback never moves a body faster
-const GLIDE_V = 3.0, GLIDE_WIN = 0.3, TAU_FALL = 0.15, TAU_BLEND = 0.2, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 0.7, CUT_HOLD = 0.15, RESET_GAP = 2.0, EQ_IN = 0.35;
+const FALL_GAP = 1.5, FALL_WIN = 2.0, GLIDE_V = 3.0, GLIDE_WIN = 0.3, TAU_FALL = 0.15, TAU_BLEND = 0.2, TAU_NUDGE = 0.6, NUDGE_MAX = 0.3, NUDGE_RANGE = 1.0, CUT_DIST = 0.7, CUT_HOLD = 0.15, RESET_GAP = 2.0, EQ_IN = 0.35;
 const capStep = (dx, dy, max) => { const l = Math.hypot(dx, dy); return l > max && l > 0 ? [dx * max / l, dy * max / l] : [dx, dy]; };
 const rectDist = (p, r) => { const dx = Math.max(Math.abs(p[0] - r.x) - r.w / 2, 0), dy = Math.max(Math.abs(p[1] - r.y) - r.d / 2, 0); return Math.hypot(dx, dy); };
 const clampRect = (p, r) => [Math.max(r.x - r.w / 2, Math.min(r.x + r.w / 2, p[0])), Math.max(r.y - r.d / 2, Math.min(r.y + r.d / 2, p[1]))];
@@ -120,14 +124,16 @@ export const isObstacle = e => e && e.h >= 1.0 && !/rack/i.test(e.machine) && e.
 // deep inside a solid piece (>= 0.35 m from every side): not someone seated on it or standing at its edge
 export const insideEq = (p, r) => Math.abs(p[0] - r.x) < r.w / 2 - EQ_IN && Math.abs(p[1] - r.y) < r.d / 2 - EQ_IN;
 
-export function newPlacer() { return {t: null, base: null, off: [0, 0], c: [0, 0], src: null, lastA: null, far: 0, pos: null, cut: false, inside: false, hist: [], glide: false}; }
+export function newPlacer() { return {t: null, base: null, off: [0, 0], c: [0, 0], src: null, lastA: null, far: 0, pos: null, cut: false, inside: false, hist: [], glide: false, last3d: null, hidden: false}; }
 /* st: placer state; t: replay seconds; A: mapped 3D feet or null; rf: tracker room-feet point or null;
    ctx: {set: equipment rect of the machine of the set under way (or null), obstacles: [rect], free: [machine ids]}.
    Returns the map position of the person's feet ([x, y]) or null; st.cut is true on the step where the body
-   jumped to a new spot (fade it), st.inside when the feet are inside tall equipment. */
+   jumped to a new spot (fade it), st.inside when the feet are inside tall equipment, st.hidden when the point is an
+   unbacked tracker fallback (see above; not drawn). */
 export function stepPlacer(st, t, A, rf, ctx = {}) {
   const dt = st.t == null ? Infinity : t - st.t;
-  st.cut = false;
+  st.cut = false; st.hidden = false;
+  if (A) st.last3d = [t, A[0], A[1]];
   if (!(dt >= 0 && dt <= RESET_GAP) || !st.base) { // first sight, a seek, or back after a long gap: place directly
     const p = A || rf; if (!p) { st.t = t; return st.pos; }
     Object.assign(st, {base: p.slice(), off: [0, 0], c: [0, 0], src: A ? "3d" : "trk", lastA: A, far: 0, cut: st.pos != null, hist: A ? [[t, A[0], A[1]]] : [], glide: false});
@@ -154,6 +160,7 @@ export function stepPlacer(st, t, A, rf, ctx = {}) {
     if (st.far > CUT_HOLD) { st.base = rf.slice(); st.far = 0; st.cut = true; }      // disagrees for > 1 s: cut, no glide
     else if (d <= CUT_DIST) { const kk = 1 - Math.exp(-dt / TAU_FALL), [dx, dy] = capStep((rf[0] - st.base[0]) * kk, (rf[1] - st.base[1]) * kk, WALK * dt); st.base = [st.base[0] + dx, st.base[1] + dy]; }
     st.src = "trk";
+    const L = st.last3d; st.hidden = !!L && t - L[0] >= 0 && t - L[0] <= FALL_WIN && Math.hypot(rf[0] - L[1], rf[1] - L[2]) > FALL_GAP;
   }
   st.t = t;
   // set: a gentle nudge towards the machine, only when already close to it

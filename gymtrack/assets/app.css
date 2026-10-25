@@ -609,7 +609,7 @@ td.who small { color: var(--muted); font-size: 12px; }
 .twin .s3d-tag { font-size: 12px; }
 .twin .s3d-tag:not(.mach) { background: #24323f; color: #fff; }
 .twin .s3d-tag:not(.mach).hl, .twin .s3d-tag:not(.mach):hover { background: var(--accent); }
-.twin .s3d-tag.mach { pointer-events: auto; cursor: pointer; }
+.twin .s3d-tag.mach { pointer-events: auto; cursor: pointer; transition: opacity .2s; } /* status colours switch at once: a background easing in under text that already switched (white on white) left a blank label */
 .twin .s3d-tag.mach.idle { background: var(--surface); color: var(--ink-2); font-weight: 500; font-size: 11.5px; padding: 1px 6px; box-shadow: 0 0 0 1px var(--line-2); }
 .twin .s3d-tag.mach.on { background: var(--accent); color: #fff; box-shadow: none; }
 .twin .s3d-tag.mach.busy { background: var(--rest); color: #1f2a33; box-shadow: none; }

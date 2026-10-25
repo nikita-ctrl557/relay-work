@@ -506,6 +506,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
       // someone cut off by the frame edge with no believable 3D: where they stand is a guess, so no stand-in body
       p.inside = pl.st.inside; // deep inside a solid piece of equipment: not drawn
       p.glide = pl.st.glide; // the 3D track slides faster than anyone walks (identity change / occlusion): faded out, back at the end
+      p.unbacked = pl.st.hidden; // a tracker point > 1.5 m from the 3D measured < 2 s ago: faded out, not drawn there
       p.edge = !Jm && !!q.box && q.box[3] > 0.33 && (q.box[0] < 0.012 || q.box[0] + q.box[2] > 0.988 || q.box[1] + q.box[3] > 0.985); // right in front of the lens, cut off
       const lift = q.inSet || q.activity && q.activity !== "standing";
       p.mat.color.setHex(lift ? COL.lift : q.planted && q.zone ? COL.station : COL.move);
@@ -644,7 +645,7 @@ export function mountTwin(host, {plan, machines, people, states, heat, layer = (
     const bodyR = [], ndc = new THREE.Vector3(), atCam = roomOn && !!roomCur && camera.position.distanceTo(roomCam.position) < 1.0; // screen rects of the drawn bodies: no label may cover one
     const fadeK = 1 - Math.exp(-Math.min(0.5, (ts - (lastFrame ?? ts - 16)) / 1000) / 0.13); lastFrame = ts; // time-based: slow devices fade as fast
     for (const [k, p] of [...ppl]) {
-      const vis = showP && p.want && !p.inside && !p.glide && !p.dup && !p.edge && !p.swapTo ? 1 : 0;
+      const vis = showP && p.want && !p.inside && !p.glide && !p.unbacked && !p.dup && !p.edge && !p.swapTo ? 1 : 0;
       p.alpha += (vis - p.alpha) * (p.swapTo ? Math.min(1, fadeK * 2.5) : fadeK); // a cut fades out fast
       if (p.swapTo && p.alpha < 0.04) { p.pos = p.swapTo; p.swapTo = null; p.vel = null; p.sep?.set(0, 0, 0); } // faded out: reappear at the new spot
       if (p.sepT) { (p.sep ||= new THREE.Vector3()).lerp(p.sepT, fadeK * 0.5); }
