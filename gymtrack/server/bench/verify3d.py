@@ -67,7 +67,7 @@ THRESH = {
     # A identity
     "A1_teleports_3d_members": ("<=", 0, "count", "3D root jumps > 1.5 m between consecutive samples (tracked members)"),
     "A1_teleports_3d_all": ("<=", 0, "count", "3D root jumps > 1.5 m between consecutive samples (everyone)"),
-    "A1_teleports_map_members": ("<=", 0, "count", "Floor-map position jumps > max(1.5 m, 2.5 m/s*dt), tracked members [round 3: jumps with an end on the drawn map]"),
+    "A1_teleports_map_members": ("<=", 0, "count", "Floor-map position jumps > max(1.5 m, 2.5 m/s*dt), tracked members [round 3: an end on the map; round 6: both ends drawn (not faded)]"),
     "A2_duplicate_person_s": ("<=", 1.0, "% person-time", "two pids on one person (2D boxes IoU > 0.6)"),
     # A3_appearance_switch_pids (automatic colour test) is report-only since round 2: on the round-2 cables data
     # all 3 of its flags were the same person (pose / lighting change), and colour features could not separate
@@ -124,7 +124,7 @@ THRESH = {
     "D5_inside_equipment": ("<=", 1.0, "% person-time", "measured feet inside tall equipment (not their set machine / planted zone) [round 2: measured, not the pushed-out placer]"),
     "D6_drawn_off_episodes": ("<=", 0, "count", "episodes >= 0.5 s where the drawn map body is > 0.75 m from the person's measured position [round 2]"),
     "D6_drawn_off_time": ("<=", 0.2, "% person-time", "drawn map body > 0.75 m from the measured position (any duration) [round 2]"),
-    "D7_garbage_body": ("<=", 0.5, "% shown samples", "Live 3D body is not the person: > 1.5x the person box, behind the camera, or keypoint error > 30 % [round 2]"),
+    "D7_garbage_body": ("<=", 0.5, "% shown samples", "Live 3D body is not the person: > 1.5x the person box (round 6: upper body when the legs are occluded), at the lens, or keypoint error > 30 % [round 2]"),
     "D9_detection_recall": (">=", 95.0, "%", "clearly visible people (independent detector) that the app tracks [round 2]"),
 }
 
@@ -532,7 +532,7 @@ def sweep_map(S, step=0.1):
         n = len(a["t"])
         f2 = lambda L: np.array([v if v is not None else [np.nan, np.nan] for v in L], float).reshape(n, 2)
         d = {"t": np.array(a["t"]), "tl": np.array(a["tl"], bool), "ok": np.array(o["ok"], bool), "A": f2(o["A"]), "rf": f2(a["rf"]),
-             "pos": f2(o["pos"]), "cut": np.array(o["cut"], bool), "inside": np.array(o["inside"], bool), "s": np.array(o["s"], float),
+             "pos": f2(o["pos"]), "cut": np.array(o["cut"], bool), "inside": np.array(o["inside"], bool), "hidden": np.array(o.get("hidden", [0] * n), bool), "s": np.array(o["s"], float),
              "setm": np.array([x["machine"] if x else "" for x in a["set"]]), "free": np.array(a["free"]),
              "box": np.array(a["box"], float), "kpi": np.array(a["kpi"], int), "has3d": np.array([x is not None for x in a["J"]], bool)}
         J = np.full((n, 13, 3), np.nan)
@@ -544,7 +544,7 @@ def sweep_map(S, step=0.1):
         d["meas"] = np.where(np.isfinite(d["A"][:, :1]), d["A"], d["rf"])
         P = d["pos"]
         d["inroom"] = np.isfinite(P[:, 0]) & (P[:, 0] >= b["x0"] - 2) & (P[:, 0] <= b["x1"] + 2) & (P[:, 1] >= b["y0"] - 2) & (P[:, 1] <= b["y1"] + 2)
-        d["shown"] = d["inroom"] & ~d["inside"]
+        d["shown"] = d["inroom"] & ~d["inside"] & ~d["hidden"]      # hidden: tracker fallback faded (mapplace.js st.hidden)
         out[pid] = d
     S._sweep = out
     return out
@@ -792,7 +792,10 @@ def check_identity(S, ex):
     for pid, d in sw.items():
         on = d["tl"]
         for key in ("meas", "pos"):
-            P, T = d[key][on], d["t"][on]
+            # round 6: judged on timeline samples the app actually draws (shown, not faded); a jump between two drawn
+            # points is what a viewer sees. Hiding is policed by D6 (drawn vs measured) and A4 shown coverage.
+            sel = on & d["shown"] if key == "meas" else on
+            P, T = d[key][sel], d["t"][sel]
             ok = np.isfinite(P[:, 0])
             P, T = P[ok], T[ok]
             dt, dd = np.diff(T), np.linalg.norm(np.diff(P, axis=0), axis=1)
@@ -1349,8 +1352,16 @@ def check_garbage(S, ex):
             cu = np.clip(uv, [0, 0], [W, H])
             ph, pw = np.ptp(cu[:, 1]), np.ptp(cu[:, 0])
             bw, bh = d["box"][i][2] * W, d["box"][i][3] * H
+            # round 6: legs hidden by an occluder (box clear of every frame edge, both projected ankles below the box
+            # bottom): the box only covers the visible part, so the upper body (head to hips) is judged against it
+            bx0, by0 = d["box"][i][0] * W, d["box"][i][1] * H
+            occl = (bx0 > 0.015 * W and bx0 + bw < 0.985 * W and by0 > 2 and by0 + bh < 0.985 * H
+                    and uv[LAN, 1] > by0 + bh and uv[RAN, 1] > by0 + bh)
+            if occl:
+                up = np.clip(uv[[NOSE, LSH, RSH, LHIP, RHIP]], [0, 0], [W, H])
+                ph = np.ptp(up[:, 1]) / 0.55          # head-to-hips is ~55 % of the box of a standing person
             if ph > 1.5 * bh + 15 or pw > 1.5 * bw + 15:
-                flag[i], why[i] = True, f"drawn {pw:.0f}x{ph:.0f} px vs person box {bw:.0f}x{bh:.0f} px"
+                flag[i], why[i] = True, f"drawn {pw:.0f}x{ph:.0f} px vs person box {bw:.0f}x{bh:.0f} px" + (" (legs occluded)" if occl else "")
                 continue
             j = d["kpi"][i]
             if j >= 0 and OK[j].sum() >= 4:

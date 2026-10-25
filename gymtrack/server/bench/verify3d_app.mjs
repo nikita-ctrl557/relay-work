@@ -19,7 +19,7 @@ const fmOf = (ci, ri) => { const k = ci + ':' + ri; if (!fms.has(k)) fms.set(k, 
 const r3 = v => Math.round(v * 1000) / 1000;
 const out = {gate: typeof mp.body3dOk === 'function', tracks: {}};
 for (const [pid, tr] of Object.entries(inp.tracks)) {
-  const n = tr.t.length, o = {ok: new Array(n).fill(0), A: new Array(n).fill(null), Jm: new Array(n).fill(null), pos: new Array(n).fill(null), cut: new Array(n).fill(0), inside: new Array(n).fill(0), s: new Array(n).fill(1)};
+  const n = tr.t.length, o = {ok: new Array(n).fill(0), A: new Array(n).fill(null), Jm: new Array(n).fill(null), pos: new Array(n).fill(null), cut: new Array(n).fill(0), inside: new Array(n).fill(0), hidden: new Array(n).fill(0), s: new Array(n).fill(1)};
   let st = null, lastSeen = -1e9, badUntil = -1e9, lastT = null;
   for (let i = 0; i < n; i++) {
     const t = tr.t[i];
@@ -27,21 +27,22 @@ for (const [pid, tr] of Object.entries(inp.tracks)) {
     lastT = t;
     const cam = inp.cams[tr.cam[i]] || null, fm = fmOf(tr.cam[i], tr.room[i]);
     o.s[i] = fm?.s || 1;
-    let A = null, Jm = null, ok = false;
+    let A = null, Jm = null, ok = false, ref3d = null;
     if (tr.J[i]) {
       ok = out.gate ? mp.body3dOk(tr.J[i], cam, tr.box[i], tr.kp[i]) : true;
       if (!ok) badUntil = t + 1;
       ok = ok && !(badUntil > t);
       if (ok) { const r = mp.mapBody(tr.J[i], fm); if (r) { Jm = Array.from(r.J).slice(0, 39); A = fm ? r.A : null; } }
+      else if (fm) { const r = mp.mapBody(tr.J[i], fm); if (r) ref3d = r.A; }   // twin3d.js: gated-off 3D still a reference (core.js pose3dOff)
     }
     o.ok[i] = ok ? 1 : 0;
     const rf = tr.rf[i];
     if (!st || t - lastSeen > 4) st = mp.newPlacer();                // twin3d.js: placers dropped after 4 s unseen
     if (!rf && !A && !st.pos) continue;
     lastSeen = t;
-    const p = mp.stepPlacer(st, t, A, rf, {set: tr.set[i], obstacles: inp.obstacles, free: tr.free[i] ? [tr.free[i]] : []});
+    const p = mp.stepPlacer(st, t, A, rf, {set: tr.set[i], obstacles: inp.obstacles, free: tr.free[i] ? [tr.free[i]] : [], planted: !!tr.free[i], ref3d});
     if (!p) continue;
-    o.pos[i] = [r3(p[0]), r3(p[1])]; o.cut[i] = st.cut ? 1 : 0; o.inside[i] = st.inside ? 1 : 0;
+    o.pos[i] = [r3(p[0]), r3(p[1])]; o.cut[i] = st.cut ? 1 : 0; o.inside[i] = st.inside ? 1 : 0; o.hidden[i] = st.hidden ? 1 : 0;
     if (A) { o.A[i] = [r3(A[0]), r3(A[1])]; o.Jm[i] = Jm.map(r3); }
   }
   out.tracks[pid] = o;
